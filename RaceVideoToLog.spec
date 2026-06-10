@@ -64,13 +64,35 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    # 排除 onnxruntime 中的非推理模块（transformers/tools/quantization/datasets）
+    # 排除 onnxruntime 中的非推理模块 + scipy/matplotlib 测试和未用子模块
     excludes=[
         'onnxruntime.transformers',
         'onnxruntime.tools',
         'onnxruntime.quantization',
         'onnxruntime.datasets',
         'onnxruntime.backend',
+        # scipy: 只用了 signal.savgol_filter，排除其他所有
+        'scipy.optimize', 'scipy.linalg', 'scipy.sparse', 'scipy.spatial',
+        'scipy.stats', 'scipy.special', 'scipy.integrate', 'scipy.interpolate',
+        'scipy.fft', 'scipy.fftpack', 'scipy.ndimage', 'scipy.io',
+        'scipy.cluster', 'scipy.constants', 'scipy.datasets', 'scipy.differentiate',
+        'scipy.misc', 'scipy.odr',
+        'scipy.tests', 'scipy._lib.tests',
+        # matplotlib: 排除测试和未用后端
+        'matplotlib.tests', 'matplotlib.testing',
+        'matplotlib.backends.backend_gtk3', 'matplotlib.backends.backend_gtk3agg',
+        'matplotlib.backends.backend_gtk3cairo', 'matplotlib.backends.backend_gtk4',
+        'matplotlib.backends.backend_gtk4agg', 'matplotlib.backends.backend_gtk4cairo',
+        'matplotlib.backends.backend_cairo', 'matplotlib.backends.backend_macosx',
+        'matplotlib.backends.backend_nbagg', 'matplotlib.backends.backend_pgf',
+        'matplotlib.backends.backend_ps', 'matplotlib.backends.backend_qt5',
+        'matplotlib.backends.backend_qt5agg', 'matplotlib.backends.backend_qt5cairo',
+        'matplotlib.backends.backend_svg', 'matplotlib.backends.backend_template',
+        'matplotlib.backends.backend_tkcairo', 'matplotlib.backends.backend_wx',
+        'matplotlib.backends.backend_wxagg', 'matplotlib.backends.backend_wxcairo',
+        'matplotlib.sphinxext',
+        # sympy: 完全排除（仅被 scipy 间接引用）
+        'sympy',
     ],
     noarchive=False,
     optimize=2,   # 最高字节码优化：移除 docstring 和 assert
