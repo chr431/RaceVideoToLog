@@ -1419,6 +1419,22 @@ class RaceVideoToLogApp:
 
 		return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 
+	def _preprocess_fallback(self, crop: np.ndarray, target_h: float, pad_px: float) -> np.ndarray:
+		"""备选预处理：CLAHE 增强对比度 + OTSU，应对白字灰底低对比度场景。"""
+		gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+		clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+		gray = clahe.apply(gray)
+		_, gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+		h, w = gray.shape[:2]
+		th = max(8.0, float(target_h))
+		scale = th / float(h) if h > 0 else 1.0
+		if abs(scale - 1.0) > 0.02:
+			gray = cv2.resize(gray, (max(1, int(w * scale)), int(th)), interpolation=cv2.INTER_LINEAR)
+		pad_int = int(pad_px)
+		if pad_int > 0:
+			gray = cv2.copyMakeBorder(gray, pad_int, pad_int, pad_int, pad_int, cv2.BORDER_REPLICATE)
+		return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+
 	def _ocr_sequential(
 		self,
 		raw_frames: list[tuple[float, np.ndarray]],
@@ -1432,6 +1448,10 @@ class RaceVideoToLogApp:
 			proc = self.preprocess_crop(crop, target_h, pad_px)
 			ocr_result, _ = ocr(proc)
 			speed_value, raw_text = extract_speed_value(ocr_result)
+			if speed_value is None:
+				proc_fb = self._preprocess_fallback(crop, target_h, pad_px)
+				ocr_result, _ = ocr(proc_fb)
+				speed_value, raw_text = extract_speed_value(ocr_result)
 			if speed_value is not None and raw_text is not None:
 				observations.append(
 					SpeedObservation(
@@ -1646,9 +1666,14 @@ class RaceVideoToLogApp:
 
 		observations: list[SpeedObservation | None] = [None] * len(raw_frames)
 
-		def _ocr_one(idx: int, ts: float, proc: np.ndarray) -> tuple[int, SpeedObservation | None]:
+		def _ocr_one(idx: int, ts: float, proc: np.ndarray, crop_bgr: np.ndarray) -> tuple[int, SpeedObservation | None]:
 			ocr_result, _ = engine(proc)
 			sv, rt = extract_speed_value(ocr_result)
+			if sv is None:
+				# 备选预处理：CLAHE 增强对比度
+				proc_fb = self._preprocess_fallback(crop_bgr, target_h, pad_px)
+				ocr_result, _ = engine(proc_fb)
+				sv, rt = extract_speed_value(ocr_result)
 			if sv is not None and rt is not None:
 				return idx, SpeedObservation(
 					timestamp=ts,
@@ -1659,7 +1684,7 @@ class RaceVideoToLogApp:
 
 		pool = ThreadPoolExecutor(max_workers=num_workers)
 		try:
-			futures = [pool.submit(_ocr_one, i, ts, proc) for i, (ts, proc) in enumerate(preprocessed)]
+			futures = [pool.submit(_ocr_one, i, ts, proc, raw_frames[i][1]) for i, (ts, proc) in enumerate(preprocessed)]
 			done = 0
 			for f in as_completed(futures):
 				if done % 10 == 0:
@@ -1926,6 +1951,21 @@ def run_headless(args: argparse.Namespace) -> None:
 
 		ocr_result, _ = ocr(proc)
 		sv, rt = extract_speed_value(ocr_result)
+		if sv is None:
+			# 备选预处理：CLAHE 增强对比度
+			gray2 = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+			clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+			gray2 = clahe.apply(gray2)
+			_, gray2 = cv2.threshold(gray2, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+			th = max(8.0, float(args.target_h))
+			sc = th / gray2.shape[0] if gray2.shape[0] > 0 else 1.0
+			if abs(sc - 1.0) > 0.02:
+				gray2 = cv2.resize(gray2, (max(1, int(gray2.shape[1] * sc)), int(th)), interpolation=cv2.INTER_LINEAR)
+			if args.pad > 0:
+				gray2 = cv2.copyMakeBorder(gray2, args.pad, args.pad, args.pad, args.pad, cv2.BORDER_REPLICATE)
+			proc2 = cv2.cvtColor(gray2, cv2.COLOR_GRAY2BGR)
+			ocr_result, _ = ocr(proc2)
+			sv, rt = extract_speed_value(ocr_result)
 		if sv is not None and rt is not None:
 			observations.append(SpeedObservation(
 				timestamp=ts,
