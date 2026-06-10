@@ -849,8 +849,8 @@ class RaceVideoToLogApp:
 		from matplotlib.widgets import SpanSelector
 		fig = self._analysis_figure
 
-		# 保存当前视图范围（按上次实际渲染的模式记忆）
-		if fig.axes and self._last_rendered_mode:
+		# 保存当前视图范围（按上次实际渲染的模式记忆；Δt-x 不缓存）
+		if fig.axes and self._last_rendered_mode and self._last_rendered_mode != "dt-x":
 			self._saved_limits[self._last_rendered_mode] = (
 				fig.axes[0].get_xlim(), fig.axes[0].get_ylim()
 			)
@@ -1045,11 +1045,12 @@ class RaceVideoToLogApp:
 
 		fig.tight_layout()
 
-		# 恢复当前模式的上次视图范围
-		saved = self._saved_limits.get(mode)
-		if saved is not None:
-			ax.set_xlim(saved[0])
-			ax.set_ylim(saved[1])
+		# 恢复当前模式的上次视图范围（Δt-x 不缓存）
+		if not is_dtx:
+			saved = self._saved_limits.get(mode)
+			if saved is not None:
+				ax.set_xlim(saved[0])
+				ax.set_ylim(saved[1])
 
 		self._analysis_canvas.draw()
 		self._last_rendered_mode = mode
@@ -1062,6 +1063,7 @@ class RaceVideoToLogApp:
 		mode = self._chart_mode.get()
 		self._saved_limits.pop(mode, None)
 		ax = fig.axes[0]
+		ax.autoscale(enable=True, axis="both")
 		ax.relim()
 		ax.autoscale_view()
 		self._analysis_canvas.draw_idle()
