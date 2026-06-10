@@ -624,6 +624,7 @@ class RaceVideoToLogApp:
 		self._chart_mode = tk.StringVar(value="v-x")
 		self._show_corrected = tk.BooleanVar(value=False)
 		self._saved_limits: dict[str, tuple | None] = {}  # 按模式保存视图范围
+		self._last_rendered_mode: str | None = None  # 上次实际渲染的模式
 		self._smooth_strength = tk.IntVar(value=50)
 		self._span_selector = None  # matplotlib SpanSelector
 
@@ -806,10 +807,9 @@ class RaceVideoToLogApp:
 		from matplotlib.widgets import SpanSelector
 		fig = self._analysis_figure
 
-		# 保存当前视图范围（按模式分别记忆）
-		if fig.axes:
-			prev_mode = self._chart_mode.get()
-			self._saved_limits[prev_mode] = (
+		# 保存当前视图范围（按上次实际渲染的模式记忆）
+		if fig.axes and self._last_rendered_mode:
+			self._saved_limits[self._last_rendered_mode] = (
 				fig.axes[0].get_xlim(), fig.axes[0].get_ylim()
 			)
 
@@ -947,6 +947,7 @@ class RaceVideoToLogApp:
 			ax.set_ylim(saved[1])
 
 		self._analysis_canvas.draw()
+		self._last_rendered_mode = mode
 
 	def _smooth_data(self, xv, yv, strength):
 		"""Savitzky-Golay 滤波：多项式滑动窗口拟合，保留峰谷形状。"""
