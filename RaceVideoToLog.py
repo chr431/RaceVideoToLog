@@ -785,7 +785,7 @@ class RaceVideoToLogApp:
 		ttk.Button(ctrl, text="导出 PNG", command=self._export_png).grid(row=0, column=4, sticky="e")
 		ttk.Radiobutton(ctrl, text="v-t", variable=self._chart_mode, value="v-t").grid(row=1, column=3, sticky="e", padx=(12, 0))
 		ttk.Radiobutton(ctrl, text="v-x", variable=self._chart_mode, value="v-x").grid(row=1, column=4, sticky="w")
-		ttk.Radiobutton(ctrl, text="t-x", variable=self._chart_mode, value="t-x").grid(row=1, column=5, sticky="w", padx=(6, 0))
+		ttk.Radiobutton(ctrl, text="Δt-x", variable=self._chart_mode, value="dt-x").grid(row=1, column=5, sticky="w", padx=(6, 0))
 		ttk.Checkbutton(ctrl, text="标记纠错点", variable=self._show_corrected).grid(row=1, column=0, sticky="w", padx=(0, 6))
 		ttk.Label(ctrl, text="平滑").grid(row=1, column=1, sticky="e", padx=(0, 2))
 		ttk.Scale(ctrl, from_=0, to=100, variable=self._smooth_strength,
@@ -860,55 +860,69 @@ class RaceVideoToLogApp:
 		all_dists: list[list[float]] = [[], [], []]
 		all_flags: list[list[int]] = [[], [], []]
 		is_vt = (mode == "v-t")
-		is_tx = (mode == "t-x")
+		is_dtx = (mode == "dt-x")
 
-		for i, csv_path in enumerate(self._analysis_csvs):
-			if not csv_path:
-				continue
-			try:
-				times, dists, speeds, flags = self._parse_csv(csv_path)
-				name = Path(csv_path).stem
-				all_times[i] = times
-				all_dists[i] = dists
-				if is_tx:
-					x_data = dists
-					y_data = times
-				elif is_vt:
-					x_data = times
-					y_data = speeds
-				else:  # v-x
-					x_data = dists
-					y_data = speeds
-				all_x_data[i] = x_data
-				all_y_data[i] = y_data
-				all_flags[i] = flags
-
-				# t-x 不显示纠错标记；平滑也适用（平滑时间曲线）
-				if is_tx:
-					if self._smooth_strength.get() > 0:
-						sx, sy = self._smooth_data(x_data, y_data, self._smooth_strength.get())
-						ax.plot(sx, sy, color=colors[i], linewidth=0.8)
-					else:
-						ax.plot(x_data, y_data, color=colors[i], linewidth=0.8)
-				elif show_corrected or self._smooth_strength.get() > 0:
-					self._plot_segmented(ax, x_data, speeds, flags, colors[i], show_corrected)
-				else:
-					ax.plot(x_data, speeds, color=colors[i], linewidth=0.8)
-				# 图例只需要一条线
-				ax.plot([], [], color=colors[i], linewidth=0.8, label=name)
-				has_data = True
-			except Exception as e:
-				messagebox.showerror("解析失败", f"{Path(csv_path).name}: {e}")
+		if is_dtx:
+			# ── Δt-x 模式：仅用 CSV1/CSV2，无视 CSV3 ──
+			if not self._analysis_csvs[0] or not self._analysis_csvs[1]:
+				messagebox.showwarning("数据不足", "Δt-x 需要 CSV 1 和 CSV 2 均已导入。")
 				return
+			times1, dists1, speeds1, _ = self._parse_csv(self._analysis_csvs[0])
+			times2, dists2, speeds2, _ = self._parse_csv(self._analysis_csvs[1])
+			# 以 CSV1 距离为基准，插值 CSV2 时间
+			t2_interp = np.interp(dists1, dists2, times2)
+			dt = np.array(times1) - t2_interp  # 正数=CSV1更慢
+			all_x_data[0] = dists1
+			all_y_data[0] = dt.tolist()
+			x_data = dists1
+			y_data = dt.tolist()
+			name1 = Path(self._analysis_csvs[0]).stem
+			name2 = Path(self._analysis_csvs[1]).stem
+			label = f"{name1} - {name2}"
+			if self._smooth_strength.get() > 0:
+				sx, sy = self._smooth_data(x_data, y_data, self._smooth_strength.get())
+				ax.plot(sx, sy, color=colors[0], linewidth=0.8)
+			else:
+				ax.plot(x_data, y_data, color=colors[0], linewidth=0.8)
+			ax.plot([], [], color=colors[0], linewidth=0.8, label=label)
+			has_data = True
+		else:
+			for i, csv_path in enumerate(self._analysis_csvs):
+				if not csv_path:
+					continue
+				try:
+					times, dists, speeds, flags = self._parse_csv(csv_path)
+					name = Path(csv_path).stem
+					all_times[i] = times
+					all_dists[i] = dists
+					if is_vt:
+						x_data = times
+						y_data = speeds
+					else:  # v-x
+						x_data = dists
+						y_data = speeds
+					all_x_data[i] = x_data
+					all_y_data[i] = y_data
+					all_flags[i] = flags
+
+					if show_corrected or self._smooth_strength.get() > 0:
+						self._plot_segmented(ax, x_data, speeds, flags, colors[i], show_corrected)
+					else:
+						ax.plot(x_data, speeds, color=colors[i], linewidth=0.8)
+					ax.plot([], [], color=colors[i], linewidth=0.8, label=name)
+					has_data = True
+				except Exception as e:
+					messagebox.showerror("解析失败", f"{Path(csv_path).name}: {e}")
+					return
 
 		if not has_data:
 			return
 
-		if is_tx:
+		if is_dtx:
 			xlabel = "距离 (m)"
-			ylabel = "时间 (s)"
-			title = "时间-距离曲线"
-			delta_label_text = "用时"
+			ylabel = "Δt (s)"
+			title = f"时间差-距离 ({name1} vs {name2})"
+			delta_label_text = "Δ(Δt)"
 		elif is_vt:
 			xlabel = "时间 (s)"
 			ylabel = "速度 (km/h)"
@@ -942,17 +956,16 @@ class RaceVideoToLogApp:
 					continue
 				name = Path(self._analysis_csvs[i]).stem if self._analysis_csvs[i] else ""
 				total = 0.0
-				if is_tx:
-					# t-x: 完成该段所用时间 Δt
-					td = all_times[i]
-					t_start = t_end = None
+				if is_dtx:
+					# Δt-x: 显示 Δt 在该范围内的变化量
+					y_start = y_end = None
 					for j, x in enumerate(xd):
-						if t_start is None and x >= xmin:
-							t_start = td[j]
+						if y_start is None and x >= xmin:
+							y_start = all_y_data[i][j]
 						if x <= xmax:
-							t_end = td[j]
-					if t_start is not None and t_end is not None and t_end > t_start:
-						total = t_end - t_start  # 秒
+							y_end = all_y_data[i][j]
+					if y_start is not None and y_end is not None:
+						total = y_end - y_start  # Δ(Δt)
 				else:
 					for j, x in enumerate(xd):
 						if xmin <= x <= xmax:
@@ -968,9 +981,9 @@ class RaceVideoToLogApp:
 									dx = xd[j] - xd[j - 1]
 									avg_spd_mps = ((all_y_data[i][j] + all_y_data[i][j - 1]) / 2) / 3.6 if dx > 0 else 999
 									total += dx / avg_spd_mps if avg_spd_mps > 0 else 0
-				if is_tx:
-					if total > 0:
-						results.append(f"{name}: {total:.2f}s")
+				if is_dtx:
+					sign = "+" if total >= 0 else ""
+					results.append(f"{label}: {sign}{total:.2f}s")
 				elif total > 0:
 					unit = "m" if is_vt else "s"
 					results.append(f"{name}: {total:.2f}{unit}")
