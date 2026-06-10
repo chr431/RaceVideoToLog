@@ -626,6 +626,7 @@ class RaceVideoToLogApp:
 		self._saved_limits: dict[str, tuple | None] = {}  # 按模式保存视图范围
 		self._last_rendered_mode: str | None = None  # 上次实际渲染的模式
 		self._smooth_strength = tk.IntVar(value=25)
+		self._smooth_entry_var = tk.StringVar(value="25")  # 平滑输入框同步
 		self._span_selector = None  # matplotlib SpanSelector
 
 		self._build_ui()
@@ -740,12 +741,12 @@ class RaceVideoToLogApp:
 		# ── Tab 2: 数据分析 ──
 		self._build_analysis_tab()
 
-		# Row 1: 底部状态栏（两个 tab 共享）
-		footer = ttk.Frame(self.root, padding=(12, 0, 12, 12))
-		footer.grid(row=1, column=0, sticky="ew")
-		footer.columnconfigure(0, weight=1)
-		ttk.Label(footer, textvariable=self.status_var).grid(row=0, column=0, sticky="w")
-		self.progress_bar = ttk.Progressbar(footer, variable=self.progress_var, maximum=100.0)
+		# Row 1: 底部状态栏（OCR 处理 tab 使用，数据分析 tab 隐藏）
+		self._footer = ttk.Frame(self.root, padding=(12, 0, 12, 12))
+		self._footer.grid(row=1, column=0, sticky="ew")
+		self._footer.columnconfigure(0, weight=1)
+		ttk.Label(self._footer, textvariable=self.status_var).grid(row=0, column=0, sticky="w")
+		self.progress_bar = ttk.Progressbar(self._footer, variable=self.progress_var, maximum=100.0)
 		self.progress_bar.grid(row=1, column=0, sticky="ew", pady=(4, 0))
 
 	def _add_info_row(self, parent: ttk.LabelFrame, column: int, title: str, variable: tk.StringVar) -> None:
@@ -789,11 +790,42 @@ class RaceVideoToLogApp:
 		ttk.Label(ctrl, text="平滑").grid(row=1, column=1, sticky="e", padx=(0, 2))
 		ttk.Scale(ctrl, from_=0, to=100, variable=self._smooth_strength,
 			orient="horizontal", length=80).grid(row=1, column=2, sticky="w")
+		smooth_entry = ttk.Entry(ctrl, textvariable=self._smooth_entry_var, width=4, justify="center")
+		smooth_entry.grid(row=1, column=2, sticky="e", padx=(0, 4))
+
+		# 滑块 ↔ 输入框双向同步
+		def _slider_to_entry(*_):
+			self._smooth_entry_var.set(str(self._smooth_strength.get()))
+		def _entry_to_slider(*_):
+			try:
+				v = int(self._smooth_entry_var.get())
+				self._smooth_strength.set(max(0, min(100, v)))
+			except ValueError:
+				pass
+		self._smooth_strength.trace_add("write", _slider_to_entry)
+		self._smooth_entry_var.trace_add("write", _entry_to_slider)
+
+		# 切换到数据分析 tab 时隐藏底部进度条/状态
+		def _on_tab_change(event):
+			cur = self._notebook.index(self._notebook.select())
+			if cur == 1:  # 数据分析 tab
+				self.status_var.set("")
+				self.progress_var.set(0.0)
+			self._update_footer_visibility()
+		self._notebook.bind("<<NotebookTabChanged>>", _on_tab_change)
 
 		# Matplotlib 画布
 		self._analysis_figure = Figure(figsize=(8, 5), dpi=100)
 		self._analysis_canvas = FigureCanvasTkAgg(self._analysis_figure, master=tab)
 		self._analysis_canvas.get_tk_widget().grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 10))
+
+	def _update_footer_visibility(self) -> None:
+		"""OCR 处理 tab 显示底部状态栏，数据分析 tab 隐藏。"""
+		cur = self._notebook.index(self._notebook.select())
+		if cur == 1:
+			self._footer.grid_remove()
+		else:
+			self._footer.grid()
 
 	def _import_csv(self, index: int) -> None:
 		path = filedialog.askopenfilename(
@@ -876,7 +908,7 @@ class RaceVideoToLogApp:
 			xlabel = "距离 (m)"
 			ylabel = "时间 (s)"
 			title = "时间-距离曲线"
-			delta_label_text = "平均速度"
+			delta_label_text = "用时"
 		elif is_vt:
 			xlabel = "时间 (s)"
 			ylabel = "速度 (km/h)"
@@ -911,7 +943,7 @@ class RaceVideoToLogApp:
 				name = Path(self._analysis_csvs[i]).stem if self._analysis_csvs[i] else ""
 				total = 0.0
 				if is_tx:
-					# t-x: 平均速度 = Δ距离 / Δ时间
+					# t-x: 完成该段所用时间 Δt
 					td = all_times[i]
 					t_start = t_end = None
 					for j, x in enumerate(xd):
@@ -920,7 +952,7 @@ class RaceVideoToLogApp:
 						if x <= xmax:
 							t_end = td[j]
 					if t_start is not None and t_end is not None and t_end > t_start:
-						total = (xmax - xmin) / (t_end - t_start) * 3.6  # km/h
+						total = t_end - t_start  # 秒
 				else:
 					for j, x in enumerate(xd):
 						if xmin <= x <= xmax:
@@ -938,7 +970,7 @@ class RaceVideoToLogApp:
 									total += dx / avg_spd_mps if avg_spd_mps > 0 else 0
 				if is_tx:
 					if total > 0:
-						results.append(f"{name}: {total:.1f} km/h")
+						results.append(f"{name}: {total:.2f}s")
 				elif total > 0:
 					unit = "m" if is_vt else "s"
 					results.append(f"{name}: {total:.2f}{unit}")
