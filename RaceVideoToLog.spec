@@ -35,10 +35,6 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('matplotlib')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
-# scipy（Savitzky-Golay 平滑）
-tmp_ret = collect_all('scipy')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-
 # ── 精简二进制：移除不需要的 DLL ──
 _NVIDIA_DLL_PREFIXES = {
     'cublas', 'cublaslt', 'cudart', 'cufft', 'curand', 'cusparse', 'cusolver',
@@ -71,13 +67,6 @@ a = Analysis(
         'onnxruntime.quantization',
         'onnxruntime.datasets',
         'onnxruntime.backend',
-        # scipy: 只用了 signal.savgol_filter，排除其他所有
-        'scipy.optimize', 'scipy.linalg', 'scipy.sparse', 'scipy.spatial',
-        'scipy.stats', 'scipy.special', 'scipy.integrate', 'scipy.interpolate',
-        'scipy.fft', 'scipy.fftpack', 'scipy.ndimage', 'scipy.io',
-        'scipy.cluster', 'scipy.constants', 'scipy.datasets', 'scipy.differentiate',
-        'scipy.misc', 'scipy.odr',
-        'scipy.tests', 'scipy._lib.tests',
         # matplotlib: 排除测试和未用后端
         'matplotlib.tests', 'matplotlib.testing',
         'matplotlib.backends.backend_gtk3', 'matplotlib.backends.backend_gtk3agg',
@@ -91,8 +80,10 @@ a = Analysis(
         'matplotlib.backends.backend_tkcairo', 'matplotlib.backends.backend_wx',
         'matplotlib.backends.backend_wxagg', 'matplotlib.backends.backend_wxcairo',
         'matplotlib.sphinxext',
-        # sympy: 完全排除（仅被 scipy 间接引用）
+        # sympy: 完全排除
         'sympy',
+        # scipy: 已用纯 numpy 替代 savgol_filter，完全排除
+        'scipy',
     ],
     noarchive=False,
     optimize=2,   # 最高字节码优化：移除 docstring 和 assert

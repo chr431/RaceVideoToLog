@@ -24,7 +24,6 @@ import threading
 
 import cv2
 import numpy as np
-from scipy.signal import savgol_filter
 from PIL import Image, ImageTk
 
 import matplotlib
@@ -367,6 +366,33 @@ def clamp_region(x1: int, y1: int, x2: int, y2: int, width: int, height: int) ->
 	x1, x2 = sorted((max(0, min(width - 1, x1)), max(0, min(width - 1, x2))))
 	y1, y2 = sorted((max(0, min(height - 1, y1)), max(0, min(height - 1, y2))))
 	return x1, y1, x2, y2
+
+
+def _savgol_filter_np(y, window_length, polyorder):
+	"""纯 numpy Savitzky-Golay 滤波，等价于 scipy.signal.savgol_filter。"""
+	if window_length % 2 == 0 or window_length < 1:
+		raise ValueError("window_length must be odd")
+	if window_length <= polyorder:
+		raise ValueError("window_length must be > polyorder")
+	half = window_length // 2
+	y = np.asarray(y, dtype=float)
+	n = len(y)
+	if n < window_length:
+		return y.copy()
+	x_full = np.arange(-half, half + 1, dtype=float)
+	result = np.zeros(n)
+	for i in range(n):
+		lo = max(0, i - half)
+		hi = min(n, i + half + 1)
+		y_seg = y[lo:hi]
+		if len(y_seg) < window_length:
+			result[i] = y[i]
+		else:
+			x_seg = x_full[lo - (i - half):hi - (i - half)]
+			A = np.vander(x_seg, polyorder + 1, increasing=True)
+			coeffs = np.linalg.lstsq(A, y_seg, rcond=None)[0]
+			result[i] = np.polyval(coeffs[::-1], 0)
+	return result
 
 
 def build_speed_candidates(raw_text: str, max_speed_kmh: float) -> list[float]:
@@ -1073,16 +1099,15 @@ class RaceVideoToLogApp:
 		self._analysis_canvas.draw_idle()
 
 	def _smooth_data(self, xv, yv, strength):
-		"""Savitzky-Golay 滤波：多项式滑动窗口拟合，保留峰谷形状。"""
+		"""Savitzky-Golay 滤波（纯 numpy 实现）：多项式滑动窗口拟合，保留峰谷形状。"""
 		if strength <= 0 or len(xv) < 5:
 			return np.array(xv), np.array(yv, dtype=float)
-		# strength 0→100 映射到窗口长度 5→(N*0.0175)
 		win = int(len(xv) * strength / 100.0 * 0.0175)
 		win = max(5, min(win, len(xv) - 2))
 		if win % 2 == 0:
-			win += 1  # 必须奇数
+			win += 1
 		polyorder = min(3, win - 1)
-		sy = savgol_filter(np.array(yv, dtype=float), win, polyorder)
+		sy = _savgol_filter_np(np.array(yv, dtype=float), win, polyorder)
 		return np.array(xv, dtype=float), sy
 
 	def _plot_segmented(self, ax, x, y, flags, normal_color, show_red):
@@ -2085,7 +2110,7 @@ def run_analysis_headless(args: argparse.Namespace) -> None:
 		win = max(5, min(win, len(yv) - 2))
 		if win % 2 == 0:
 			win += 1
-		return savgol_filter(np.array(yv, dtype=float), win, min(3, win - 1))
+		return _savgol_filter_np(np.array(yv, dtype=float), win, min(3, win - 1))
 
 	# ── v-t ──
 	fig, ax = plt.subplots(figsize=(10, 6))
