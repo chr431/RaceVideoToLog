@@ -787,6 +787,7 @@ class RaceVideoToLogApp:
 		ttk.Radiobutton(ctrl, text="v-t", variable=self._chart_mode, value="v-t").grid(row=1, column=3, sticky="e", padx=(12, 0))
 		ttk.Radiobutton(ctrl, text="v-x", variable=self._chart_mode, value="v-x").grid(row=1, column=4, sticky="w")
 		ttk.Radiobutton(ctrl, text="Δt-x", variable=self._chart_mode, value="dt-x").grid(row=1, column=5, sticky="w", padx=(6, 0))
+		ttk.Button(ctrl, text="自动调整", command=self._auto_fit).grid(row=1, column=6, sticky="e", padx=(6, 0))
 		ttk.Checkbutton(ctrl, text="标记纠错点", variable=self._show_corrected).grid(row=1, column=0, sticky="w", padx=(0, 6))
 		ttk.Label(ctrl, text="平滑").grid(row=1, column=1, sticky="e", padx=(0, 2))
 		ttk.Scale(ctrl, from_=0, to=100, variable=self._smooth_strength,
@@ -836,11 +837,13 @@ class RaceVideoToLogApp:
 		if path:
 			self._analysis_csvs[index] = path
 			self._analysis_labels[index].set(Path(path).name)
+			self._saved_limits.clear()  # 数据已变，清空视图缓存
 
 	def _clear_csv(self, index: int) -> None:
 		"""清除已导入的 CSV。"""
 		self._analysis_csvs[index] = None
 		self._analysis_labels[index].set("未导入")
+		self._saved_limits.clear()
 
 	def _render_curves(self) -> None:
 		from matplotlib.widgets import SpanSelector
@@ -1050,6 +1053,18 @@ class RaceVideoToLogApp:
 
 		self._analysis_canvas.draw()
 		self._last_rendered_mode = mode
+
+	def _auto_fit(self) -> None:
+		"""重置图表缩放和位置到默认状态。"""
+		fig = self._analysis_figure
+		if not fig.axes:
+			return
+		mode = self._chart_mode.get()
+		self._saved_limits.pop(mode, None)
+		ax = fig.axes[0]
+		ax.relim()
+		ax.autoscale_view()
+		self._analysis_canvas.draw_idle()
 
 	def _smooth_data(self, xv, yv, strength):
 		"""Savitzky-Golay 滤波：多项式滑动窗口拟合，保留峰谷形状。"""
