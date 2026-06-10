@@ -625,7 +625,7 @@ class RaceVideoToLogApp:
 		self._show_corrected = tk.BooleanVar(value=False)
 		self._saved_limits: dict[str, tuple | None] = {}  # 按模式保存视图范围
 		self._last_rendered_mode: str | None = None  # 上次实际渲染的模式
-		self._smooth_strength = tk.IntVar(value=50)
+		self._smooth_strength = tk.IntVar(value=25)
 		self._span_selector = None  # matplotlib SpanSelector
 
 		self._build_ui()
@@ -784,6 +784,7 @@ class RaceVideoToLogApp:
 		ttk.Button(ctrl, text="导出 PNG", command=self._export_png).grid(row=0, column=4, sticky="e")
 		ttk.Radiobutton(ctrl, text="v-t", variable=self._chart_mode, value="v-t").grid(row=1, column=3, sticky="e", padx=(12, 0))
 		ttk.Radiobutton(ctrl, text="v-x", variable=self._chart_mode, value="v-x").grid(row=1, column=4, sticky="w")
+		ttk.Radiobutton(ctrl, text="t-x", variable=self._chart_mode, value="t-x").grid(row=1, column=5, sticky="w", padx=(6, 0))
 		ttk.Checkbutton(ctrl, text="标记纠错点", variable=self._show_corrected).grid(row=1, column=0, sticky="w", padx=(0, 6))
 		ttk.Label(ctrl, text="平滑").grid(row=1, column=1, sticky="e", padx=(0, 2))
 		ttk.Scale(ctrl, from_=0, to=100, variable=self._smooth_strength,
@@ -823,8 +824,11 @@ class RaceVideoToLogApp:
 		# 存储所有数据用于范围选择计算
 		all_x_data: list[list[float]] = [[], [], []]
 		all_y_data: list[list[float]] = [[], [], []]
+		all_times: list[list[float]] = [[], [], []]
+		all_dists: list[list[float]] = [[], [], []]
 		all_flags: list[list[int]] = [[], [], []]
 		is_vt = (mode == "v-t")
+		is_tx = (mode == "t-x")
 
 		for i, csv_path in enumerate(self._analysis_csvs):
 			if not csv_path:
@@ -832,13 +836,29 @@ class RaceVideoToLogApp:
 			try:
 				times, dists, speeds, flags = self._parse_csv(csv_path)
 				name = Path(csv_path).stem
-				x_data = times if is_vt else dists
+				all_times[i] = times
+				all_dists[i] = dists
+				if is_tx:
+					x_data = dists
+					y_data = times
+				elif is_vt:
+					x_data = times
+					y_data = speeds
+				else:  # v-x
+					x_data = dists
+					y_data = speeds
 				all_x_data[i] = x_data
-				all_y_data[i] = speeds
+				all_y_data[i] = y_data
 				all_flags[i] = flags
 
-				# 需要平滑或标记纠错时走分段逻辑
-				if show_corrected or self._smooth_strength.get() > 0:
+				# t-x 不显示纠错标记；平滑也适用（平滑时间曲线）
+				if is_tx:
+					if self._smooth_strength.get() > 0:
+						sx, sy = self._smooth_data(x_data, y_data, self._smooth_strength.get())
+						ax.plot(sx, sy, color=colors[i], linewidth=0.8)
+					else:
+						ax.plot(x_data, y_data, color=colors[i], linewidth=0.8)
+				elif show_corrected or self._smooth_strength.get() > 0:
 					self._plot_segmented(ax, x_data, speeds, flags, colors[i], show_corrected)
 				else:
 					ax.plot(x_data, speeds, color=colors[i], linewidth=0.8)
@@ -852,12 +872,24 @@ class RaceVideoToLogApp:
 		if not has_data:
 			return
 
-		xlabel = "时间 (s)" if is_vt else "距离 (m)"
-		title = "速度-时间曲线" if is_vt else "速度-距离曲线"
-		delta_label_text = "行驶距离" if is_vt else "用时"
+		if is_tx:
+			xlabel = "距离 (m)"
+			ylabel = "时间 (s)"
+			title = "时间-距离曲线"
+			delta_label_text = "平均速度"
+		elif is_vt:
+			xlabel = "时间 (s)"
+			ylabel = "速度 (km/h)"
+			title = "速度-时间曲线"
+			delta_label_text = "行驶距离"
+		else:
+			xlabel = "距离 (m)"
+			ylabel = "速度 (km/h)"
+			title = "速度-距离曲线"
+			delta_label_text = "用时"
 
 		ax.set_xlabel(xlabel)
-		ax.set_ylabel("速度 (km/h)")
+		ax.set_ylabel(ylabel)
 		ax.set_title(title)
 		ax.legend(loc="upper right")
 		ax.grid(True, alpha=0.3)
@@ -878,21 +910,36 @@ class RaceVideoToLogApp:
 					continue
 				name = Path(self._analysis_csvs[i]).stem if self._analysis_csvs[i] else ""
 				total = 0.0
-				for j, x in enumerate(xd):
-					if xmin <= x <= xmax:
-						if is_vt:
-							# v-t: 累计行驶距离 = Σ(速度 × 时间间隔)
-							if j > 0:
-								dt = xd[j] - xd[j - 1]
-								avg_spd = (all_y_data[i][j] + all_y_data[i][j - 1]) / 2 / 3.6  # m/s
-								total += avg_spd * dt
-						else:
-							# v-x: 累计用时
-							if j > 0:
-								dx = xd[j] - xd[j - 1]
-								avg_spd_mps = ((all_y_data[i][j] + all_y_data[i][j - 1]) / 2) / 3.6 if dx > 0 else 999
-								total += dx / avg_spd_mps if avg_spd_mps > 0 else 0
-				if total > 0:
+				if is_tx:
+					# t-x: 平均速度 = Δ距离 / Δ时间
+					td = all_times[i]
+					t_start = t_end = None
+					for j, x in enumerate(xd):
+						if t_start is None and x >= xmin:
+							t_start = td[j]
+						if x <= xmax:
+							t_end = td[j]
+					if t_start is not None and t_end is not None and t_end > t_start:
+						total = (xmax - xmin) / (t_end - t_start) * 3.6  # km/h
+				else:
+					for j, x in enumerate(xd):
+						if xmin <= x <= xmax:
+							if is_vt:
+								# v-t: 累计行驶距离 = Σ(速度 × 时间间隔)
+								if j > 0:
+									dt = xd[j] - xd[j - 1]
+									avg_spd = (all_y_data[i][j] + all_y_data[i][j - 1]) / 2 / 3.6
+									total += avg_spd * dt
+							else:
+								# v-x: 累计用时
+								if j > 0:
+									dx = xd[j] - xd[j - 1]
+									avg_spd_mps = ((all_y_data[i][j] + all_y_data[i][j - 1]) / 2) / 3.6 if dx > 0 else 999
+									total += dx / avg_spd_mps if avg_spd_mps > 0 else 0
+				if is_tx:
+					if total > 0:
+						results.append(f"{name}: {total:.1f} km/h")
+				elif total > 0:
 					unit = "m" if is_vt else "s"
 					results.append(f"{name}: {total:.2f}{unit}")
 			delta_text.set_text("\n".join(results) if results else "")
