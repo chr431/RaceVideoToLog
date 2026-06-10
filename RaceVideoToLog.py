@@ -1910,9 +1910,14 @@ def run_headless(args: argparse.Namespace) -> None:
 		print("错误: 未识别到速度数据")
 		sys.exit(1)
 
-	# 纠错
+	# 初次纠错 + 物理超限帧重试 OCR
 	print(f"识别: {len(observations)} 条, 正在进行物理约束纠错...")
 	corrected = correct_speed_series(observations, args.max_speed, args.max_accel)
+	observations, corrected = _retry_suspect_frames(
+		observations, corrected, raw_frames, ocr, args
+	)
+	if corrected is None:
+		corrected = correct_speed_series(observations, args.max_speed, args.max_accel)
 
 	# 积分 + 写出
 	rows: list[tuple[float, float, float, int]] = []
@@ -1942,6 +1947,85 @@ def run_headless(args: argparse.Namespace) -> None:
 	corrected_count = sum(r[3] for r in rows)
 	print(f"导出完成: {output_path}")
 	print(f"共 {len(rows)} 条, 纠错 {corrected_count} 条 (准确率 {100 - corrected_count/len(rows)*100:.1f}%)")
+
+
+def _retry_suspect_frames(
+	observations: list,
+	corrected_first: list[float],
+	raw_frames: list,
+	ocr,
+	args,
+) -> tuple[list, list[float] | None]:
+	"""对物理超限帧用备选预处理重试 OCR，选最接近邻帧期望值的读数。"""
+	max_delta_kmh = args.max_accel * (1.0 / 57.0) * 3.6  # 假设 ~17.5ms 帧间隔
+	_suspects = []
+	for i in range(1, len(corrected_first)):
+		dv = abs(corrected_first[i] - corrected_first[i - 1])
+		if dv > max_delta_kmh * 2 and abs(observations[i].raw_speed_kmh - corrected_first[i]) < 0.5:
+			# 纠正没改动但跳变超物理极限
+			expected = corrected_first[i - 1]  # 期望接近前一帧
+			_suspects.append((i, expected))
+
+	if not _suspects:
+		return observations, None
+
+	# 对可疑帧重试 OCR
+	improved = 0
+	new_obs = list(observations)
+	for idx, expected in _suspects:
+		ts, crop = raw_frames[idx]
+		best_speed = new_obs[idx].raw_speed_kmh
+		best_text = new_obs[idx].raw_text
+		best_diff = abs(best_speed - expected)
+
+		gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+
+		# 变体1: 不缩放，直接灰度图
+		proc1 = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+		best_speed, best_text, best_diff = _ocr_retry(
+			ocr, proc1, expected, best_speed, best_text, best_diff, args)
+
+		# 变体2: OTSU 二值化 + 缩放
+		_, th2 = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+		h2, w2 = th2.shape[:2]
+		th = max(8.0, float(args.target_h))
+		sc2 = th / h2 if h2 > 0 else 1.0
+		if abs(sc2 - 1.0) > 0.02:
+			th2 = cv2.resize(th2, (max(1, int(w2 * sc2)), int(th)), interpolation=cv2.INTER_LINEAR)
+		proc2 = cv2.cvtColor(th2, cv2.COLOR_GRAY2BGR)
+		best_speed, best_text, best_diff = _ocr_retry(
+			ocr, proc2, expected, best_speed, best_text, best_diff, args)
+
+		# 变体3: 固定阈值 120（浅色数字）
+		_, th3 = cv2.threshold(gray, 120, 255, cv2.THRESH_BINARY)
+		proc3 = cv2.cvtColor(th3, cv2.COLOR_GRAY2BGR)
+		best_speed, best_text, best_diff = _ocr_retry(
+			ocr, proc3, expected, best_speed, best_text, best_diff, args)
+
+		if best_diff < abs(new_obs[idx].raw_speed_kmh - expected):
+			new_obs[idx] = SpeedObservation(
+				timestamp=new_obs[idx].timestamp,
+				raw_speed_kmh=best_speed,
+				raw_text=best_text,
+			)
+			improved += 1
+
+	if improved > 0:
+		print(f"  重试 OCR 改善 {improved} 帧, 重新纠错...")
+		return new_obs, None  # 需要重新跑 DP
+	return observations, corrected_first
+
+
+def _ocr_retry(ocr, proc, expected, best_speed, best_text, best_diff, args):
+	"""单次备选 OCR 尝试，返回（可能更新后的）best_* 值。"""
+	ocr_result, _ = ocr(proc)
+	sv, rt = extract_speed_value(ocr_result)
+	if sv is not None and rt is not None:
+		spd = sv * SOURCE_TO_KMH[args.format]
+		diff = abs(spd - expected)
+		if diff < best_diff:
+			return spd, rt, diff
+	return best_speed, best_text, best_diff
 
 
 def run_analysis_headless(args: argparse.Namespace) -> None:
