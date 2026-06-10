@@ -1732,6 +1732,7 @@ class RaceVideoToLogApp:
 		distance_m = 0.0
 		previous_sample_time: float | None = None
 		previous_speed_ms: float | None = None
+		prev_corrected_kmh: float | None = None  # 用于物理跳变检测
 		for observation, corrected_speed_kmh in zip(observations, corrected_speeds):
 			current_speed_ms = corrected_speed_kmh / 3.6
 			if previous_sample_time is not None and previous_speed_ms is not None:
@@ -1741,6 +1742,12 @@ class RaceVideoToLogApp:
 			previous_sample_time = observation.timestamp
 			previous_speed_ms = current_speed_ms
 			corrected_flag = 1 if abs(observation.raw_speed_kmh - corrected_speed_kmh) > 0.01 else 0
+			# 纠正后仍超物理极限的也标记（如 224→22 因无候选值而无法纠正的情况）
+			if not corrected_flag and prev_corrected_kmh is not None:
+				delta_t = observation.timestamp - (rows[-1][0] if rows else 0)
+				if delta_t > 0 and abs(corrected_speed_kmh - prev_corrected_kmh) / (delta_t * 3.6) > max_accel_mps2:
+					corrected_flag = 1
+			prev_corrected_kmh = corrected_speed_kmh
 			rows.append((observation.timestamp, distance_m, corrected_speed_kmh, corrected_flag))
 
 		self._write_csv_with_retry(output_path, rows, _t_elapsed, total_frames, _accuracy, _gpu_backend)
@@ -1910,7 +1917,7 @@ def run_headless(args: argparse.Namespace) -> None:
 	# 积分 + 写出
 	rows: list[tuple[float, float, float, int]] = []
 	dist = 0.0
-	prev_t, prev_v = None, None
+	prev_t, prev_v, prev_cspd = None, None, None
 	for obs, cspd in zip(observations, corrected):
 		v = cspd / 3.6
 		if prev_t is not None and prev_v is not None:
@@ -1919,6 +1926,12 @@ def run_headless(args: argparse.Namespace) -> None:
 				dist += (prev_v + v) * 0.5 * dt
 		prev_t, prev_v = obs.timestamp, v
 		flag = 1 if abs(obs.raw_speed_kmh - cspd) > 0.01 else 0
+		# 纠正后仍超物理极限的也标记
+		if not flag and prev_cspd is not None:
+			dt_phys = obs.timestamp - (rows[-1][0] if rows else 0)
+			if dt_phys > 0 and abs(cspd - prev_cspd) / (dt_phys * 3.6) > args.max_accel:
+				flag = 1
+		prev_cspd = cspd
 		rows.append((obs.timestamp, dist, cspd, flag))
 
 	with output_path.open("w", newline="", encoding="utf-8-sig") as fh:
@@ -1976,10 +1989,20 @@ def run_analysis_headless(args: argparse.Namespace) -> None:
 	t2, d2, s2, f2 = _read_csv(csv2)
 	name1, name2 = csv1.stem, csv2.stem
 
+	from scipy.signal import savgol_filter
+	def _smooth(yv, strength=25):
+		if len(yv) < 5:
+			return yv
+		win = int(len(yv) * strength / 100.0 * 0.0175)
+		win = max(5, min(win, len(yv) - 2))
+		if win % 2 == 0:
+			win += 1
+		return savgol_filter(np.array(yv, dtype=float), win, min(3, win - 1))
+
 	# ── v-t ──
 	fig, ax = plt.subplots(figsize=(10, 6))
 	for data, name, c in [(s1, name1, "#2196F3"), (s2, name2, "#FF5722")]:
-		ax.plot(t1 if data is s1 else t2, data, color=c, linewidth=0.8, label=name)
+		ax.plot(t1 if data is s1 else t2, _smooth(data), color=c, linewidth=0.8, label=name)
 	ax.set_xlabel("时间 (s)"); ax.set_ylabel("速度 (km/h)")
 	ax.set_title("速度-时间曲线"); ax.legend(); ax.grid(True, alpha=0.3)
 	fig.tight_layout()
@@ -1990,7 +2013,7 @@ def run_analysis_headless(args: argparse.Namespace) -> None:
 	# ── v-x ──
 	fig, ax = plt.subplots(figsize=(10, 6))
 	for data, name, c in [(s1, name1, "#2196F3"), (s2, name2, "#FF5722")]:
-		ax.plot(d1 if data is s1 else d2, data, color=c, linewidth=0.8, label=name)
+		ax.plot(d1 if data is s1 else d2, _smooth(data), color=c, linewidth=0.8, label=name)
 	ax.set_xlabel("距离 (m)"); ax.set_ylabel("速度 (km/h)")
 	ax.set_title("速度-距离曲线"); ax.legend(); ax.grid(True, alpha=0.3)
 	fig.tight_layout()
@@ -2000,10 +2023,9 @@ def run_analysis_headless(args: argparse.Namespace) -> None:
 
 	# ── Δt-x ──
 	fig, ax = plt.subplots(figsize=(10, 6))
-	import numpy as np
 	t2_interp = np.interp(d1, d2, t2)
 	dt = np.array(t1) - t2_interp
-	ax.plot(d1, dt, color="#2196F3", linewidth=0.8, label=f"{name1} - {name2}")
+	ax.plot(d1, _smooth(dt), color="#2196F3", linewidth=0.8, label=f"{name1} - {name2}")
 	ax.axhline(y=0, color="#888888", linewidth=1.2, linestyle="--", alpha=0.7)
 	ax.set_xlabel("距离 (m)"); ax.set_ylabel("Δt (s)")
 	ax.set_title(f"时间差-距离 ({name1} vs {name2})"); ax.legend(); ax.grid(True, alpha=0.3)
