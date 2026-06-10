@@ -779,7 +779,8 @@ class RaceVideoToLogApp:
 			slot.grid(row=0, column=i, sticky="ew", padx=(0, 6) if i < 2 else (0, 0))
 			btn = ttk.Button(slot, text="导入", command=lambda idx=i: self._import_csv(idx))
 			btn.grid(row=0, column=0, sticky="w")
-			ttk.Label(slot, textvariable=var, foreground="#555555").grid(row=0, column=1, sticky="w", padx=(6, 0))
+			ttk.Button(slot, text="清除", command=lambda idx=i: self._clear_csv(idx)).grid(row=0, column=1, sticky="w", padx=(4, 0))
+			ttk.Label(slot, textvariable=var, foreground="#555555").grid(row=0, column=2, sticky="w", padx=(6, 0))
 
 		ttk.Button(ctrl, text="渲染曲线", command=self._render_curves).grid(row=0, column=3, sticky="e", padx=(12, 6))
 		ttk.Button(ctrl, text="导出 PNG", command=self._export_png).grid(row=0, column=4, sticky="e")
@@ -835,6 +836,11 @@ class RaceVideoToLogApp:
 		if path:
 			self._analysis_csvs[index] = path
 			self._analysis_labels[index].set(Path(path).name)
+
+	def _clear_csv(self, index: int) -> None:
+		"""清除已导入的 CSV。"""
+		self._analysis_csvs[index] = None
+		self._analysis_labels[index].set("未导入")
 
 	def _render_curves(self) -> None:
 		from matplotlib.widgets import SpanSelector
@@ -939,6 +945,10 @@ class RaceVideoToLogApp:
 		ax.set_title(title)
 		ax.legend(loc="upper right")
 		ax.grid(True, alpha=0.3)
+
+		# Δt-x 模式：绘制 y=0 参考线
+		if is_dtx:
+			ax.axhline(y=0, color="#888888", linewidth=1.2, linestyle="--", alpha=0.7)
 
 		# 范围选择器统计文本
 		delta_text = ax.text(0.02, 0.97, "", transform=ax.transAxes,
