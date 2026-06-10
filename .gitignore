@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+
+# Virtual environment
+.venv/
+venv/
+
+# PyInstaller
+build/
+dist/
+*.spec.bak
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+*.mp4
+*.mkv
+*.avi
+*_log.csv
+
+# Large bundles (not needed after DML removal)
+ort_dml_bundle/
+
+# Benchmark cache
+__pycache__/
