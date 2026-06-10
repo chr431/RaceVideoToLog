@@ -623,6 +623,7 @@ class RaceVideoToLogApp:
 		self._analysis_canvas: FigureCanvasTkAgg | None = None
 		self._chart_mode = tk.StringVar(value="v-x")
 		self._show_corrected = tk.BooleanVar(value=False)
+		self._saved_limits: dict[str, tuple | None] = {}  # 按模式保存视图范围
 		self._smooth_strength = tk.IntVar(value=50)
 		self._span_selector = None  # matplotlib SpanSelector
 
@@ -805,11 +806,12 @@ class RaceVideoToLogApp:
 		from matplotlib.widgets import SpanSelector
 		fig = self._analysis_figure
 
-		# 保存当前视图范围（重新渲染时恢复）
-		old_xlim = None; old_ylim = None
+		# 保存当前视图范围（按模式分别记忆）
 		if fig.axes:
-			old_xlim = fig.axes[0].get_xlim()
-			old_ylim = fig.axes[0].get_ylim()
+			prev_mode = self._chart_mode.get()
+			self._saved_limits[prev_mode] = (
+				fig.axes[0].get_xlim(), fig.axes[0].get_ylim()
+			)
 
 		fig.clear()
 		ax = fig.add_subplot(111)
@@ -938,10 +940,11 @@ class RaceVideoToLogApp:
 
 		fig.tight_layout()
 
-		# 恢复之前的视图范围
-		if old_xlim is not None:
-			ax.set_xlim(old_xlim)
-			ax.set_ylim(old_ylim)
+		# 恢复当前模式的上次视图范围
+		saved = self._saved_limits.get(mode)
+		if saved is not None:
+			ax.set_xlim(saved[0])
+			ax.set_ylim(saved[1])
 
 		self._analysis_canvas.draw()
 
