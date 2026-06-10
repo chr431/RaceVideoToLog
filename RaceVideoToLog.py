@@ -24,7 +24,16 @@ import threading
 
 import cv2
 import numpy as np
+from scipy.signal import savgol_filter
 from PIL import Image, ImageTk
+
+import matplotlib
+matplotlib.use("TkAgg")
+# 配置中文字体支持
+matplotlib.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
+matplotlib.rcParams["axes.unicode_minus"] = False
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 # ═══════════════════ GPU 加速前置：注册 CUDA/cuDNN DLL ═══════════════════
 def _register_gpu_dlls() -> None:
@@ -607,15 +616,35 @@ class RaceVideoToLogApp:
 		self._drag_start_x: int | None = None
 		self._drag_start_y: int | None = None
 
+		# 数据分析 tab
+		self._analysis_csvs: list[str | None] = [None, None, None]  # 最多 3 个 CSV
+		self._analysis_labels: list[tk.StringVar] = []
+		self._analysis_figure: Figure | None = None
+		self._analysis_canvas: FigureCanvasTkAgg | None = None
+		self._chart_mode = tk.StringVar(value="v-x")
+		self._show_corrected = tk.BooleanVar(value=False)
+		self._smooth_strength = tk.IntVar(value=50)
+		self._span_selector = None  # matplotlib SpanSelector
+
 		self._build_ui()
 		self._bind_preview_updates()
 
 	def _build_ui(self) -> None:
 		self.root.columnconfigure(0, weight=1)
-		self.root.rowconfigure(2, weight=1)  # 主区域可拉伸
+		self.root.rowconfigure(0, weight=1)
 
-		# Row 0: 顶部工具栏
-		header = ttk.Frame(self.root, padding=(12, 12, 12, 6))
+		# Notebook 占满主区域
+		self._notebook = ttk.Notebook(self.root)
+		self._notebook.grid(row=0, column=0, sticky="nsew", padx=12, pady=(12, 10))
+
+		# ── Tab 1: OCR 处理 ──
+		tab_ocr = ttk.Frame(self._notebook)
+		self._notebook.add(tab_ocr, text="OCR 处理")
+		tab_ocr.columnconfigure(0, weight=1)
+		tab_ocr.rowconfigure(2, weight=1)  # 主内容区可拉伸
+
+		# OCR Header
+		header = ttk.Frame(tab_ocr, padding=(12, 6, 12, 6))
 		header.grid(row=0, column=0, sticky="ew")
 		header.columnconfigure(1, weight=1)
 
@@ -626,9 +655,9 @@ class RaceVideoToLogApp:
 		self.cancel_btn.grid(row=0, column=2, sticky="e", padx=(6, 0))
 		ttk.Label(header, textvariable=self.file_var).grid(row=1, column=0, columnspan=3, sticky="ew", pady=(8, 0))
 
-		# Row 1: 视频信息
-		info = ttk.LabelFrame(self.root, text="视频信息", padding=(12, 10, 12, 12))
-		info.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 10))
+		# OCR 视频信息
+		info = ttk.LabelFrame(tab_ocr, text="视频信息", padding=(12, 10, 12, 12))
+		info.grid(row=1, column=0, sticky="ew", pady=(0, 10))
 		for index in range(4):
 			info.columnconfigure(index, weight=1)
 		self._add_info_row(info, 0, "时长", self.duration_var)
@@ -636,14 +665,14 @@ class RaceVideoToLogApp:
 		self._add_info_row(info, 2, "帧率", self.fps_var)
 		self._add_info_row(info, 3, "编码", self.codec_var)
 
-		# Row 2: 左侧配置 + 右侧预览
-		main_area = ttk.Frame(self.root)
-		main_area.grid(row=2, column=0, sticky="nsew", padx=12, pady=(0, 10))
-		main_area.columnconfigure(1, weight=3)
-		main_area.columnconfigure(0, weight=1)
-		main_area.rowconfigure(0, weight=1)
+		# OCR 主内容
+		ocr_main = ttk.Frame(tab_ocr)
+		ocr_main.grid(row=2, column=0, sticky="nsew")
+		ocr_main.columnconfigure(1, weight=3)
+		ocr_main.columnconfigure(0, weight=1)
+		ocr_main.rowconfigure(0, weight=1)
 
-		config_col = ttk.Frame(main_area, padding=(0, 0, 6, 0))
+		config_col = ttk.Frame(ocr_main, padding=(0, 0, 6, 0))
 		config_col.grid(row=0, column=0, sticky="nsew")
 		config_col.columnconfigure(0, weight=1)
 
@@ -695,7 +724,7 @@ class RaceVideoToLogApp:
 		ttk.Label(perf_box, text=">1 时启用并行推理。", foreground="#555555").grid(row=2, column=0, columnspan=6, sticky="w", pady=(8, 0))
 
 		# 右侧预览
-		preview_box = ttk.LabelFrame(main_area, text="识别范围预览", padding=(6, 6, 6, 6))
+		preview_box = ttk.LabelFrame(ocr_main, text="识别范围预览", padding=(6, 6, 6, 6))
 		preview_box.grid(row=0, column=1, sticky="nsew")
 		preview_box.columnconfigure(0, weight=1); preview_box.rowconfigure(0, weight=1)
 
@@ -706,9 +735,12 @@ class RaceVideoToLogApp:
 		self.preview_canvas.bind("<B1-Motion>", self._on_drag_motion)
 		self.preview_canvas.bind("<ButtonRelease-1>", self._on_drag_end)
 
-		# Row 3: 底部状态栏
+		# ── Tab 2: 数据分析 ──
+		self._build_analysis_tab()
+
+		# Row 1: 底部状态栏（两个 tab 共享）
 		footer = ttk.Frame(self.root, padding=(12, 0, 12, 12))
-		footer.grid(row=3, column=0, sticky="ew")
+		footer.grid(row=1, column=0, sticky="ew")
 		footer.columnconfigure(0, weight=1)
 		ttk.Label(footer, textvariable=self.status_var).grid(row=0, column=0, sticky="w")
 		self.progress_bar = ttk.Progressbar(footer, variable=self.progress_var, maximum=100.0)
@@ -725,6 +757,278 @@ class RaceVideoToLogApp:
 		cell.grid(row=row, column=column, columnspan=2, sticky="ew", padx=4, pady=4)
 		ttk.Label(cell, text=label).grid(row=0, column=0, sticky="w")
 		ttk.Entry(cell, textvariable=variable, width=10).grid(row=1, column=0, sticky="ew", pady=(4, 0))
+
+	# ═══════════════════ 数据分析 Tab ═══════════════════
+	def _build_analysis_tab(self) -> None:
+		tab = ttk.Frame(self._notebook)
+		self._notebook.add(tab, text="数据分析")
+		tab.columnconfigure(0, weight=1)
+		tab.rowconfigure(1, weight=1)
+
+		# 顶部控制栏
+		ctrl = ttk.Frame(tab, padding=(12, 10, 12, 6))
+		ctrl.grid(row=0, column=0, sticky="ew")
+		for i in range(3):
+			ctrl.columnconfigure(i, weight=1)
+			var = tk.StringVar(value="未导入")
+			self._analysis_labels.append(var)
+			slot = ttk.LabelFrame(ctrl, text=f"CSV {i+1}", padding=(8, 6, 8, 6))
+			slot.grid(row=0, column=i, sticky="ew", padx=(0, 6) if i < 2 else (0, 0))
+			btn = ttk.Button(slot, text="导入", command=lambda idx=i: self._import_csv(idx))
+			btn.grid(row=0, column=0, sticky="w")
+			ttk.Label(slot, textvariable=var, foreground="#555555").grid(row=0, column=1, sticky="w", padx=(6, 0))
+
+		ttk.Button(ctrl, text="渲染曲线", command=self._render_curves).grid(row=0, column=3, sticky="e", padx=(12, 6))
+		ttk.Button(ctrl, text="导出 PNG", command=self._export_png).grid(row=0, column=4, sticky="e")
+		ttk.Radiobutton(ctrl, text="v-t", variable=self._chart_mode, value="v-t").grid(row=1, column=3, sticky="e", padx=(12, 0))
+		ttk.Radiobutton(ctrl, text="v-x", variable=self._chart_mode, value="v-x").grid(row=1, column=4, sticky="w")
+		ttk.Checkbutton(ctrl, text="标记纠错点", variable=self._show_corrected).grid(row=1, column=0, sticky="w", padx=(0, 6))
+		ttk.Label(ctrl, text="平滑").grid(row=1, column=1, sticky="e", padx=(0, 2))
+		ttk.Scale(ctrl, from_=0, to=100, variable=self._smooth_strength,
+			orient="horizontal", length=80).grid(row=1, column=2, sticky="w")
+
+		# Matplotlib 画布
+		self._analysis_figure = Figure(figsize=(8, 5), dpi=100)
+		self._analysis_canvas = FigureCanvasTkAgg(self._analysis_figure, master=tab)
+		self._analysis_canvas.get_tk_widget().grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 10))
+
+	def _import_csv(self, index: int) -> None:
+		path = filedialog.askopenfilename(
+			title=f"选择 CSV {index + 1}",
+			filetypes=[("CSV 文件", "*.csv"), ("所有文件", "*.*")],
+		)
+		if path:
+			self._analysis_csvs[index] = path
+			self._analysis_labels[index].set(Path(path).name)
+
+	def _render_curves(self) -> None:
+		from matplotlib.widgets import SpanSelector
+		fig = self._analysis_figure
+
+		# 保存当前视图范围（重新渲染时恢复）
+		old_xlim = None; old_ylim = None
+		if fig.axes:
+			old_xlim = fig.axes[0].get_xlim()
+			old_ylim = fig.axes[0].get_ylim()
+
+		fig.clear()
+		ax = fig.add_subplot(111)
+		colors = ["#2196F3", "#FF5722", "#4CAF50"]
+		mode = self._chart_mode.get()
+		show_corrected = self._show_corrected.get()
+		has_data = False
+
+		# 存储所有数据用于范围选择计算
+		all_x_data: list[list[float]] = [[], [], []]
+		all_y_data: list[list[float]] = [[], [], []]
+		all_flags: list[list[int]] = [[], [], []]
+		is_vt = (mode == "v-t")
+
+		for i, csv_path in enumerate(self._analysis_csvs):
+			if not csv_path:
+				continue
+			try:
+				times, dists, speeds, flags = self._parse_csv(csv_path)
+				name = Path(csv_path).stem
+				x_data = times if is_vt else dists
+				all_x_data[i] = x_data
+				all_y_data[i] = speeds
+				all_flags[i] = flags
+
+				# 需要平滑或标记纠错时走分段逻辑
+				if show_corrected or self._smooth_strength.get() > 0:
+					self._plot_segmented(ax, x_data, speeds, flags, colors[i], show_corrected)
+				else:
+					ax.plot(x_data, speeds, color=colors[i], linewidth=0.8)
+				# 图例只需要一条线
+				ax.plot([], [], color=colors[i], linewidth=0.8, label=name)
+				has_data = True
+			except Exception as e:
+				messagebox.showerror("解析失败", f"{Path(csv_path).name}: {e}")
+				return
+
+		if not has_data:
+			return
+
+		xlabel = "时间 (s)" if is_vt else "距离 (m)"
+		title = "速度-时间曲线" if is_vt else "速度-距离曲线"
+		delta_label_text = "行驶距离" if is_vt else "用时"
+
+		ax.set_xlabel(xlabel)
+		ax.set_ylabel("速度 (km/h)")
+		ax.set_title(title)
+		ax.legend(loc="upper right")
+		ax.grid(True, alpha=0.3)
+
+		# 范围选择器统计文本
+		delta_text = ax.text(0.02, 0.97, "", transform=ax.transAxes,
+			va="top", fontsize=9, color="#333333",
+			bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
+
+		# 跨 CSV 的范围选择器
+		def _on_select(xmin, xmax):
+			if xmin > xmax:
+				xmin, xmax = xmax, xmin
+			results = []
+			for i in range(3):
+				xd = all_x_data[i]
+				if not xd:
+					continue
+				name = Path(self._analysis_csvs[i]).stem if self._analysis_csvs[i] else ""
+				total = 0.0
+				for j, x in enumerate(xd):
+					if xmin <= x <= xmax:
+						if is_vt:
+							# v-t: 累计行驶距离 = Σ(速度 × 时间间隔)
+							if j > 0:
+								dt = xd[j] - xd[j - 1]
+								avg_spd = (all_y_data[i][j] + all_y_data[i][j - 1]) / 2 / 3.6  # m/s
+								total += avg_spd * dt
+						else:
+							# v-x: 累计用时
+							if j > 0:
+								dx = xd[j] - xd[j - 1]
+								avg_spd_mps = ((all_y_data[i][j] + all_y_data[i][j - 1]) / 2) / 3.6 if dx > 0 else 999
+								total += dx / avg_spd_mps if avg_spd_mps > 0 else 0
+				if total > 0:
+					unit = "m" if is_vt else "s"
+					results.append(f"{name}: {total:.2f}{unit}")
+			delta_text.set_text("\n".join(results) if results else "")
+
+		# 移除旧的选择器
+		if self._span_selector is not None:
+			try:
+				self._span_selector.disconnect_events()
+			except Exception:
+				pass
+		self._span_selector = SpanSelector(ax, _on_select, "horizontal",
+			props=dict(facecolor="#2196F3", alpha=0.15),
+			interactive=True, drag_from_anywhere=True,
+			button=1)  # 仅左键触发
+		delta_text.set_text(f"← 拖拽选择范围查看{delta_label_text}")
+
+		# ── 滚轮缩放 + 右键拖动平移 ──
+		_press_xy = [None, None]  # 右键拖动起始点
+
+		def _on_scroll(event):
+			scale = 0.85 if event.button == "up" else 1.15
+			xlim = ax.get_xlim(); ylim = ax.get_ylim()
+			xmid = (xlim[0] + xlim[1]) / 2; ymid = (ylim[0] + ylim[1]) / 2
+			dx = (xlim[1] - xlim[0]) * (1 - scale) / 2
+			dy = (ylim[1] - ylim[0]) * (1 - scale) / 2
+			ax.set_xlim(xmid - (xmid - xlim[0]) * scale, xmid + (xlim[1] - xmid) * scale)
+			ax.set_ylim(ymid - (ymid - ylim[0]) * scale, ymid + (ylim[1] - ymid) * scale)
+			self._analysis_canvas.draw_idle()
+
+		def _on_press(event):
+			if event.button == 3:  # 右键
+				_press_xy[0], _press_xy[1] = event.xdata, event.ydata
+
+		def _on_motion(event):
+			if event.button == 3 and _press_xy[0] is not None and event.xdata is not None:
+				dx = _press_xy[0] - event.xdata; dy = _press_xy[1] - event.ydata
+				xlim = ax.get_xlim(); ylim = ax.get_ylim()
+				ax.set_xlim(xlim[0] + dx, xlim[1] + dx)
+				ax.set_ylim(ylim[0] + dy, ylim[1] + dy)
+				self._analysis_canvas.draw_idle()
+
+		fig.canvas.mpl_connect("scroll_event", _on_scroll)
+		fig.canvas.mpl_connect("button_press_event", _on_press)
+		fig.canvas.mpl_connect("motion_notify_event", _on_motion)
+
+		fig.tight_layout()
+
+		# 恢复之前的视图范围
+		if old_xlim is not None:
+			ax.set_xlim(old_xlim)
+			ax.set_ylim(old_ylim)
+
+		self._analysis_canvas.draw()
+
+	def _smooth_data(self, xv, yv, strength):
+		"""Savitzky-Golay 滤波：多项式滑动窗口拟合，保留峰谷形状。"""
+		if strength <= 0 or len(xv) < 5:
+			return np.array(xv), np.array(yv, dtype=float)
+		# strength 0→100 映射到窗口长度 5→(N*0.0175)
+		win = int(len(xv) * strength / 100.0 * 0.0175)
+		win = max(5, min(win, len(xv) - 2))
+		if win % 2 == 0:
+			win += 1  # 必须奇数
+		polyorder = min(3, win - 1)
+		sy = savgol_filter(np.array(yv, dtype=float), win, polyorder)
+		return np.array(xv, dtype=float), sy
+
+	def _plot_segmented(self, ax, x, y, flags, normal_color, show_red):
+		"""平滑 + 纠错段着色。show_red 控制是否绘制红色段。"""
+		red = "#F44336"
+		strength = self._smooth_strength.get()
+
+		if strength > 0:
+			x, y = self._smooth_data(x, y, strength)
+
+		ax.plot(x, y, color=normal_color, linewidth=0.8)
+
+		if not show_red or not flags or not any(f == 1 for f in flags):
+			return
+
+		n_orig = len(flags)
+		n_smooth = len(x)
+		# 统一为 list（平滑后是 ndarray，不滑时是 list）
+		_x = x.tolist() if hasattr(x, 'tolist') else list(x)
+		_y = y.tolist() if hasattr(y, 'tolist') else list(y)
+		rx, ry = [], []
+		for i in range(n_orig - 1):
+			if flags[i] == 1 and flags[i + 1] == 1:
+				si = int(i * n_smooth / n_orig)
+				ei = int((i + 2) * n_smooth / n_orig)
+				si = min(si, n_smooth - 2)
+				ei = min(ei, n_smooth)
+				if ei > si:
+					rx.extend(_x[si:ei] + [float('nan')])
+					ry.extend(_y[si:ei] + [float('nan')])
+		if rx:
+			ax.plot(rx, ry, color=red, linewidth=1.2)
+
+	def _parse_csv(self, path: str) -> tuple[list[float], list[float], list[float], list[int]]:
+		times, dists, speeds, flags = [], [], [], []
+		with open(path, "r", encoding="utf-8-sig") as f:
+			for line in f:
+				parts = line.strip().split(",")
+				if len(parts) >= 3:
+					times.append(float(parts[0]))
+					dists.append(float(parts[1]))
+					speeds.append(float(parts[2]))
+					flags.append(int(parts[3]) if len(parts) > 3 else 0)
+		# 去除开头的静止帧（speed=0 且 distance=0），从第一个有效速度开始
+		start = 0
+		for i, s in enumerate(speeds):
+			if s > 0:
+				start = i
+				break
+		if start > 0:
+			times = times[start:]
+			speeds = speeds[start:]
+			# 距离归一化：从第一帧有效速度处开始重新计算
+			base_dist = dists[start]
+			dists = [d - base_dist for d in dists[start:]]
+			flags = flags[start:]
+			# 时间也归零
+			base_time = times[0]
+			times = [t - base_time for t in times]
+		return times, dists, speeds, flags
+
+	def _export_png(self) -> None:
+		if self._analysis_figure is None or not self._analysis_figure.axes:
+			messagebox.showwarning("无数据", "请先渲染曲线。")
+			return
+		path = filedialog.asksaveasfilename(
+			title="导出 PNG",
+			defaultextension=".png",
+			filetypes=[("PNG 图片", "*.png")],
+		)
+		if path:
+			self._analysis_figure.savefig(path, dpi=150, bbox_inches="tight")
+			messagebox.showinfo("导出完成", f"已保存: {path}")
 
 	def _parse_positive_float(self, value: str, field_name: str, allow_zero: bool = False) -> float:
 		parsed = safe_float(value)
