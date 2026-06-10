@@ -1798,10 +1798,14 @@ def main() -> None:
 	parser.add_argument("--backend", choices=["auto","cuda","cpu"], default="auto",
 		help="OCR 后端: auto/cuda/cpu (默认 auto)")
 	parser.add_argument("-o", "--output", type=str, help="输出 CSV 路径 (默认 视频名_log.csv)")
+	parser.add_argument("--analysis", nargs=2, metavar=("CSV1","CSV2"), help="无头分析: 从两个CSV导出v-t/v-x/Δt-x的PNG")
+	parser.add_argument("--analysis-out", type=str, help="分析PNG输出前缀 (默认 CSV1所在目录/分析)")
 	args = parser.parse_args()
 
 	if args.video:
 		run_headless(args)
+	elif args.analysis:
+		run_analysis_headless(args)
 	else:
 		# GUI 模式：隐藏控制台窗口
 		if sys.platform == "win32":
@@ -1859,6 +1863,7 @@ def run_headless(args: argparse.Namespace) -> None:
 			continue
 		ts = fi / fps if fps > 0 else float(cap.get(cv2.CAP_PROP_POS_MSEC)) / 1000.0
 		crop = frame[y1:y2 + 1, x1:x2 + 1].copy()  # .copy() 断开对整帧的引用
+		raw_frames.append((ts, crop))
 		fi += 1
 	cap.release()
 
@@ -1924,6 +1929,90 @@ def run_headless(args: argparse.Namespace) -> None:
 	corrected_count = sum(r[3] for r in rows)
 	print(f"导出完成: {output_path}")
 	print(f"共 {len(rows)} 条, 纠错 {corrected_count} 条 (准确率 {100 - corrected_count/len(rows)*100:.1f}%)")
+
+
+def run_analysis_headless(args: argparse.Namespace) -> None:
+	"""无头数据分析：从两个 CSV 导出 v-t、v-x、Δt-x 三张 PNG。"""
+	import matplotlib
+	matplotlib.use("Agg")
+	import matplotlib.pyplot as plt
+
+	csv1, csv2 = Path(args.analysis[0]), Path(args.analysis[1])
+	if not csv1.exists() or not csv2.exists():
+		print("错误: CSV 文件不存在")
+		sys.exit(1)
+
+	out_prefix = Path(args.analysis_out) if args.analysis_out else csv1.parent / "分析"
+	out_prefix.parent.mkdir(parents=True, exist_ok=True)
+
+	# 解析 CSV
+	def _read_csv(p: Path):
+		times, dists, speeds, flags = [], [], [], []
+		with open(p, "r", encoding="utf-8-sig") as f:
+			for line in f:
+				parts = line.strip().split(",")
+				if len(parts) >= 3:
+					times.append(float(parts[0]))
+					dists.append(float(parts[1]))
+					speeds.append(float(parts[2]))
+					flags.append(int(parts[3]) if len(parts) > 3 else 0)
+		# 去开头静止帧
+		start = 0
+		for i, s in enumerate(speeds):
+			if s > 0:
+				start = i
+				break
+		if start > 0:
+			times = times[start:]
+			speeds = speeds[start:]
+			base_dist = dists[start]
+			dists = [d - base_dist for d in dists[start:]]
+			flags = flags[start:]
+			base_time = times[0]
+			times = [t - base_time for t in times]
+		return times, dists, speeds, flags
+
+	t1, d1, s1, f1 = _read_csv(csv1)
+	t2, d2, s2, f2 = _read_csv(csv2)
+	name1, name2 = csv1.stem, csv2.stem
+
+	# ── v-t ──
+	fig, ax = plt.subplots(figsize=(10, 6))
+	for data, name, c in [(s1, name1, "#2196F3"), (s2, name2, "#FF5722")]:
+		ax.plot(t1 if data is s1 else t2, data, color=c, linewidth=0.8, label=name)
+	ax.set_xlabel("时间 (s)"); ax.set_ylabel("速度 (km/h)")
+	ax.set_title("速度-时间曲线"); ax.legend(); ax.grid(True, alpha=0.3)
+	fig.tight_layout()
+	fig.savefig(out_prefix.with_name(f"{out_prefix.name}_v-t.png"), dpi=150, bbox_inches="tight")
+	plt.close(fig)
+	print(f"v-t: {out_prefix}_v-t.png")
+
+	# ── v-x ──
+	fig, ax = plt.subplots(figsize=(10, 6))
+	for data, name, c in [(s1, name1, "#2196F3"), (s2, name2, "#FF5722")]:
+		ax.plot(d1 if data is s1 else d2, data, color=c, linewidth=0.8, label=name)
+	ax.set_xlabel("距离 (m)"); ax.set_ylabel("速度 (km/h)")
+	ax.set_title("速度-距离曲线"); ax.legend(); ax.grid(True, alpha=0.3)
+	fig.tight_layout()
+	fig.savefig(out_prefix.with_name(f"{out_prefix.name}_v-x.png"), dpi=150, bbox_inches="tight")
+	plt.close(fig)
+	print(f"v-x: {out_prefix}_v-x.png")
+
+	# ── Δt-x ──
+	fig, ax = plt.subplots(figsize=(10, 6))
+	import numpy as np
+	t2_interp = np.interp(d1, d2, t2)
+	dt = np.array(t1) - t2_interp
+	ax.plot(d1, dt, color="#2196F3", linewidth=0.8, label=f"{name1} - {name2}")
+	ax.axhline(y=0, color="#888888", linewidth=1.2, linestyle="--", alpha=0.7)
+	ax.set_xlabel("距离 (m)"); ax.set_ylabel("Δt (s)")
+	ax.set_title(f"时间差-距离 ({name1} vs {name2})"); ax.legend(); ax.grid(True, alpha=0.3)
+	fig.tight_layout()
+	fig.savefig(out_prefix.with_name(f"{out_prefix.name}_Δt-x.png"), dpi=150, bbox_inches="tight")
+	plt.close(fig)
+	print(f"Δt-x: {out_prefix}_Δt-x.png")
+
+	print("分析完成。")
 
 
 if __name__ == "__main__":
