@@ -501,9 +501,7 @@ def correct_speed_series(
 		cur_cands = candidate_lists[i]
 		prev_cands = candidate_lists[i - 1]
 		delta_time = max(samples[i].timestamp - samples[i - 1].timestamp, 1e-6)
-		max_delta_kmh = max_accel_mps2 * delta_time * 3.6
-		# 可信度低时放大加速度容忍度（OCR 可能误读）
-		effective_max_delta = max_delta_kmh * (1.0 + (1.0 - trust_scores[i]) * 2.0)
+		max_delta_kmh = max_accel_mps2 * delta_time * 3.6  # 硬约束：物理极限
 
 		cur_states: list[tuple[float, float, int]] = []
 		cur_back: list[int] = []
@@ -514,13 +512,10 @@ def correct_speed_series(
 			for prev_idx, prev_val in enumerate(prev_cands):
 				prev_cost = states[prev_idx][0]
 				delta = abs(cur_val - prev_val)
-				# 加速度代价
-				if delta <= max_delta_kmh:
-					trans_cost = delta * 0.1
-				elif delta <= effective_max_delta:
-					trans_cost = delta * 0.5
-				else:
-					trans_cost = delta * 5.0
+				# 加速度硬约束：超限的转移直接跳过
+				if delta > max_delta_kmh:
+					continue
+				trans_cost = delta * 0.5
 				# OCR 贴近代价（可信帧权重高，不可信帧权重低）
 				ocr_weight = 1.0 if trust_scores[i] > 0.5 else 0.1
 				ocr_cost = abs(cur_val - samples[i].raw_speed_kmh) * ocr_weight
@@ -528,6 +523,14 @@ def correct_speed_series(
 				if cost < best_cost:
 					best_cost = cost
 					best_prev = prev_idx
+			# 若所有候选都超限，软回退：选超限最小的
+			if best_cost == float("inf"):
+				for prev_idx, prev_val in enumerate(prev_cands):
+					delta = abs(cur_val - prev_val)
+					cost = states[prev_idx][0] + delta * 10.0
+					if cost < best_cost:
+						best_cost = cost
+						best_prev = prev_idx
 			cur_states.append((best_cost, cur_val, best_prev))
 			cur_back.append(best_prev)
 
@@ -543,23 +546,24 @@ def correct_speed_series(
 		idx = backpointers[i][idx]
 		corrected[i - 1] = candidate_lists[i - 1][idx]
 
-	# ── Step 3: EMA 平滑（纠正 DP 路径中的连续偏差）──
-	# 找到高可信度锚点，从锚点间做 EMA 平滑
+	# ── Step 3: EMA 平滑（仅对低置信帧，且钳制在物理极限内）──
 	smoothed = list(corrected)
-	alpha = 0.35  # 平滑系数
-	# 前向 EMA
+	alpha = 0.35
 	for i in range(1, n):
 		if trust_scores[i] < 0.5:
-			smoothed[i] = alpha * corrected[i] + (1 - alpha) * smoothed[i - 1]
-	# 后向 EMA
+			dt_i = max(samples[i].timestamp - samples[i - 1].timestamp, 1e-6)
+			max_dv = max_accel_mps2 * dt_i * 3.6
+			candidate = alpha * corrected[i] + (1 - alpha) * smoothed[i - 1]
+			smoothed[i] = max(smoothed[i - 1] - max_dv, min(smoothed[i - 1] + max_dv, candidate))
 	for i in range(n - 2, -1, -1):
 		if trust_scores[i] < 0.5:
+			dt_i = max(samples[i + 1].timestamp - samples[i].timestamp, 1e-6)
+			max_dv = max_accel_mps2 * dt_i * 3.6
 			back_val = alpha * corrected[i] + (1 - alpha) * smoothed[i + 1]
+			back_val = max(smoothed[i + 1] - max_dv, min(smoothed[i + 1] + max_dv, back_val))
 			smoothed[i] = (smoothed[i] + back_val) / 2.0
 
 	return smoothed
-
-	return corrected
 
 
 class _CancelExport(Exception):
