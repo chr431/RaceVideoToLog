@@ -2598,7 +2598,16 @@ def _ocr_retry_tesseract(crop, expected, best_speed, best_text, best_diff, args)
 	"""
 	# ── 引擎1: Tesseract ──
 	try:
-		import pytesseract, re as _re
+		import pytesseract, re as _re, os as _os
+		# 自动检测常见安装路径
+		if not hasattr(pytesseract.pytesseract, '_race_configured'):
+			for p in [r"D:\Software\Tesseract-OCR\tesseract.exe",
+				   r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+				   r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"]:
+				if _os.path.exists(p):
+					pytesseract.pytesseract.tesseract_cmd = p
+					break
+			pytesseract.pytesseract._race_configured = True
 		gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
 		h, w = gray.shape[:2]
 		scale = max(3.0, 80.0 / h)
