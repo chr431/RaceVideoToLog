@@ -2549,8 +2549,8 @@ def _retry_suspect_frames(
 		best_speed, best_text, best_diff = _ocr_retry(
 			ocr, proc3, expected, best_speed, best_text, best_diff, args)
 
-		# 变体4: 互补引擎 — Tesseract（若可用，完全不同的识别算法）
-		best_speed, best_text, best_diff = _ocr_retry_tesseract(
+		# 变体4: 互补引擎 — v3 模型（不同网络权重，错误模式互补）
+		best_speed, best_text, best_diff = _ocr_retry_v3(
 			crop, expected, best_speed, best_text, best_diff, args)
 
 		# 变体5: 互补引擎 — 反向二值化（黑底白字→白底黑字）
@@ -2590,44 +2590,15 @@ def _ocr_retry(ocr, proc, expected, best_speed, best_text, best_diff, args):
 	return best_speed, best_text, best_diff
 
 
-def _ocr_retry_tesseract(crop, expected, best_speed, best_text, best_diff, args):
-	"""互补引擎重试：Tesseract（若可用）+ v3 模型（始终可用）。
+def _ocr_retry_v3(crop, expected, best_speed, best_text, best_diff, args):
+	"""互补引擎重试：用 RapidOCR v3 模型（与 v5_mobile 不同网络权重，错误模式互补）。
 
 	v3 和 v5_mobile 使用不同的检测/识别网络，错误模式互补：
 	v3 极端错误少但中等偏差多，v5m 反之。
 	"""
-	# ── 引擎1: Tesseract ──
-	try:
-		import pytesseract, re as _re, os as _os
-		# 自动检测常见安装路径
-		if not hasattr(pytesseract.pytesseract, '_race_configured'):
-			for p in [r"D:\Software\Tesseract-OCR\tesseract.exe",
-				   r"C:\Program Files\Tesseract-OCR\tesseract.exe",
-				   r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"]:
-				if _os.path.exists(p):
-					pytesseract.pytesseract.tesseract_cmd = p
-					break
-			pytesseract.pytesseract._race_configured = True
-		gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-		h, w = gray.shape[:2]
-		scale = max(3.0, 80.0 / h)
-		gray = cv2.resize(gray, (max(1, int(w * scale)), int(h * scale)), interpolation=cv2.INTER_CUBIC)
-		cfg = "--psm 7 -c tessedit_char_whitelist=0123456789"
-		text = pytesseract.image_to_string(gray, config=cfg).strip()
-		text = _re.sub(r"\D", "", text)
-		if text:
-			spd = float(text) * SOURCE_TO_KMH[args.format]
-			diff = abs(spd - expected)
-			if diff < best_diff:
-				return spd, text, diff
-	except Exception:
-		pass
-
-	# ── 引擎2: RapidOCR v3 模型（不同识别网络，错误模式互补）──
 	try:
 		v3_ocr = _get_v3_ocr()
 		if v3_ocr is not None:
-			# 用标准预处理（与 v5m 相同输入，不同模型权重）
 			gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
 			clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 			gray = clahe.apply(gray)
@@ -2646,7 +2617,6 @@ def _ocr_retry_tesseract(crop, expected, best_speed, best_text, best_diff, args)
 					return spd, rt, diff
 	except Exception:
 		pass
-
 	return best_speed, best_text, best_diff
 
 
