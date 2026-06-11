@@ -646,6 +646,7 @@ class RaceVideoToLogApp:
 		# 时间轴范围
 		self._frame_start_var = tk.StringVar(value="")
 		self._frame_end_var = tk.StringVar(value="")
+		self._color_threshold_var = tk.StringVar(value="50")  # 色距判定范围 (0=严格, 50=默认, 100=2倍)
 
 		self.is_exporting = False
 		self._cancel_flag = False
@@ -754,7 +755,7 @@ class RaceVideoToLogApp:
 		ttk.Entry(constraint_box, textvariable=self.max_speed_var, width=10).grid(row=0, column=1, sticky="ew", padx=(6, 14))
 		ttk.Label(constraint_box, text="最大加速度 (m/s²)").grid(row=0, column=2, sticky="w")
 		ttk.Entry(constraint_box, textvariable=self.max_accel_var, width=10).grid(row=0, column=3, sticky="ew", padx=(6, 0))
-		ttk.Label(constraint_box, text="用于自动修正丢位、多位和跳变异常。", foreground="#555555").grid(row=1, column=0, columnspan=4, sticky="w", pady=(8, 0))
+		ttk.Label(constraint_box, text="设为 0 则不限制。用于自动修正丢位、多位和跳变异常。", foreground="#555555").grid(row=1, column=0, columnspan=4, sticky="w", pady=(8, 0))
 
 		perf_box = ttk.LabelFrame(config_col, text="性能", padding=(12, 10, 12, 12))
 		perf_box.grid(row=2, column=0, sticky="ew")
@@ -825,6 +826,9 @@ class RaceVideoToLogApp:
 		self._key_swatch2.grid(row=0, column=4, padx=(4, 2))
 		ttk.Label(key_bar, textvariable=self._key_color_str2, foreground="#555555", font=("", 8), width=16, anchor="w").grid(row=0, column=5, sticky="w")
 		ttk.Button(key_bar, text="清除全部", command=self._clear_key_color).grid(row=0, column=6, padx=(12, 0))
+		ttk.Label(key_bar, text="范围").grid(row=0, column=7, padx=(12, 0))
+		ttk.Entry(key_bar, textvariable=self._color_threshold_var, width=4, justify="center").grid(row=0, column=8, padx=(2, 0))
+		ttk.Label(key_bar, text="(0=严格, 50默认, 100=2倍)", foreground="#555555", font=("", 7)).grid(row=0, column=9, padx=(2, 0))
 
 		# ── Tab 2: 数据分析 ──
 		self._build_analysis_tab()
@@ -1554,7 +1558,12 @@ class RaceVideoToLogApp:
 				if kc is None:
 					continue
 				kb, kg, kr = kc
-				thr = 35 if (kb + kg + kr) > 600 else 25
+				base = 35.0 if (kb + kg + kr) > 600 else 25.0
+				try:
+					user_scale = max(0.0, float(self._color_threshold_var.get())) / 50.0
+				except ValueError:
+					user_scale = 1.0
+				thr = max(1.0, base * user_scale) if user_scale > 0 else 1  # 0=严格一致
 				d = np.sqrt((cf[:,:,0] - kb)**2 + (cf[:,:,1] - kg)**2 + (cf[:,:,2] - kr)**2)
 				mask[d < thr] = 255
 			gray = mask
@@ -1684,8 +1693,8 @@ class RaceVideoToLogApp:
 			return
 
 		try:
-			max_speed_kmh = self._parse_positive_float(self.max_speed_var.get(), "最大速度上限")
-			max_accel_mps2 = self._parse_positive_float(self.max_accel_var.get(), "最大加速度上限")
+			max_speed_kmh = self._parse_positive_float(self.max_speed_var.get(), "最大速度上限", allow_zero=True)
+			max_accel_mps2 = self._parse_positive_float(self.max_accel_var.get(), "最大加速度上限", allow_zero=True)
 			frame_div = int(self._parse_positive_float(self.frame_div_var.get(), "采样间隔"))
 			target_h = self._parse_positive_float(self.target_height_var.get(), "OCR 目标高度")
 			pad_px = self._parse_positive_float(self.pad_var.get(), "边缘填充", allow_zero=True)
