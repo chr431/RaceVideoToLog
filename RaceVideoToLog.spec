@@ -21,6 +21,9 @@ hiddenimports = [
     'queue', 'PIL._tkinter_finder',
     'tkinter', 'tkinter.filedialog', 'tkinter.messagebox', 'tkinter.ttk',
     'threading', 'concurrent.futures',
+    # numpy 2.x PyInstaller 兼容性修复
+    'numpy._core._multiarray_umath', 'numpy._core.multiarray',
+    'numpy._core.umath', 'numpy._core._methods',
 ]
 
 # rapidocr_onnxruntime（OCR 引擎）
