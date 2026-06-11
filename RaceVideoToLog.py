@@ -492,6 +492,34 @@ def _estimate_raw_trust(samples: list[SpeedObservation], window: int = 3) -> lis
 	return scores
 
 
+def _get_model_kwargs(variant: str) -> dict | None:
+	"""根据模型变体返回 RapidOCR 的 kwargs。"""
+	import rapidocr_onnxruntime as rr
+	models_dir = Path(rr.__file__).parent / "models"
+	variants = {
+		"v3": {},  # 默认
+		"v3_server": {
+			"det_model_path": str(models_dir / "ch_PP-OCRv3_det_server_infer.onnx"),
+			"rec_model_path": str(models_dir / "ch_PP-OCRv3_rec_server_infer.onnx"),
+		},
+		"v4_server": {
+			"det_model_path": str(models_dir / "ch_PP-OCRv4_det_server_infer.onnx"),
+			"rec_model_path": str(models_dir / "ch_PP-OCRv4_rec_server_infer.onnx"),
+		},
+	}
+	cfg = variants.get(variant)
+	if cfg is None:
+		return None
+	if not cfg:  # v3: 默认，无需 kwargs
+		return None
+	# 检查模型文件是否存在
+	for key, path in cfg.items():
+		if not Path(path).exists():
+			print(f"[OCR] 警告: 模型文件不存在 {path}，将回退到默认模型")
+			return None
+	return cfg
+
+
 def correct_speed_series(
 	samples: list[SpeedObservation],
 	max_speed_kmh: float,
@@ -642,6 +670,7 @@ class RaceVideoToLogApp:
 		self.pad_var = tk.StringVar(value="0")
 		self.num_workers_var = tk.StringVar(value="4")
 		self.backend_var = tk.StringVar(value="auto")
+		self._ocr_model_var = tk.StringVar(value="v3")  # OCR 模型版本
 
 		# 时间轴范围
 		self._frame_start_var = tk.StringVar(value="")
@@ -773,6 +802,11 @@ class RaceVideoToLogApp:
 		self.backend_combo = ttk.Combobox(perf_box, textvariable=self.backend_var, values=[_BL[k] for k in ["auto","cuda","cpu"]], width=10, state="readonly")
 		self.backend_combo.grid(row=0, column=4, sticky="ew", padx=(6, 2))
 		self.backend_combo.bind("<<ComboboxSelected>>", self._on_backend_changed)
+
+		ttk.Label(perf_box, text="模型").grid(row=0, column=5, sticky="w", padx=(20,0))
+		_MODELS = {"v3": "v3 快速", "v3_server": "v3 精准", "v4_server": "v4 精准"}
+		self._model_combo = ttk.Combobox(perf_box, textvariable=self._ocr_model_var, values=[_MODELS[k] for k in ["v3","v3_server","v4_server"]], width=10, state="readonly")
+		self._model_combo.grid(row=0, column=6, sticky="ew", padx=(6, 2))
 
 		ttk.Label(perf_box, text="OCR 高度 (px)").grid(row=1, column=0, sticky="w", pady=(8,0))
 		ttk.Entry(perf_box, textvariable=self.target_height_var, width=8).grid(row=1, column=1, sticky="ew", padx=(6, 14), pady=(8,0))
@@ -1528,12 +1562,12 @@ class RaceVideoToLogApp:
 
 	def _create_ocr_engine(self) -> RapidOCR:
 		_reset_backend()
-		BACKEND_LABELS_REV = {"自动": "auto", "CUDA": "cuda", "CPU": "cpu"}
-		selected_label = self.backend_var.get()
-		selected_key = BACKEND_LABELS_REV.get(selected_label, "auto")
-		actual = _select_backend(selected_key)
-		print(f"[OCR] 用户选择: {selected_label}, 实际后端: {actual}", flush=True)
-		return RapidOCR()
+		MODEL_LABELS_REV = {"v3 快速": "v3", "v3 精准": "v3_server", "v4 精准": "v4_server"}
+		selected = MODEL_LABELS_REV.get(self._ocr_model_var.get(), "v3")
+		actual = _select_backend(BACKEND_LABELS_REV.get(self.backend_var.get(), "auto"))
+		print(f"[OCR] 模型: {selected}, 后端: {actual}", flush=True)
+		kwargs = _get_model_kwargs(selected)
+		return RapidOCR(**kwargs) if kwargs else RapidOCR()
 
 	def get_ocr_engines(self, count: int) -> list[RapidOCR]:
 		"""预创建 N 个 OCR 引擎用于 CUDA 并行推理。"""
@@ -2154,6 +2188,8 @@ def main() -> None:
 	parser.add_argument("--workers", type=int, default=4, help="并行线程数 (默认 4)")
 	parser.add_argument("--backend", choices=["auto","cuda","cpu"], default="auto",
 		help="OCR 后端: auto/cuda/cpu (默认 auto)")
+	parser.add_argument("--ocr-model", choices=["v3","v3_server","v4_server"], default="v3",
+		help="OCR 模型: v3(快速)/v3_server(精准)/v4_server(最准) (默认 v3)")
 	parser.add_argument("-o", "--output", type=str, help="输出 CSV 路径 (默认 视频名_log.csv)")
 	parser.add_argument("--analysis", nargs=2, metavar=("CSV1","CSV2"), help="无头分析: 从两个CSV导出v-t/v-x/Δt-x的PNG")
 	parser.add_argument("--analysis-out", type=str, help="分析PNG输出前缀 (默认 CSV1所在目录/分析)")
@@ -2200,7 +2236,9 @@ def run_headless(args: argparse.Namespace) -> None:
 	_reset_backend()
 	backend_actual = _select_backend(args.backend)
 	print(f"OCR 实际后端: {backend_actual}")
-	ocr = RapidOCR()
+	model_kwargs = _get_model_kwargs(args.ocr_model)
+	print(f"OCR 模型: {args.ocr_model}" + (" (回退默认)" if model_kwargs is None and args.ocr_model != "v3" else ""))
+	ocr = RapidOCR(**(model_kwargs or {}))
 
 	# 读取视频信息
 	cap = cv2.VideoCapture(str(video_path))
