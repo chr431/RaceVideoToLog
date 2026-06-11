@@ -542,12 +542,13 @@ def correct_speed_series(
 	max_speed_kmh: float,
 	max_accel_mps2: float,
 ) -> list[float]:
-	"""改进的物理约束纠错: 候选扩展 + 可信度加权 + EMA 平滑。
+	"""物理约束纠错: 仅纠正物理上不可能的帧。
 
-	三步流程:
-	1. 评估原始 OCR 可信度（与邻帧一致性）
-	2. 动态规划 + 可信度加权选择最优候选
-	3. 指数移动平均平滑纠正连续偏差
+	策略（保守）：
+	1. 扫描找出物理上不一致的帧（与前后邻帧的加速度超限）
+	2. 将连续不一致帧分组为"可疑段"
+	3. 对每个可疑段运行 DP，段两端的可信帧作为锚点固定
+	4. 非可疑帧保持原始 OCR 值不变
 	"""
 	if not samples:
 		return []
@@ -556,96 +557,173 @@ def correct_speed_series(
 		return [sample.raw_speed_kmh for sample in samples]
 
 	n = len(samples)
-	trust_scores = _estimate_raw_trust(samples)
+	if n < 2:
+		return [s.raw_speed_kmh for s in samples]
 
-	# ── Step 1: 生成候选列表 ──
-	candidate_lists: list[list[float]] = []
-	for i, sample in enumerate(samples):
-		candidates = build_speed_candidates(sample.raw_text, max_speed_kmh)
-		if sample.raw_speed_kmh <= max_speed_kmh:
-			candidates.append(float(sample.raw_speed_kmh))
-		if not candidates:
-			candidates = [min(max(sample.raw_speed_kmh, 0.0), max_speed_kmh)]
-		candidate_lists.append(sorted(set(candidates)))
+	# ── Step 1: 多帧可达性扫描 ──
+	# 从首帧出发，若存在任意可信前驱帧使得加速度在限制内，则本帧可达
+	# 从尾帧出发同理。只有双向都不可达的帧才标记可疑。
+	raw_vals = [s.raw_speed_kmh for s in samples]
+	times = [s.timestamp for s in samples]
 
-	# ── Step 2: DP + 可信度加权 ──
-	# 初始状态
-	states: list[tuple[float, float, int | None]] = []
-	first_sample = samples[0]
-	for candidate in candidate_lists[0]:
-		cost = abs(candidate - first_sample.raw_speed_kmh) * (2.0 - trust_scores[0])
-		states.append((cost, candidate, None))
+	can_reach_fwd = [False] * n
+	can_reach_bwd = [False] * n
+	can_reach_fwd[0] = True
+	can_reach_bwd[-1] = True
 
-	backpointers: list[list[int]] = [[] for _ in samples]
-	backpointers[0] = [-1] * len(candidate_lists[0])
-
+	# 前向多帧可达
 	for i in range(1, n):
-		cur_cands = candidate_lists[i]
-		prev_cands = candidate_lists[i - 1]
-		delta_time = max(samples[i].timestamp - samples[i - 1].timestamp, 1e-6)
-		max_delta_kmh = max_accel_mps2 * delta_time * 3.6  # 硬约束：物理极限
-
-		cur_states: list[tuple[float, float, int]] = []
-		cur_back: list[int] = []
-
-		for cur_idx, cur_val in enumerate(cur_cands):
-			best_cost = float("inf")
-			best_prev = 0
-			for prev_idx, prev_val in enumerate(prev_cands):
-				prev_cost = states[prev_idx][0]
-				delta = abs(cur_val - prev_val)
-				# 加速度硬约束：超限的转移直接跳过
-				if delta > max_delta_kmh:
+		if raw_vals[i] > max_speed_kmh:
+			continue
+		# 向前搜索最多 30 帧寻找可信前驱
+		for j in range(i - 1, max(-1, i - 31), -1):
+			if can_reach_fwd[j]:
+				dt = times[i] - times[j]
+				if dt <= 0:
 					continue
-				trans_cost = delta * 0.5
-				# OCR 贴近代价（可信帧权重高，不可信帧权重低）
-				ocr_weight = 1.0 if trust_scores[i] > 0.5 else 0.1
-				ocr_cost = abs(cur_val - samples[i].raw_speed_kmh) * ocr_weight
-				cost = prev_cost + trans_cost + ocr_cost
-				if cost < best_cost:
-					best_cost = cost
-					best_prev = prev_idx
-			# 若所有候选都超限，软回退：选超限最小的
-			if best_cost == float("inf"):
-				for prev_idx, prev_val in enumerate(prev_cands):
-					delta = abs(cur_val - prev_val)
-					cost = states[prev_idx][0] + delta * 10.0
+				max_dv = max_accel_mps2 * dt * 3.6
+				if abs(raw_vals[i] - raw_vals[j]) <= max_dv:
+					can_reach_fwd[i] = True
+					break
+
+	# 后向多帧可达
+	for i in range(n - 2, -1, -1):
+		if raw_vals[i] > max_speed_kmh:
+			continue
+		for j in range(i + 1, min(n, i + 31)):
+			if can_reach_bwd[j]:
+				dt = times[j] - times[i]
+				if dt <= 0:
+					continue
+				max_dv = max_accel_mps2 * dt * 3.6
+				if abs(raw_vals[j] - raw_vals[i]) <= max_dv:
+					can_reach_bwd[i] = True
+					break
+
+	# 双向都不可达 → 可疑
+	suspect = [False] * n
+	for i in range(n):
+		suspect[i] = not can_reach_fwd[i] and not can_reach_bwd[i]
+
+	# ── Step 2: 分组连续可疑帧，扩展边界 ──
+	# 每个段的边界向外扩展 1 帧作为 DP 锚点
+	segments: list[tuple[int, int]] = []  # (start, end) inclusive in original indices
+	i = 0
+	while i < n:
+		if suspect[i]:
+			j = i
+			while j < n and suspect[j]:
+				j += 1
+			# 扩展边界：左边界向外 1 帧（若存在且非可疑）
+			seg_start = max(0, i - 1)
+			seg_end = min(n - 1, j)  # j 是第一个非可疑帧，包含它作为锚点
+			if j < n and not suspect[j]:
+				seg_end = j  # 把右侧第一个可信帧纳入锚点
+			segments.append((seg_start, seg_end))
+			i = j + 1
+		else:
+			i += 1
+
+	if not segments:
+		return [sample.raw_speed_kmh for sample in samples]
+
+	# ── Step 3: 对每个可疑段运行 DP ──
+	result = [sample.raw_speed_kmh for sample in samples]
+
+	for seg_start, seg_end in segments:
+		# 为段内每帧生成候选
+		seg_candidates: list[list[float]] = []
+		for idx in range(seg_start, seg_end + 1):
+			sample = samples[idx]
+			cands = build_speed_candidates(sample.raw_text, max_speed_kmh)
+			if sample.raw_speed_kmh <= max_speed_kmh:
+				cands.append(float(sample.raw_speed_kmh))
+			if not cands:
+				cands = [min(max(sample.raw_speed_kmh, 0.0), max_speed_kmh)]
+			seg_candidates.append(sorted(set(cands)))
+
+		seg_n = seg_end - seg_start + 1
+
+		# 第一帧：若为锚点（非可疑），只保留其原始值
+		if not suspect[seg_start] and seg_candidates[0]:
+			raw_val = float(samples[seg_start].raw_speed_kmh)
+			if raw_val in seg_candidates[0]:
+				seg_candidates[0] = [raw_val]
+			else:
+				seg_candidates[0] = [raw_val]
+
+		# 最后一帧：若为锚点（非可疑），只保留其原始值
+		if not suspect[seg_end] and seg_candidates[-1]:
+			raw_val = float(samples[seg_end].raw_speed_kmh)
+			if raw_val in seg_candidates[-1]:
+				seg_candidates[-1] = [raw_val]
+			else:
+				seg_candidates[-1] = [raw_val]
+
+		# DP 初始化
+		states: list[tuple[float, float, int | None]] = []
+		first_cands = seg_candidates[0]
+		for c in first_cands:
+			cost = 0.0 if not suspect[seg_start] else abs(c - samples[seg_start].raw_speed_kmh)
+			states.append((cost, c, None))
+
+		bp: list[list[int]] = [[] for _ in range(seg_n)]
+		bp[0] = [-1] * len(first_cands)
+
+		for t in range(1, seg_n):
+			abs_idx = seg_start + t
+			cur_cands = seg_candidates[t]
+			prev_cands = seg_candidates[t - 1]
+			dt = max(samples[abs_idx].timestamp - samples[abs_idx - 1].timestamp, 1e-6)
+			max_dv = max_accel_mps2 * dt * 3.6
+
+			cur_states: list[tuple[float, float, int]] = []
+			cur_bp: list[int] = []
+
+			for ci, cv in enumerate(cur_cands):
+				best_cost = float("inf")
+				best_pi = 0
+				for pi, pv in enumerate(prev_cands):
+					delta = abs(cv - pv)
+					if delta > max_dv:
+						continue
+					# OCR 贴近代价：仅可疑帧有代价
+					ocr_cost = 0.0
+					if suspect[abs_idx]:
+						ocr_cost = abs(cv - samples[abs_idx].raw_speed_kmh)
+					cost = states[pi][0] + delta * 0.3 + ocr_cost
 					if cost < best_cost:
 						best_cost = cost
-						best_prev = prev_idx
-			cur_states.append((best_cost, cur_val, best_prev))
-			cur_back.append(best_prev)
+						best_pi = pi
+				if best_cost == float("inf"):
+					for pi, pv in enumerate(prev_cands):
+						delta = abs(cv - pv)
+						cost = states[pi][0] + delta * 5.0
+						if cost < best_cost:
+							best_cost = cost
+							best_pi = pi
+				cur_states.append((best_cost, cv, best_pi))
+				cur_bp.append(best_pi)
 
-		states = [(c, v, p) for c, v, p in cur_states]
-		backpointers[i] = cur_back
+			states = [(c, v, p) for c, v, p in cur_states]
+			bp[t] = cur_bp
 
-	# 回溯
-	best_final = min(range(len(states)), key=lambda idx: states[idx][0])
-	corrected = [0.0] * n
-	corrected[-1] = states[best_final][1]
-	idx = best_final
-	for i in range(n - 1, 0, -1):
-		idx = backpointers[i][idx]
-		corrected[i - 1] = candidate_lists[i - 1][idx]
+		# 回溯
+		best_final = min(range(len(states)), key=lambda idx: states[idx][0])
+		seg_result = [0.0] * seg_n
+		seg_result[-1] = states[best_final][1]
+		trace = best_final
+		for t in range(seg_n - 1, 0, -1):
+			trace = bp[t][trace]
+			seg_result[t - 1] = seg_candidates[t - 1][trace]
 
-	# ── Step 3: EMA 平滑（仅对低置信帧，且钳制在物理极限内）──
-	smoothed = list(corrected)
-	alpha = 0.35
-	for i in range(1, n):
-		if trust_scores[i] < 0.5:
-			dt_i = max(samples[i].timestamp - samples[i - 1].timestamp, 1e-6)
-			max_dv = max_accel_mps2 * dt_i * 3.6
-			candidate = alpha * corrected[i] + (1 - alpha) * smoothed[i - 1]
-			smoothed[i] = max(smoothed[i - 1] - max_dv, min(smoothed[i - 1] + max_dv, candidate))
-	for i in range(n - 2, -1, -1):
-		if trust_scores[i] < 0.5:
-			dt_i = max(samples[i + 1].timestamp - samples[i].timestamp, 1e-6)
-			max_dv = max_accel_mps2 * dt_i * 3.6
-			back_val = alpha * corrected[i] + (1 - alpha) * smoothed[i + 1]
-			back_val = max(smoothed[i + 1] - max_dv, min(smoothed[i + 1] + max_dv, back_val))
-			smoothed[i] = (smoothed[i] + back_val) / 2.0
+		# 写回结果（跳过锚点帧，用 DP 结果）
+		for t in range(seg_n):
+			abs_idx = seg_start + t
+			if suspect[abs_idx]:
+				result[abs_idx] = seg_result[t]
 
-	return smoothed
+	return result
 
 
 class _CancelExport(Exception):
