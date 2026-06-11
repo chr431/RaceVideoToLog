@@ -777,10 +777,14 @@ class RaceVideoToLogApp:
 		self.preview_canvas.bind("<ButtonRelease-1>", self._on_drag_end)
 		self.preview_canvas.bind("<ButtonPress-3>", self._on_color_pick)  # 右键拾取颜色
 
-		# 视频帧位置滑动条
-		self._preview_slider = ttk.Scale(preview_box, from_=0, to=1, variable=self._preview_frame_pos,
-			orient="horizontal", command=self._on_preview_slider)
-		self._preview_slider.grid(row=1, column=0, sticky="ew", pady=(6, 0))
+		# 视频帧位置滑动条 + 刷新按钮
+		slider_row = ttk.Frame(preview_box)
+		slider_row.grid(row=1, column=0, sticky="ew", pady=(6, 0))
+		slider_row.columnconfigure(0, weight=1)
+		self._preview_slider = ttk.Scale(slider_row, from_=0, to=1, variable=self._preview_frame_pos,
+			orient="horizontal")
+		self._preview_slider.grid(row=0, column=0, sticky="ew")
+		ttk.Button(slider_row, text="刷新预览", command=self.schedule_preview_refresh).grid(row=0, column=1, padx=(8, 0))
 
 		# 键值颜色拾取工具栏（双键值）
 		key_bar = ttk.Frame(preview_box)
@@ -1323,11 +1327,8 @@ class RaceVideoToLogApp:
 		return frame if ok else None
 
 	def _on_preview_slider(self, *args) -> None:
-		"""滑动条拖动时立即更新预览画面。"""
-		if self.preview_after_id is not None:
-			self.root.after_cancel(self.preview_after_id)
-			self.preview_after_id = None
-		self.refresh_preview()
+		"""滑动条变化回调（由刷新按钮触发预览，此处不做操作以保持拖拽流畅）。"""
+		pass
 
 	def schedule_preview_refresh(self) -> None:
 		if self.preview_after_id is not None:
