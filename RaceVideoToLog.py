@@ -784,7 +784,7 @@ class RaceVideoToLogApp:
 		self._preview_slider = ttk.Scale(slider_row, from_=0, to=1, variable=self._preview_frame_pos,
 			orient="horizontal")
 		self._preview_slider.grid(row=0, column=0, sticky="ew")
-		ttk.Button(slider_row, text="刷新预览", command=self.schedule_preview_refresh).grid(row=0, column=1, padx=(8, 0))
+		ttk.Button(slider_row, text="刷新预览", command=self.refresh_preview).grid(row=0, column=1, padx=(8, 0))
 
 		# 键值颜色拾取工具栏（双键值）
 		key_bar = ttk.Frame(preview_box)
