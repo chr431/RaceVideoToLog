@@ -512,6 +512,10 @@ def _get_model_kwargs(variant: str, models_dir: str | None = None) -> dict | Non
 			"det_model_path": f"{models_dir}/ch_PP-OCRv5_det_server_infer.onnx",
 			"rec_model_path": f"{models_dir}/ch_PP-OCRv5_rec_server_infer.onnx",
 		},
+		"v5_mobile": {
+			"det_model_path": f"{models_dir}/ch_PP-OCRv5_mobile_det_infer.onnx",
+			"rec_model_path": f"{models_dir}/ch_PP-OCRv5_mobile_rec_infer.onnx",
+		},
 	}
 	cfg = variants.get(variant)
 	if cfg is None:
@@ -521,8 +525,8 @@ def _get_model_kwargs(variant: str, models_dir: str | None = None) -> dict | Non
 	for key, path in cfg.items():
 		if not Path(path).exists():
 			return None
-	# v5_server: 需要手动注入 keys_path 到 config.yaml 的 Rec 段
-	if variant == "v5_server":
+	# v5 系列: 需要注入 keys_path
+	if variant.startswith("v5"):
 		_set_rec_keys_path(str(Path(rr.__file__).parent / "config.yaml"),
 		                   f"{models_dir}/ppocr_keys_v1.txt")
 	return cfg
@@ -824,8 +828,8 @@ class RaceVideoToLogApp:
 		self.backend_combo.bind("<<ComboboxSelected>>", self._on_backend_changed)
 
 		ttk.Label(perf_box, text="模型").grid(row=0, column=5, sticky="w", padx=(12,0))
-		_MODELS = {"v3": "v3 快速", "v5_server": "v5 精准"}
-		self._model_combo = ttk.Combobox(perf_box, textvariable=self._ocr_model_var, values=[_MODELS[k] for k in ["v3","v5_server"]], width=10, state="readonly")
+		_MODELS = {"v3": "v3 快速", "v5_mobile": "v5 均衡", "v5_server": "v5 精准"}
+		self._model_combo = ttk.Combobox(perf_box, textvariable=self._ocr_model_var, values=[_MODELS[k] for k in ["v3","v5_mobile","v5_server"]], width=11, state="readonly")
 		self._model_combo.grid(row=0, column=6, sticky="ew", padx=(6, 2))
 
 		ttk.Label(perf_box, text="OCR 高度 (px)").grid(row=1, column=0, sticky="w", pady=(8,0))
@@ -1586,7 +1590,7 @@ class RaceVideoToLogApp:
 		selected_label = self.backend_var.get()
 		selected_key = BACKEND_LABELS_REV.get(selected_label, "auto")
 		actual = _select_backend(selected_key)
-		MODEL_REV = {"v3 快速": "v3", "v5 精准": "v5_server"}
+		MODEL_REV = {"v3 快速": "v3", "v5 均衡": "v5_mobile", "v5 精准": "v5_server"}
 		model_key = MODEL_REV.get(self._ocr_model_var.get(), "v3")
 		print(f"[OCR] 后端: {actual}, 模型: {model_key}", flush=True)
 		kwargs = _get_model_kwargs(model_key)
@@ -2213,8 +2217,8 @@ def main() -> None:
 	parser.add_argument("--workers", type=int, default=4, help="并行线程数 (默认 4)")
 	parser.add_argument("--backend", choices=["auto","cuda","cpu"], default="auto",
 		help="OCR 后端: auto/cuda/cpu (默认 auto)")
-	parser.add_argument("--ocr-model", choices=["v3","v5_server"], default="v3",
-		help="OCR 模型: v3(快速)/v5_server(精准) (默认 v3)")
+	parser.add_argument("--ocr-model", choices=["v3","v5_mobile","v5_server"], default="v3",
+		help="OCR 模型: v3(快速)/v5_mobile(均衡)/v5_server(精准) (默认 v3)")
 	parser.add_argument("-o", "--output", type=str, help="输出 CSV 路径 (默认 视频名_log.csv)")
 	parser.add_argument("--analysis", nargs=2, metavar=("CSV1","CSV2"), help="无头分析: 从两个CSV导出v-t/v-x/Δt-x的PNG")
 	parser.add_argument("--analysis-out", type=str, help="分析PNG输出前缀 (默认 CSV1所在目录/分析)")
