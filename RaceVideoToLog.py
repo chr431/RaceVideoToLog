@@ -647,6 +647,7 @@ class RaceVideoToLogApp:
 		self._frame_start_var = tk.StringVar(value="")
 		self._frame_end_var = tk.StringVar(value="")
 		self._color_threshold_var = tk.StringVar(value="50")  # 色距判定范围 (0=严格, 50=默认, 100=2倍)
+		self._manual_correction_var = tk.BooleanVar(value=False)  # 人工纠错
 
 		self.is_exporting = False
 		self._cancel_flag = False
@@ -756,6 +757,7 @@ class RaceVideoToLogApp:
 		ttk.Label(constraint_box, text="最大加速度 (m/s²)").grid(row=0, column=2, sticky="w")
 		ttk.Entry(constraint_box, textvariable=self.max_accel_var, width=10).grid(row=0, column=3, sticky="ew", padx=(6, 0))
 		ttk.Label(constraint_box, text="设为 0 则不限制。用于自动修正丢位、多位和跳变异常。", foreground="#555555").grid(row=1, column=0, columnspan=4, sticky="w", pady=(8, 0))
+		ttk.Checkbutton(constraint_box, text="人工纠错（识别结束后手动修正）", variable=self._manual_correction_var).grid(row=2, column=0, columnspan=4, sticky="w", pady=(8, 0))
 
 		perf_box = ttk.LabelFrame(config_col, text="性能", padding=(12, 10, 12, 12))
 		perf_box.grid(row=2, column=0, sticky="ew")
@@ -1182,7 +1184,7 @@ class RaceVideoToLogApp:
 
 		ax.plot(x, y, color=normal_color, linewidth=0.8)
 
-		if not show_red or not flags or not any(f == 1 for f in flags):
+		if not show_red or not flags or not any(f >= 1 for f in flags):
 			return
 
 		n_orig = len(flags)
@@ -1192,7 +1194,7 @@ class RaceVideoToLogApp:
 		_y = y.tolist() if hasattr(y, 'tolist') else list(y)
 		rx, ry = [], []
 		for i in range(n_orig - 1):
-			if flags[i] == 1 and flags[i + 1] == 1:
+			if flags[i] >= 1 and flags[i + 1] >= 1:
 				si = int(i * n_smooth / n_orig)
 				ei = int((i + 2) * n_smooth / n_orig)
 				si = min(si, n_smooth - 2)
@@ -1980,7 +1982,104 @@ class RaceVideoToLogApp:
 			prev_corrected_kmh = corrected_speed_kmh
 			rows.append((observation.timestamp, distance_m, corrected_speed_kmh, corrected_flag))
 
+		self._run_manual_correction(observations, raw_frames, rows)
+		# 重算准确率（含人工纠正的 flag=2）
+		_corrected_count = sum(1 for r in rows if r[3] >= 1)
+		_accuracy = (1 - _corrected_count / len(rows)) * 100 if rows else 100.0
 		self._write_csv_with_retry(output_path, rows, _t_elapsed, total_frames, _accuracy, _gpu_backend)
+
+	def _run_manual_correction(self, observations, raw_frames, rows):
+		"""人工纠错：弹出窗口依次展示标记帧，用户手动输入正确速度。"""
+		if not self._manual_correction_var.get():
+			return
+		trust = _estimate_raw_trust(observations)
+		# 收集所有 flag=1 的帧，按可信度升序（最不可信排最前）
+		flagged = []
+		for i, (t, d, s, f) in enumerate(rows):
+			if f == 1:
+				flagged.append((i, trust[i], observations[i]))
+		if not flagged:
+			return
+		flagged.sort(key=lambda x: x[1])
+
+		# 创建人工纠错窗口
+		win = tk.Toplevel(self.root)
+		win.title(f"人工纠错 ({len(flagged)} 帧)")
+		win.geometry("500x420")
+		win.transient(self.root)
+		win.grab_set()
+		win.resizable(False, False)
+
+		idx_iter = iter(flagged)
+		current = [None]  # mutable container
+
+		# 预览图
+		img_label = ttk.Label(win)
+		img_label.grid(row=0, column=0, columnspan=2, pady=(12, 8))
+
+		info_var = tk.StringVar()
+		ttk.Label(win, textvariable=info_var, font=("", 10)).grid(row=1, column=0, columnspan=2)
+
+		speed_var = tk.StringVar()
+		entry_frame = ttk.Frame(win)
+		entry_frame.grid(row=2, column=0, columnspan=2, pady=(12, 4))
+		ttk.Label(entry_frame, text="正确速度 (km/h):").grid(row=0, column=0)
+		ttk.Entry(entry_frame, textvariable=speed_var, width=10, font=("", 12), justify="center").grid(row=0, column=1, padx=(8, 0))
+
+		progress_var = tk.StringVar()
+		ttk.Label(win, textvariable=progress_var, foreground="#888888").grid(row=3, column=0, columnspan=2)
+
+		done_flag = [False]
+
+		def _show_next():
+			try:
+				ri, score, obs = next(idx_iter)
+			except StopIteration:
+				done_flag[0] = True
+				win.destroy()
+				return
+			current[0] = (ri, obs)
+			progress_var.set(f"第 {ri+1}/{len(rows)} 帧  |  可信度 {score:.2f}  |  剩余 {sum(1 for _ in idx_iter)} 帧")
+			info_var.set(f"帧 #{ri+1}  t={obs.timestamp:.2f}s  自动值={rows[ri][2]:.1f} km/h  原始={obs.raw_speed_kmh:.1f}")
+			speed_var.set("")
+			# 显示 crop 预览
+			crop = raw_frames[ri][1]
+			h, w = crop.shape[:2]
+			sc = min(200.0 / h, 350.0 / w, 1.0)
+			disp = cv2.resize(crop, (int(w*sc), int(h*sc)))
+			disp_rgb = cv2.cvtColor(disp, cv2.COLOR_BGR2RGB)
+			img = ImageTk.PhotoImage(Image.fromarray(disp_rgb))
+			img_label.configure(image=img)
+			img_label.image = img
+
+		def _confirm():
+			if current[0] is None or done_flag[0]:
+				return
+			ri, obs = current[0]
+			try:
+				val = float(speed_var.get().strip())
+				t, d, s, f = rows[ri]
+				rows[ri] = (t, d, val, 2)  # flag=2 表示人工纠正
+			except ValueError:
+				pass
+			_show_next()
+
+		def _skip():
+			_show_next()
+
+		def _skip_all():
+			done_flag[0] = True
+			win.destroy()
+
+		btn_frame = ttk.Frame(win)
+		btn_frame.grid(row=4, column=0, columnspan=2, pady=(12, 12))
+		ttk.Button(btn_frame, text="确认 (Enter)", command=_confirm).grid(row=0, column=0, padx=(0, 12))
+		ttk.Button(btn_frame, text="跳过", command=_skip).grid(row=0, column=1, padx=(0, 12))
+		ttk.Button(btn_frame, text="跳过全部", command=_skip_all).grid(row=0, column=2)
+		win.bind("<Return>", lambda e: _confirm())
+
+		_show_next()
+		self.root.wait_window(win)
 
 	def _write_csv_with_retry(self, initial_path: Path, rows: list[tuple[float, float, float, int]],
 	                          elapsed: float = 0.0, total_frames: int = 0,
