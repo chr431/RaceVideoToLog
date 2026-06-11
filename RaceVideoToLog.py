@@ -1746,21 +1746,57 @@ class RaceVideoToLogApp:
 	def _ocr_multi_box(
 		self, crop: np.ndarray, ocr, target_h: float, pad_px: float
 	) -> tuple[float | None, str | None]:
-		"""三位分框模式：将 crop 横向三等分，每格独立 OCR，拼接为速度值。
-		使用较低置信度阈值（单字符检测置信度天然偏低）。"""
+		"""三位分框模式：全图预处理后裁剪1/3+背景填充，保持全宽以维持OCR置信度。"""
 		import re as _re
 		h, w = crop.shape[:2]
 		if w < 15:
 			return None, None
-		third = w // 3
-		sub_crops = [
-			crop[:, 0:third],
-			crop[:, third:2 * third],
-			crop[:, 2 * third:w],
-		]
+
+		# 先对全图做标准预处理
+		gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+		if self._key_color1 is not None or self._key_color2 is not None:
+			# 有键值颜色时用 preprocess_crop 的逻辑
+			proc_full = self.preprocess_crop(crop, target_h, pad_px)
+			gray = cv2.cvtColor(proc_full, cv2.COLOR_BGR2GRAY)
+		else:
+			clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+			gray = clahe.apply(gray)
+			_, gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+			h2, w2 = gray.shape[:2]
+			th = max(8.0, float(target_h))
+			sc = th / h2 if h2 > 0 else 1.0
+			gray = cv2.resize(gray, (max(1, int(w2 * sc)), int(th)))
+
+		proc_h, proc_w = gray.shape[:2]
+		p_third = proc_w // 3
+		bg_color = 0 if np.mean(gray[:, :3]) < 128 else 255
+
 		digits: list[str] = []
-		for sub in sub_crops:
-			digit = self._ocr_single_digit(sub, ocr, target_h, pad_px)
+		for slot in range(3):
+			x1 = slot * p_third
+			x2 = (slot + 1) * p_third if slot < 2 else proc_w
+			strip = gray[:, x1:x2]
+			# 背景色填充恢复全宽
+			padded = cv2.copyMakeBorder(
+				strip, 0, 0, x1, proc_w - x2,
+				cv2.BORDER_CONSTANT, value=bg_color)
+			proc = cv2.cvtColor(padded, cv2.COLOR_GRAY2BGR)
+			ocr_result, _ = ocr(proc)
+			digit = ""
+			best_conf = 0.0
+			if ocr_result:
+				for _, text, conf_str in ocr_result:
+					try:
+						conf = float(conf_str)
+					except (ValueError, TypeError):
+						conf = 0.0
+					clean = _re.sub(r"\D", "", text)
+					if len(clean) == 1 and conf > best_conf:
+						digit = clean
+						best_conf = conf
+					elif clean and conf > best_conf:
+						digit = clean[-1]
+						best_conf = conf
 			digits.append(digit)
 
 		combined = "".join(digits)
@@ -1770,34 +1806,6 @@ class RaceVideoToLogApp:
 			except ValueError:
 				return None, None
 		return None, None
-
-	def _ocr_single_digit(
-		self, sub_crop: np.ndarray, ocr, target_h: float, pad_px: float
-	) -> str:
-		"""对单个数字区域 OCR，返回识别到的数字字符（0-9），失败返回空串。"""
-		import re as _re
-		# 尝试两种预处理，取置信度最高的单数字结果
-		best_digit = ""
-		best_conf = 0.0
-		for preprocess in [self.preprocess_crop, self._preprocess_fallback]:
-			proc = preprocess(sub_crop, target_h, pad_px)
-			ocr_result, _ = ocr(proc)
-			if ocr_result:
-				for _, text, conf_str in ocr_result:
-					try:
-						conf = float(conf_str)
-					except (ValueError, TypeError):
-						conf = 0.0
-					# 只接受单数字
-					clean = _re.sub(r"\D", "", text)
-					if len(clean) == 1 and conf > best_conf:
-						best_digit = clean
-						best_conf = conf
-					elif clean and conf > best_conf:
-						# 多字符：取最后一位数字
-						best_digit = clean[-1]
-						best_conf = conf
-		return best_digit
 
 	def _ocr_sequential(
 		self,
@@ -2588,34 +2596,45 @@ def _finish_preprocess(gray, target_h, pad):
 
 
 def _ocr_headless_multi_box(crop, ocr, target_h, pad, key_colors, args):
-	"""无头模式三位分框：横向三等分，每格独立OCR后拼接。"""
+	"""无头模式三位分框：全图预处理→裁剪1/3+背景填充→OCR。"""
 	import re as _re
 	h, w = crop.shape[:2]
 	if w < 15:
 		return None, None
-	third = w // 3
-	sub_crops = [crop[:, 0:third], crop[:, third:2*third], crop[:, 2*third:w]]
+
+	# 标准预处理全图
+	proc_full = _preprocess_headless(crop, target_h, pad, key_colors)
+	gray = cv2.cvtColor(proc_full, cv2.COLOR_BGR2GRAY)
+	proc_h, proc_w = gray.shape[:2]
+	p_third = proc_w // 3
+	bg_color = 0 if np.mean(gray[:, :3]) < 128 else 255
+
 	digits: list[str] = []
-	for sub in sub_crops:
-		best_digit = ""
+	for slot in range(3):
+		x1 = slot * p_third
+		x2 = (slot + 1) * p_third if slot < 2 else proc_w
+		strip = gray[:, x1:x2]
+		padded = cv2.copyMakeBorder(
+			strip, 0, 0, x1, proc_w - x2,
+			cv2.BORDER_CONSTANT, value=bg_color)
+		proc = cv2.cvtColor(padded, cv2.COLOR_GRAY2BGR)
+		ocr_result, _ = ocr(proc)
+		digit = ""
 		best_conf = 0.0
-		for preproc in [_preprocess_headless, _preprocess_headless_fallback]:
-			proc = preproc(sub, target_h, pad, key_colors)
-			ocr_result, _ = ocr(proc)
-			if ocr_result:
-				for _, text, conf_str in ocr_result:
-					try:
-						conf = float(conf_str)
-					except (ValueError, TypeError):
-						conf = 0.0
-					clean = _re.sub(r"\D", "", text)
-					if len(clean) == 1 and conf > best_conf:
-						best_digit = clean
-						best_conf = conf
-					elif clean and conf > best_conf:
-						best_digit = clean[-1]
-						best_conf = conf
-		digits.append(best_digit)
+		if ocr_result:
+			for _, text, conf_str in ocr_result:
+				try:
+					conf = float(conf_str)
+				except (ValueError, TypeError):
+					conf = 0.0
+				clean = _re.sub(r"\D", "", text)
+				if len(clean) == 1 and conf > best_conf:
+					digit = clean
+					best_conf = conf
+				elif clean and conf > best_conf:
+					digit = clean[-1]
+					best_conf = conf
+		digits.append(digit)
 	combined = "".join(digits)
 	if combined and any(c for c in combined):
 		try:
