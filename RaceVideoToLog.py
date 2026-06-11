@@ -493,39 +493,32 @@ def _estimate_raw_trust(samples: list[SpeedObservation], window: int = 3) -> lis
 
 
 def _get_model_kwargs(variant: str, models_dir: str | None = None) -> dict | None:
-	"""根据 OCR 模型变体返回 RapidOCR 的 kwargs。模型文件不存在时返回 None。
-	注意: 仅 v5_server 需要额外配置 keys_path 到 config.yaml。"""
+	"""根据 OCR 模型变体返回 RapidOCR 的 kwargs。模型文件不存在时返回 None。"""
 	import rapidocr_onnxruntime as rr
 	if models_dir is None:
 		models_dir = str(Path(rr.__file__).parent / "models")
-	variants: dict[str, dict[str, str]] = {
+	# 模型路径（仅 onnx 文件）
+	_PATH_KEYS = {"det_model_path", "rec_model_path"}
+	model_paths: dict[str, dict] = {
 		"v3": {},
-		"v3_server": {
-			"det_model_path": f"{models_dir}/ch_PP-OCRv3_det_server_infer.onnx",
-			"rec_model_path": f"{models_dir}/ch_PP-OCRv3_rec_server_infer.onnx",
-		},
-		"v4_server": {
-			"det_model_path": f"{models_dir}/ch_PP-OCRv4_det_server_infer.onnx",
-			"rec_model_path": f"{models_dir}/ch_PP-OCRv4_rec_server_infer.onnx",
-		},
-		"v5_server": {
-			"det_model_path": f"{models_dir}/ch_PP-OCRv5_det_server_infer.onnx",
-			"rec_model_path": f"{models_dir}/ch_PP-OCRv5_rec_server_infer.onnx",
-		},
-		"v5_mobile": {
-			"det_model_path": f"{models_dir}/ch_PP-OCRv5_mobile_det_infer.onnx",
-			"rec_model_path": f"{models_dir}/ch_PP-OCRv5_mobile_rec_infer.onnx",
-		},
+		"v3_server": {"det_model_path": f"{models_dir}/ch_PP-OCRv3_det_server_infer.onnx",
+		              "rec_model_path": f"{models_dir}/ch_PP-OCRv3_rec_server_infer.onnx"},
+		"v4_server": {"det_model_path": f"{models_dir}/ch_PP-OCRv4_det_server_infer.onnx",
+		              "rec_model_path": f"{models_dir}/ch_PP-OCRv4_rec_server_infer.onnx"},
+		"v5_server": {"det_model_path": f"{models_dir}/ch_PP-OCRv5_det_server_infer.onnx",
+		              "rec_model_path": f"{models_dir}/ch_PP-OCRv5_rec_server_infer.onnx"},
+		"v5_mobile": {"det_model_path": f"{models_dir}/ch_PP-OCRv5_mobile_det_infer.onnx",
+		              "rec_model_path": f"{models_dir}/ch_PP-OCRv5_mobile_rec_infer.onnx",
+		              "text_score": 0.6, "use_angle_cls": False, "rec_batch_num": 12},
 	}
-	cfg = variants.get(variant)
+	cfg = model_paths.get(variant)
 	if cfg is None:
 		return None
-	if not cfg:  # v3: 默认，无需 kwargs
+	if not cfg:  # v3 默认
 		return None
-	for key, path in cfg.items():
-		if not Path(path).exists():
+	for key in _PATH_KEYS:
+		if key in cfg and not Path(cfg[key]).exists():
 			return None
-	# v5 系列: 需要注入 keys_path
 	if variant.startswith("v5"):
 		_set_rec_keys_path(str(Path(rr.__file__).parent / "config.yaml"),
 		                   f"{models_dir}/ppocr_keys_v1.txt")
