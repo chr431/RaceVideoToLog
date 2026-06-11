@@ -1669,7 +1669,11 @@ class RaceVideoToLogApp:
 		kwargs = _get_model_kwargs(model_key)
 		if kwargs is None and model_key != "v3":
 			print(f"[OCR] 警告: {model_key} 模型文件不存在，回退到默认 v3")
-		return RapidOCR(**(kwargs or {}))
+		kwargs = dict(kwargs or {})
+		# 多框模式：单数字检测置信度天然偏低，降低阈值
+		if self._multi_box_var.get():
+			kwargs["text_score"] = 0.1
+		return RapidOCR(**kwargs)
 
 	def get_ocr_engines(self, count: int) -> list[RapidOCR]:
 		"""预创建 N 个 OCR 引擎用于 CUDA 并行推理。"""
@@ -1742,11 +1746,12 @@ class RaceVideoToLogApp:
 	def _ocr_multi_box(
 		self, crop: np.ndarray, ocr, target_h: float, pad_px: float
 	) -> tuple[float | None, str | None]:
-		"""三位分框模式：将 crop 横向三等分，每格独立 OCR，拼接为速度值。"""
+		"""三位分框模式：将 crop 横向三等分，每格独立 OCR，拼接为速度值。
+		使用较低置信度阈值（单字符检测置信度天然偏低）。"""
 		import re as _re
 		h, w = crop.shape[:2]
 		if w < 15:
-			return None, None  # 框太窄，无法三等分
+			return None, None
 		third = w // 3
 		sub_crops = [
 			crop[:, 0:third],
@@ -1755,24 +1760,8 @@ class RaceVideoToLogApp:
 		]
 		digits: list[str] = []
 		for sub in sub_crops:
-			proc = self.preprocess_crop(sub, target_h, pad_px)
-			ocr_result, _ = ocr(proc)
-			speed_val, raw_text = extract_speed_value(ocr_result)
-			if speed_val is not None and raw_text is not None:
-				text = _re.sub(r"\D", "", raw_text)
-				if text:
-					digits.append(text[-1])  # 取最右位数字
-					continue
-			# 备选预处理再试
-			proc_fb = self._preprocess_fallback(sub, target_h, pad_px)
-			ocr_result, _ = ocr(proc_fb)
-			speed_val, raw_text = extract_speed_value(ocr_result)
-			if speed_val is not None and raw_text is not None:
-				text = _re.sub(r"\D", "", raw_text)
-				if text:
-					digits.append(text[-1])
-					continue
-			digits.append("")  # 该格识别失败
+			digit = self._ocr_single_digit(sub, ocr, target_h, pad_px)
+			digits.append(digit)
 
 		combined = "".join(digits)
 		if combined and any(c for c in combined):
@@ -1781,6 +1770,34 @@ class RaceVideoToLogApp:
 			except ValueError:
 				return None, None
 		return None, None
+
+	def _ocr_single_digit(
+		self, sub_crop: np.ndarray, ocr, target_h: float, pad_px: float
+	) -> str:
+		"""对单个数字区域 OCR，返回识别到的数字字符（0-9），失败返回空串。"""
+		import re as _re
+		# 尝试两种预处理，取置信度最高的单数字结果
+		best_digit = ""
+		best_conf = 0.0
+		for preprocess in [self.preprocess_crop, self._preprocess_fallback]:
+			proc = preprocess(sub_crop, target_h, pad_px)
+			ocr_result, _ = ocr(proc)
+			if ocr_result:
+				for _, text, conf_str in ocr_result:
+					try:
+						conf = float(conf_str)
+					except (ValueError, TypeError):
+						conf = 0.0
+					# 只接受单数字
+					clean = _re.sub(r"\D", "", text)
+					if len(clean) == 1 and conf > best_conf:
+						best_digit = clean
+						best_conf = conf
+					elif clean and conf > best_conf:
+						# 多字符：取最后一位数字
+						best_digit = clean[-1]
+						best_conf = conf
+		return best_digit
 
 	def _ocr_sequential(
 		self,
@@ -2406,6 +2423,11 @@ def run_headless(args: argparse.Namespace) -> None:
 	if model_kwargs is None and args.ocr_model != "v3":
 		print(f"警告: {args.ocr_model} 模型文件不存在，回退到默认 v3")
 	ocr = RapidOCR(**(model_kwargs or {}))
+	# 多框模式需要更低置信度阈值
+	if args.multi_box:
+		multi_kwargs = dict(model_kwargs or {})
+		multi_kwargs["text_score"] = 0.1
+		ocr = RapidOCR(**multi_kwargs)
 
 	# 读取视频信息
 	cap = cv2.VideoCapture(str(video_path))
@@ -2575,24 +2597,25 @@ def _ocr_headless_multi_box(crop, ocr, target_h, pad, key_colors, args):
 	sub_crops = [crop[:, 0:third], crop[:, third:2*third], crop[:, 2*third:w]]
 	digits: list[str] = []
 	for sub in sub_crops:
-		proc = _preprocess_headless(sub, target_h, pad, key_colors)
-		ocr_result, _ = ocr(proc)
-		sv, rt = extract_speed_value(ocr_result)
-		if sv is not None and rt is not None:
-			text = _re.sub(r"\D", "", rt)
-			if text:
-				digits.append(text[-1])
-				continue
-		# 备选
-		proc2 = _preprocess_headless_fallback(sub, target_h, pad, key_colors)
-		ocr_result, _ = ocr(proc2)
-		sv, rt = extract_speed_value(ocr_result)
-		if sv is not None and rt is not None:
-			text = _re.sub(r"\D", "", rt)
-			if text:
-				digits.append(text[-1])
-				continue
-		digits.append("")
+		best_digit = ""
+		best_conf = 0.0
+		for preproc in [_preprocess_headless, _preprocess_headless_fallback]:
+			proc = preproc(sub, target_h, pad, key_colors)
+			ocr_result, _ = ocr(proc)
+			if ocr_result:
+				for _, text, conf_str in ocr_result:
+					try:
+						conf = float(conf_str)
+					except (ValueError, TypeError):
+						conf = 0.0
+					clean = _re.sub(r"\D", "", text)
+					if len(clean) == 1 and conf > best_conf:
+						best_digit = clean
+						best_conf = conf
+					elif clean and conf > best_conf:
+						best_digit = clean[-1]
+						best_conf = conf
+		digits.append(best_digit)
 	combined = "".join(digits)
 	if combined and any(c for c in combined):
 		try:
