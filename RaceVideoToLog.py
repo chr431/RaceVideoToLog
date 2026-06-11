@@ -1457,23 +1457,19 @@ class RaceVideoToLogApp:
 		display_width = max(1, int(image.width * scale))
 		display_height = max(1, int(image.height * scale))
 
-		if (self._last_canvas_w != canvas_width or 
-			self._last_canvas_h != canvas_height or 
-			self.preview_photo is None):
-			
-			self._last_canvas_w = canvas_width
-			self._last_canvas_h = canvas_height
-			self._preview_scale = scale
-			self._preview_offset_x = (canvas_width - display_width) / 2.0
-			self._preview_offset_y = (canvas_height - display_height) / 2.0
+		self._last_canvas_w = canvas_width
+		self._last_canvas_h = canvas_height
+		self._preview_scale = scale
+		self._preview_offset_x = (canvas_width - display_width) / 2.0
+		self._preview_offset_y = (canvas_height - display_height) / 2.0
 
-			display_size = (display_width, display_height)
-			resized = image.resize(display_size, Image.Resampling.LANCZOS)
-			self.preview_photo = ImageTk.PhotoImage(resized)
+		display_size = (display_width, display_height)
+		resized = image.resize(display_size, Image.Resampling.LANCZOS)
+		self.preview_photo = ImageTk.PhotoImage(resized)
 
-			self.preview_canvas.delete("video_frame")
-			self.preview_canvas.create_image(canvas_width / 2, canvas_height / 2, image=self.preview_photo, tag="video_frame")
-			self.preview_canvas.tag_lower("video_frame")
+		self.preview_canvas.delete("video_frame")
+		self.preview_canvas.create_image(canvas_width / 2, canvas_height / 2, image=self.preview_photo, tag="video_frame")
+		self.preview_canvas.tag_lower("video_frame")
 
 	def _on_backend_changed(self, event: tk.Event | None = None) -> None:
 		"""用户切换 OCR 后端时，重置引擎缓存并在状态栏提示。"""
