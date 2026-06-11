@@ -303,6 +303,17 @@ def safe_float(value: str) -> float | None:
 		return None
 
 
+def _parse_int_or_none(s: str) -> int | None:
+	"""解析字符串为 int，空字符串返回 None。"""
+	s = s.strip()
+	if not s:
+		return None
+	try:
+		return int(s)
+	except ValueError:
+		return None
+
+
 def normalize_ocr_text(text: str) -> str:
 	translation = str.maketrans(
 		{
@@ -632,6 +643,10 @@ class RaceVideoToLogApp:
 		self.num_workers_var = tk.StringVar(value="4")
 		self.backend_var = tk.StringVar(value="auto")
 
+		# 时间轴范围
+		self._frame_start_var = tk.StringVar(value="")
+		self._frame_end_var = tk.StringVar(value="")
+
 		self.is_exporting = False
 		self._cancel_flag = False
 		self.progress_var = tk.DoubleVar(value=0.0)
@@ -763,6 +778,18 @@ class RaceVideoToLogApp:
 		ttk.Label(perf_box, text="并行线程数").grid(row=1, column=4, sticky="w", pady=(8,0))
 		ttk.Entry(perf_box, textvariable=self.num_workers_var, width=8).grid(row=1, column=5, sticky="ew", padx=(6, 14), pady=(8,0))
 		ttk.Label(perf_box, text=">1 时启用并行推理。", foreground="#555555").grid(row=2, column=0, columnspan=6, sticky="w", pady=(8, 0))
+
+		# 时间轴范围
+		time_box = ttk.LabelFrame(config_col, text="时间轴范围", padding=(12, 10, 12, 12))
+		time_box.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+		time_box.columnconfigure(1, weight=1); time_box.columnconfigure(4, weight=1)
+		ttk.Label(time_box, text="起始帧").grid(row=0, column=0, sticky="w")
+		ttk.Entry(time_box, textvariable=self._frame_start_var, width=8).grid(row=0, column=1, sticky="ew", padx=(4, 4))
+		ttk.Button(time_box, text="设为当前", command=lambda: self._frame_start_var.set(str(int(self._preview_slider.get())))).grid(row=0, column=2, padx=(0, 8))
+		ttk.Label(time_box, text="结束帧").grid(row=0, column=3, sticky="w")
+		ttk.Entry(time_box, textvariable=self._frame_end_var, width=8).grid(row=0, column=4, sticky="ew", padx=(4, 4))
+		ttk.Button(time_box, text="设为当前", command=lambda: self._frame_end_var.set(str(int(self._preview_slider.get())))).grid(row=0, column=5)
+		ttk.Label(time_box, text="留空=全部。仅处理 [起始, 结束) 之间的帧。", foreground="#555555").grid(row=1, column=0, columnspan=6, sticky="w", pady=(6, 0))
 
 		# 右侧预览
 		preview_box = ttk.LabelFrame(ocr_main, text="识别范围预览", padding=(6, 6, 6, 6))
@@ -1863,10 +1890,20 @@ class RaceVideoToLogApp:
 
 		raw_frames: list[tuple[float, np.ndarray]] = []
 		frame_index = 0
+
+		# 解析时间轴范围
+		f_start = _parse_int_or_none(self._frame_start_var.get())
+		f_end = _parse_int_or_none(self._frame_end_var.get())
+
 		while True:
 			ok, frame = capture.read()
 			if not ok or frame is None:
 				break
+			if f_end is not None and frame_index >= f_end:
+				break
+			if f_start is not None and frame_index < f_start:
+				frame_index += 1
+				continue
 			if frame_index % frame_step != 0:
 				frame_index += 1
 				continue
@@ -1993,6 +2030,8 @@ def main() -> None:
 	parser.add_argument("--analysis-out", type=str, help="分析PNG输出前缀 (默认 CSV1所在目录/分析)")
 	parser.add_argument("--key-color", type=str, metavar="B,G,R[;B,G,R]",
 		help="键值颜色: 逗号分隔的B,G,R, 多个用分号分隔 (如 255,250,247;135,124,121)")
+	parser.add_argument("--frame-start", type=int, metavar="N", help="起始帧 (含)")
+	parser.add_argument("--frame-end", type=int, metavar="N", help="结束帧 (不含)")
 	args = parser.parse_args()
 
 	if args.video:
@@ -2061,6 +2100,11 @@ def run_headless(args: argparse.Namespace) -> None:
 		ok, frame = cap.read()
 		if not ok or frame is None:
 			break
+		if args.frame_end is not None and fi >= args.frame_end:
+			break
+		if args.frame_start is not None and fi < args.frame_start:
+			fi += 1
+			continue
 		if fi % frame_step != 0:
 			fi += 1
 			continue
