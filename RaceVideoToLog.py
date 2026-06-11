@@ -2591,13 +2591,14 @@ def _ocr_retry(ocr, proc, expected, best_speed, best_text, best_diff, args):
 
 
 def _ocr_retry_tesseract(crop, expected, best_speed, best_text, best_diff, args):
-	"""Tesseract 互补引擎重试：若 pytesseract 可用则使用，否则跳过。"""
+	"""互补引擎重试：Tesseract（若可用）+ v3 模型（始终可用）。
+
+	v3 和 v5_mobile 使用不同的检测/识别网络，错误模式互补：
+	v3 极端错误少但中等偏差多，v5m 反之。
+	"""
+	# ── 引擎1: Tesseract ──
 	try:
 		import pytesseract, re as _re
-	except ImportError:
-		return best_speed, best_text, best_diff
-
-	try:
 		gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
 		h, w = gray.shape[:2]
 		scale = max(3.0, 80.0 / h)
@@ -2612,7 +2613,47 @@ def _ocr_retry_tesseract(crop, expected, best_speed, best_text, best_diff, args)
 				return spd, text, diff
 	except Exception:
 		pass
+
+	# ── 引擎2: RapidOCR v3 模型（不同识别网络，错误模式互补）──
+	try:
+		v3_ocr = _get_v3_ocr()
+		if v3_ocr is not None:
+			# 用标准预处理（与 v5m 相同输入，不同模型权重）
+			gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+			clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+			gray = clahe.apply(gray)
+			_, gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+			h2, w2 = gray.shape[:2]
+			th = max(8.0, float(args.target_h))
+			sc = th / h2 if h2 > 0 else 1.0
+			gray = cv2.resize(gray, (max(1, int(w2 * sc)), int(th)))
+			proc = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+			ocr_result, _ = v3_ocr(proc)
+			sv, rt = extract_speed_value(ocr_result)
+			if sv is not None and rt is not None:
+				spd = sv * SOURCE_TO_KMH[args.format]
+				diff = abs(spd - expected)
+				if diff < best_diff:
+					return spd, rt, diff
+	except Exception:
+		pass
+
 	return best_speed, best_text, best_diff
+
+
+_v3_ocr_cache = None
+
+
+def _get_v3_ocr():
+	"""懒加载 v3 模型 OCR 引擎（全局单例）。"""
+	global _v3_ocr_cache
+	if _v3_ocr_cache is None:
+		try:
+			from rapidocr_onnxruntime import RapidOCR
+			_v3_ocr_cache = RapidOCR()  # 默认 v3
+		except Exception:
+			_v3_ocr_cache = False  # 标记失败，不再重试
+	return _v3_ocr_cache if _v3_ocr_cache is not False else None
 
 
 def run_analysis_headless(args: argparse.Namespace) -> None:
