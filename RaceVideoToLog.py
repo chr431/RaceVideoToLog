@@ -652,7 +652,7 @@ class RaceVideoToLogApp:
 		self._key_color_str1 = tk.StringVar(value="未设置")
 		self._key_color_str2 = tk.StringVar(value="未设置")
 		self._pick_color_mode = 0  # 0=关闭, 1=拾取键值1, 2=拾取键值2
-		self._preview_frame_pos = tk.IntVar(value=0)  # 预览帧位置
+		self._preview_frame_pos = tk.DoubleVar(value=0)  # 预览帧位置
 
 		# 数据分析 tab
 		self._analysis_csvs: list[str | None] = [None, None, None]  # 最多 3 个 CSV
@@ -1318,7 +1318,7 @@ class RaceVideoToLogApp:
 		"""根据滑动条位置读取对应视频帧。"""
 		if self.video_path is None or self.metadata is None:
 			return None
-		pos = self._preview_frame_pos.get()
+		pos = int(self._preview_slider.get())
 		fi = int(pos)
 		cap = cv2.VideoCapture(str(self.video_path))
 		cap.set(cv2.CAP_PROP_POS_FRAMES, fi)
@@ -1413,8 +1413,8 @@ class RaceVideoToLogApp:
 			self.preview_canvas.delete("all")
 			return
 
-		# 根据滑动条位置读取对应帧
-		pos = self._preview_frame_pos.get()
+		# 从滑动条直接读取位置
+		pos = int(self._preview_slider.get())
 		if pos > 0 and self.video_path is not None:
 			cap = cv2.VideoCapture(str(self.video_path))
 			cap.set(cv2.CAP_PROP_POS_FRAMES, pos)
@@ -1423,10 +1423,13 @@ class RaceVideoToLogApp:
 			if ok and frame is not None:
 				frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 				self._draw_preview_image(Image.fromarray(frame_rgb))
+				self.status_var.set(f"预览帧 #{pos}")
 			else:
 				self._draw_preview_image(self.first_frame_pil)
+				self.status_var.set(f"无法读取帧 #{pos}")
 		else:
 			self._draw_preview_image(self.first_frame_pil)
+			self.status_var.set("预览帧 #0（首帧）")
 		self._update_roi_rect()
 
 	def _update_roi_rect(self) -> None:
