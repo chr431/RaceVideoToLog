@@ -451,8 +451,8 @@ def build_speed_candidates(raw_text: str, max_speed_kmh: float) -> list[float]:
 	_CONFUSION_MAP = {
 		"0": ["8"], "8": ["0", "6", "3"],
 		"6": ["8", "5"], "5": ["6"],
-		"3": ["8"], "1": ["7"], "7": ["1"],
-		"2": ["7"], "9": ["8"],
+		"3": ["8"], "1": ["7"], "7": ["1", "2", "4"],
+		"2": ["7"], "4": ["7"], "9": ["8"],
 	}
 	for i, ch in enumerate(text):
 		for alt in _CONFUSION_MAP.get(ch, []):
@@ -2504,6 +2504,8 @@ def _retry_suspect_frames(
 	args,
 ) -> tuple[list, list[float] | None]:
 	"""对物理超限帧用备选预处理重试 OCR，选最接近邻帧期望值的读数。"""
+	if args.max_accel <= 0:
+		return observations, None
 	max_delta_kmh = args.max_accel * (1.0 / 57.0) * 3.6  # 假设 ~17.5ms 帧间隔
 	_suspects = []
 	for i in range(1, len(corrected_first)):
