@@ -2005,7 +2005,7 @@ class RaceVideoToLogApp:
 		# 创建人工纠错窗口
 		win = tk.Toplevel(self.root)
 		win.title(f"人工纠错 ({len(flagged)} 帧)")
-		win.geometry("500x420")
+		win.geometry("500x440")
 		win.transient(self.root)
 		win.grab_set()
 		win.resizable(False, False)
@@ -2030,17 +2030,22 @@ class RaceVideoToLogApp:
 		ttk.Label(win, textvariable=progress_var, foreground="#888888").grid(row=3, column=0, columnspan=2)
 
 		done_flag = [False]
+		total_flagged = len(flagged)
 
 		def _show_next():
+			nonlocal total_flagged
 			try:
 				ri, score, obs = next(idx_iter)
 			except StopIteration:
 				done_flag[0] = True
 				win.destroy()
 				return
-			current[0] = (ri, obs)
-			progress_var.set(f"第 {ri+1}/{len(rows)} 帧  |  可信度 {score:.2f}  |  剩余 {sum(1 for _ in idx_iter)} 帧")
-			info_var.set(f"帧 #{ri+1}  t={obs.timestamp:.2f}s  自动值={rows[ri][2]:.1f} km/h  原始={obs.raw_speed_kmh:.1f}")
+			current[0] = (ri, obs, score)
+			remaining = total_flagged - (rows[ri][3] if ri >= 0 else 0)  # 粗略估计
+			# 实际剩余：统计还未处理的 flag=1 数量
+			remaining = sum(1 for r in rows if r[3] == 1)
+			progress_var.set(f"帧 #{ri+1}/{len(rows)}  |  可信度 {score:.2f}  |  剩余 {remaining} 帧")
+			info_var.set(f"t={obs.timestamp:.2f}s  纠正值={rows[ri][2]:.1f} km/h  原始={obs.raw_speed_kmh:.1f}")
 			speed_var.set("")
 			# 显示 crop 预览
 			crop = raw_frames[ri][1]
@@ -2055,16 +2060,31 @@ class RaceVideoToLogApp:
 		def _confirm():
 			if current[0] is None or done_flag[0]:
 				return
-			ri, obs = current[0]
+			ri, obs, _ = current[0]
 			try:
 				val = float(speed_var.get().strip())
 				t, d, s, f = rows[ri]
-				rows[ri] = (t, d, val, 2)  # flag=2 表示人工纠正
+				rows[ri] = (t, d, val, 2)
 			except ValueError:
 				pass
 			_show_next()
 
-		def _skip():
+		def _use_raw():
+			"""应用原始 OCR 值（flag=2 人工确认）。"""
+			if current[0] is None or done_flag[0]:
+				return
+			ri, obs, _ = current[0]
+			t, d, s, f = rows[ri]
+			rows[ri] = (t, d, obs.raw_speed_kmh, 2)
+			_show_next()
+
+		def _use_corrected():
+			"""应用自动纠正值（flag=2 人工确认）。"""
+			if current[0] is None or done_flag[0]:
+				return
+			ri, obs, _ = current[0]
+			t, d, s, f = rows[ri]
+			rows[ri] = (t, d, s, 2)  # 保留原纠正值，标记 flag=2
 			_show_next()
 
 		def _skip_all():
@@ -2073,9 +2093,10 @@ class RaceVideoToLogApp:
 
 		btn_frame = ttk.Frame(win)
 		btn_frame.grid(row=4, column=0, columnspan=2, pady=(12, 12))
-		ttk.Button(btn_frame, text="确认 (Enter)", command=_confirm).grid(row=0, column=0, padx=(0, 12))
-		ttk.Button(btn_frame, text="跳过", command=_skip).grid(row=0, column=1, padx=(0, 12))
-		ttk.Button(btn_frame, text="跳过全部", command=_skip_all).grid(row=0, column=2)
+		ttk.Button(btn_frame, text="确认 (Enter)", command=_confirm).grid(row=0, column=0, padx=(0, 8))
+		ttk.Button(btn_frame, text="原值", command=_use_raw).grid(row=0, column=1, padx=(0, 8))
+		ttk.Button(btn_frame, text="纠正值", command=_use_corrected).grid(row=0, column=2, padx=(0, 8))
+		ttk.Button(btn_frame, text="全部跳过", command=_skip_all).grid(row=0, column=3)
 		win.bind("<Return>", lambda e: _confirm())
 
 		_show_next()
