@@ -788,11 +788,11 @@ class RaceVideoToLogApp:
 		ttk.Button(key_bar, text="键值1", command=lambda: self._start_color_pick(1)).grid(row=0, column=0, sticky="w")
 		self._key_swatch1 = tk.Canvas(key_bar, width=18, height=18, background="#888888", highlightthickness=1, highlightbackground="#555555")
 		self._key_swatch1.grid(row=0, column=1, padx=(4, 2))
-		ttk.Label(key_bar, textvariable=self._key_color_str1, foreground="#555555", font=("", 8)).grid(row=0, column=2, sticky="w")
+		ttk.Label(key_bar, textvariable=self._key_color_str1, foreground="#555555", font=("", 8), width=16, anchor="w").grid(row=0, column=2, sticky="w")
 		ttk.Button(key_bar, text="键值2", command=lambda: self._start_color_pick(2)).grid(row=0, column=3, padx=(10, 0))
 		self._key_swatch2 = tk.Canvas(key_bar, width=18, height=18, background="#888888", highlightthickness=1, highlightbackground="#555555")
 		self._key_swatch2.grid(row=0, column=4, padx=(4, 2))
-		ttk.Label(key_bar, textvariable=self._key_color_str2, foreground="#555555", font=("", 8)).grid(row=0, column=5, sticky="w")
+		ttk.Label(key_bar, textvariable=self._key_color_str2, foreground="#555555", font=("", 8), width=16, anchor="w").grid(row=0, column=5, sticky="w")
 		ttk.Button(key_bar, text="清除全部", command=self._clear_key_color).grid(row=0, column=6, padx=(12, 0))
 
 		# ── Tab 2: 数据分析 ──
@@ -1323,8 +1323,11 @@ class RaceVideoToLogApp:
 		return frame if ok else None
 
 	def _on_preview_slider(self, *args) -> None:
-		"""滑动条拖动时更新预览画面。"""
-		self.schedule_preview_refresh()
+		"""滑动条拖动时立即更新预览画面。"""
+		if self.preview_after_id is not None:
+			self.root.after_cancel(self.preview_after_id)
+			self.preview_after_id = None
+		self.refresh_preview()
 
 	def schedule_preview_refresh(self) -> None:
 		if self.preview_after_id is not None:
