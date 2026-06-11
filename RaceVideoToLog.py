@@ -493,12 +493,13 @@ def _estimate_raw_trust(samples: list[SpeedObservation], window: int = 3) -> lis
 
 
 def _get_model_kwargs(variant: str, models_dir: str | None = None) -> dict | None:
-	"""根据 OCR 模型变体返回 RapidOCR 的 kwargs。模型文件不存在时返回 None。"""
+	"""根据 OCR 模型变体返回 RapidOCR 的 kwargs。模型文件不存在时返回 None。
+	注意: 仅 v5_server 需要额外配置 keys_path 到 config.yaml。"""
 	import rapidocr_onnxruntime as rr
 	if models_dir is None:
 		models_dir = str(Path(rr.__file__).parent / "models")
 	variants: dict[str, dict[str, str]] = {
-		"v3": {},  # 默认 PP-OCRv3，无需额外参数
+		"v3": {},
 		"v3_server": {
 			"det_model_path": f"{models_dir}/ch_PP-OCRv3_det_server_infer.onnx",
 			"rec_model_path": f"{models_dir}/ch_PP-OCRv3_rec_server_infer.onnx",
@@ -515,12 +516,28 @@ def _get_model_kwargs(variant: str, models_dir: str | None = None) -> dict | Non
 	cfg = variants.get(variant)
 	if cfg is None:
 		return None
-	if not cfg:  # v3: 默认
+	if not cfg:  # v3: 默认，无需 kwargs
 		return None
 	for key, path in cfg.items():
 		if not Path(path).exists():
 			return None
+	# v5_server: 需要手动注入 keys_path 到 config.yaml 的 Rec 段
+	if variant == "v5_server":
+		_set_rec_keys_path(str(Path(rr.__file__).parent / "config.yaml"),
+		                   f"{models_dir}/ppocr_keys_v1.txt")
 	return cfg
+
+
+def _set_rec_keys_path(config_path: str, keys_path: str) -> None:
+	"""临时修改 rapidocr config.yaml 的 Rec.keys_path。"""
+	from rapidocr_onnxruntime.utils import read_yaml
+	config = read_yaml(config_path)
+	if config.get("Rec", {}).get("keys_path") == keys_path:
+		return  # 已设置
+	config.setdefault("Rec", {})["keys_path"] = keys_path
+	import yaml
+	with open(config_path, "w") as f:
+		yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
 
 
 def correct_speed_series(
