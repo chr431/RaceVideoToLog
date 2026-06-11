@@ -646,6 +646,11 @@ class RaceVideoToLogApp:
 		self._drag_start_x: int | None = None
 		self._drag_start_y: int | None = None
 
+		# 颜色键值拾取
+		self._key_color: tuple[int, int, int] | None = None  # (B,G,R) 采样颜色
+		self._key_color_str = tk.StringVar(value="未设置")
+		self._pick_color_mode = False  # 拾取模式激活
+
 		# 数据分析 tab
 		self._analysis_csvs: list[str | None] = [None, None, None]  # 最多 3 个 CSV
 		self._analysis_labels: list[tk.StringVar] = []
@@ -767,6 +772,16 @@ class RaceVideoToLogApp:
 		self.preview_canvas.bind("<ButtonPress-1>", self._on_drag_start)
 		self.preview_canvas.bind("<B1-Motion>", self._on_drag_motion)
 		self.preview_canvas.bind("<ButtonRelease-1>", self._on_drag_end)
+		self.preview_canvas.bind("<ButtonPress-3>", self._on_color_pick)  # 右键拾取颜色
+
+		# 键值颜色拾取工具栏
+		key_bar = ttk.Frame(preview_box)
+		key_bar.grid(row=1, column=0, sticky="ew", pady=(6, 0))
+		ttk.Button(key_bar, text="拾取键值颜色", command=self._start_color_pick).grid(row=0, column=0, sticky="w")
+		self._key_swatch = tk.Canvas(key_bar, width=20, height=20, background="#888888", highlightthickness=1, highlightbackground="#555555")
+		self._key_swatch.grid(row=0, column=1, padx=(6, 6))
+		ttk.Label(key_bar, textvariable=self._key_color_str, foreground="#555555").grid(row=0, column=2, sticky="w")
+		ttk.Button(key_bar, text="清除", command=self._clear_key_color).grid(row=0, column=3, padx=(4, 0))
 
 		# ── Tab 2: 数据分析 ──
 		self._build_analysis_tab()
@@ -1231,6 +1246,46 @@ class RaceVideoToLogApp:
 		self._drag_start_x = None
 		self._drag_start_y = None
 
+	def _start_color_pick(self) -> None:
+		"""激活键值颜色拾取模式，下一次右键点击预览将采样颜色。"""
+		self._pick_color_mode = True
+		self.status_var.set("请在预览图上右键点击速度数字以拾取颜色...")
+
+	def _clear_key_color(self) -> None:
+		"""清除键值颜色，恢复默认的 CLAHE+OTSU 预处理。"""
+		self._key_color = None
+		self._key_color_str.set("未设置")
+		self._key_swatch.configure(background="#888888")
+		self.status_var.set("已清除键值颜色，将使用默认预处理。")
+
+	def _on_color_pick(self, event: tk.Event) -> None:
+		"""预览图右键采样像素颜色作为 OCR 键值。"""
+		if not self._pick_color_mode:
+			return
+		if self.first_frame_bgr is None:
+			return
+		self._pick_color_mode = False
+		# 将 canvas 坐标映射到原始图像坐标
+		cw = max(1, self.preview_canvas.winfo_width())
+		ch = max(1, self.preview_canvas.winfo_height())
+		if not self.preview_photo:
+			return
+		img_w = self.preview_photo.width()
+		img_h = self.preview_photo.height()
+		ox = (cw - img_w) / 2
+		oy = (ch - img_h) / 2
+		ix = int((event.x - ox) / self._preview_scale)
+		iy = int((event.y - oy) / self._preview_scale)
+		ih, iw = self.first_frame_bgr.shape[:2]
+		ix = max(0, min(iw - 1, ix))
+		iy = max(0, min(ih - 1, iy))
+		b, g, r = (int(c) for c in self.first_frame_bgr[iy, ix])
+		self._key_color = (b, g, r)
+		self._key_color_str.set(f"BGR({b},{g},{r})")
+		hex_color = f"#{r:02x}{g:02x}{b:02x}"
+		self._key_swatch.configure(background=hex_color)
+		self.status_var.set(f"已拾取键值颜色 BGR({b},{g},{r})，右键点击预览图可重选。")
+
 	def schedule_preview_refresh(self) -> None:
 		if self.preview_after_id is not None:
 			self.root.after_cancel(self.preview_after_id)
@@ -1401,15 +1456,25 @@ class RaceVideoToLogApp:
 		return self.ocr_engine
 
 	def preprocess_crop(self, crop: np.ndarray, target_h: float, pad_px: float) -> np.ndarray:
-		gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-		h, w = gray.shape[:2]
+		h, w = crop.shape[:2]
 		target_h = max(8.0, float(target_h))
 		pad_px = max(0.0, float(pad_px))
 
-		# CLAHE 增强局部对比度，使 OTSU 二值化更稳定（尤其白字灰底场景）
-		clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-		gray = clahe.apply(gray)
-		_, gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+		if self._key_color is not None:
+			# 颜色键值模式：基于 BGR 色距分割数字
+			kb, kg, kr = self._key_color
+			dist = np.sqrt(
+				(crop.astype(np.float32)[:,:,0] - kb) ** 2 +
+				(crop.astype(np.float32)[:,:,1] - kg) ** 2 +
+				(crop.astype(np.float32)[:,:,2] - kr) ** 2
+			)
+			gray = np.where(dist < 60, 255, 0).astype(np.uint8)
+		else:
+			# 默认模式：CLAHE + OTSU
+			gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+			clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+			gray = clahe.apply(gray)
+			_, gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
 		scale = target_h / float(h) if h > 0 else 1.0
 		if abs(scale - 1.0) > 0.02:
@@ -1422,8 +1487,11 @@ class RaceVideoToLogApp:
 		return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 
 	def _preprocess_fallback(self, crop: np.ndarray, target_h: float, pad_px: float) -> np.ndarray:
-		"""备选预处理：纯 OTSU（无 CLAHE），应对 CLAHE 偶尔失效的边缘情况。"""
+		"""备选预处理：有键值时回退到 CLAHE+OTSU，无键值时回退到纯 OTSU。"""
 		gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+		if self._key_color is not None:
+			clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+			gray = clahe.apply(gray)
 		_, gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 		h, w = gray.shape[:2]
 		th = max(8.0, float(target_h))
