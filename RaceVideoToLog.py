@@ -1406,7 +1406,9 @@ class RaceVideoToLogApp:
 		target_h = max(8.0, float(target_h))
 		pad_px = max(0.0, float(pad_px))
 
-		# Otsu 二值化：纯黑白，匹配 PP-OCR 训练数据分布，显著提升准确率（96.6% vs 95.6%）
+		# CLAHE 增强局部对比度，使 OTSU 二值化更稳定（尤其白字灰底场景）
+		clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+		gray = clahe.apply(gray)
 		_, gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
 		scale = target_h / float(h) if h > 0 else 1.0
@@ -1420,10 +1422,8 @@ class RaceVideoToLogApp:
 		return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 
 	def _preprocess_fallback(self, crop: np.ndarray, target_h: float, pad_px: float) -> np.ndarray:
-		"""备选预处理：CLAHE 增强对比度 + OTSU，应对白字灰底低对比度场景。"""
+		"""备选预处理：纯 OTSU（无 CLAHE），应对 CLAHE 偶尔失效的边缘情况。"""
 		gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-		clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-		gray = clahe.apply(gray)
 		_, gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 		h, w = gray.shape[:2]
 		th = max(8.0, float(target_h))
@@ -1938,6 +1938,8 @@ def run_headless(args: argparse.Namespace) -> None:
 	observations: list[SpeedObservation] = []
 	for idx, (ts, crop) in enumerate(raw_frames):
 		gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+		clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+		gray = clahe.apply(gray)
 		_, gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 		h, w = gray.shape[:2]
 		target_h = max(8.0, float(args.target_h))
@@ -1952,10 +1954,8 @@ def run_headless(args: argparse.Namespace) -> None:
 		ocr_result, _ = ocr(proc)
 		sv, rt = extract_speed_value(ocr_result)
 		if sv is None:
-			# 备选预处理：CLAHE 增强对比度
+			# 备选预处理：纯 OTSU（无 CLAHE）
 			gray2 = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-			clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-			gray2 = clahe.apply(gray2)
 			_, gray2 = cv2.threshold(gray2, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 			th = max(8.0, float(args.target_h))
 			sc = th / gray2.shape[0] if gray2.shape[0] > 0 else 1.0
