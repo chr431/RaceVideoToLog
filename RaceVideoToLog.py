@@ -2549,6 +2549,21 @@ def _retry_suspect_frames(
 		best_speed, best_text, best_diff = _ocr_retry(
 			ocr, proc3, expected, best_speed, best_text, best_diff, args)
 
+		# 变体4: 互补引擎 — Tesseract（若可用，完全不同的识别算法）
+		best_speed, best_text, best_diff = _ocr_retry_tesseract(
+			crop, expected, best_speed, best_text, best_diff, args)
+
+		# 变体5: 互补引擎 — 反向二值化（黑底白字→白底黑字）
+		th_inv = cv2.bitwise_not(th2) if th2.shape == gray.shape else cv2.bitwise_not(
+			cv2.resize(th2, (gray.shape[1], gray.shape[0])))
+		h5, w5 = th_inv.shape[:2]
+		sc5 = max(8.0, float(args.target_h)) / h5 if h5 > 0 else 1.0
+		if abs(sc5 - 1.0) > 0.02:
+			th_inv = cv2.resize(th_inv, (max(1, int(w5 * sc5)), int(max(8.0, float(args.target_h)))), interpolation=cv2.INTER_LINEAR)
+		proc5 = cv2.cvtColor(th_inv, cv2.COLOR_GRAY2BGR)
+		best_speed, best_text, best_diff = _ocr_retry(
+			ocr, proc5, expected, best_speed, best_text, best_diff, args)
+
 		if best_diff < abs(new_obs[idx].raw_speed_kmh - expected):
 			new_obs[idx] = SpeedObservation(
 				timestamp=new_obs[idx].timestamp,
@@ -2572,6 +2587,31 @@ def _ocr_retry(ocr, proc, expected, best_speed, best_text, best_diff, args):
 		diff = abs(spd - expected)
 		if diff < best_diff:
 			return spd, rt, diff
+	return best_speed, best_text, best_diff
+
+
+def _ocr_retry_tesseract(crop, expected, best_speed, best_text, best_diff, args):
+	"""Tesseract 互补引擎重试：若 pytesseract 可用则使用，否则跳过。"""
+	try:
+		import pytesseract, re as _re
+	except ImportError:
+		return best_speed, best_text, best_diff
+
+	try:
+		gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+		h, w = gray.shape[:2]
+		scale = max(3.0, 80.0 / h)
+		gray = cv2.resize(gray, (max(1, int(w * scale)), int(h * scale)), interpolation=cv2.INTER_CUBIC)
+		cfg = "--psm 7 -c tessedit_char_whitelist=0123456789"
+		text = pytesseract.image_to_string(gray, config=cfg).strip()
+		text = _re.sub(r"\D", "", text)
+		if text:
+			spd = float(text) * SOURCE_TO_KMH[args.format]
+			diff = abs(spd - expected)
+			if diff < best_diff:
+				return spd, text, diff
+	except Exception:
+		pass
 	return best_speed, best_text, best_diff
 
 
