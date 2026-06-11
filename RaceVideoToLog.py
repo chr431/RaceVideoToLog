@@ -1519,19 +1519,18 @@ class RaceVideoToLogApp:
 		pad_px = max(0.0, float(pad_px))
 
 		if self._key_color1 is not None or self._key_color2 is not None:
-			# 颜色键值模式：基于 BGR 色距分割（匹配任一键值即为前景）
-			dist = np.full(crop.shape[:2], 999.0, dtype=np.float32)
+			# 颜色键值：欧式距离，亮色阈值35暗色25
+			h, w = crop.shape[:2]
+			mask = np.zeros((h, w), dtype=np.uint8)
+			cf = crop.astype(np.float32)
 			for kc in (self._key_color1, self._key_color2):
 				if kc is None:
 					continue
 				kb, kg, kr = kc
-				d = np.sqrt(
-					(crop.astype(np.float32)[:,:,0] - kb) ** 2 +
-					(crop.astype(np.float32)[:,:,1] - kg) ** 2 +
-					(crop.astype(np.float32)[:,:,2] - kr) ** 2
-				)
-				dist = np.minimum(dist, d)
-			gray = np.where(dist < 60, 255, 0).astype(np.uint8)
+				thr = 35 if (kb + kg + kr) > 600 else 25
+				d = np.sqrt((cf[:,:,0] - kb)**2 + (cf[:,:,1] - kg)**2 + (cf[:,:,2] - kr)**2)
+				mask[d < thr] = 255
+			gray = mask
 		else:
 			# 默认模式：CLAHE + OTSU
 			gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
@@ -1992,6 +1991,8 @@ def main() -> None:
 	parser.add_argument("-o", "--output", type=str, help="输出 CSV 路径 (默认 视频名_log.csv)")
 	parser.add_argument("--analysis", nargs=2, metavar=("CSV1","CSV2"), help="无头分析: 从两个CSV导出v-t/v-x/Δt-x的PNG")
 	parser.add_argument("--analysis-out", type=str, help="分析PNG输出前缀 (默认 CSV1所在目录/分析)")
+	parser.add_argument("--key-color", type=str, metavar="B,G,R[;B,G,R]",
+		help="键值颜色: 逗号分隔的B,G,R, 多个用分号分隔 (如 255,250,247;135,124,121)")
 	args = parser.parse_args()
 
 	if args.video:
@@ -2044,6 +2045,16 @@ def run_headless(args: argparse.Namespace) -> None:
 	# 读取帧
 	x1, y1, x2, y2 = clamp_region(*region, width, height)
 	frame_step = max(1, args.div)
+
+	# 解析键值颜色
+	key_colors: list[tuple[int, int, int]] = []
+	if args.key_color:
+		for part in args.key_color.split(";"):
+			ch = [int(c.strip()) for c in part.split(",")]
+			if len(ch) == 3:
+				key_colors.append((ch[0], ch[1], ch[2]))
+		print(f"键值颜色: {key_colors}")
+
 	raw_frames: list[tuple[float, np.ndarray]] = []
 	fi = 0
 	while True:
@@ -2068,33 +2079,12 @@ def run_headless(args: argparse.Namespace) -> None:
 	# OCR
 	observations: list[SpeedObservation] = []
 	for idx, (ts, crop) in enumerate(raw_frames):
-		gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-		clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-		gray = clahe.apply(gray)
-		_, gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-		h, w = gray.shape[:2]
-		target_h = max(8.0, float(args.target_h))
-		scale = target_h / h if h > 0 else 1.0
-		if abs(scale - 1.0) > 0.02:
-			gray = cv2.resize(gray, (max(1, int(w * scale)), int(target_h)), interpolation=cv2.INTER_LINEAR)
-		pad_int = args.pad
-		if pad_int > 0:
-			gray = cv2.copyMakeBorder(gray, pad_int, pad_int, pad_int, pad_int, cv2.BORDER_REPLICATE)
-		proc = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-
+		proc = _preprocess_headless(crop, args.target_h, args.pad, key_colors)
 		ocr_result, _ = ocr(proc)
 		sv, rt = extract_speed_value(ocr_result)
 		if sv is None:
-			# 备选预处理：纯 OTSU（无 CLAHE）
-			gray2 = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-			_, gray2 = cv2.threshold(gray2, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-			th = max(8.0, float(args.target_h))
-			sc = th / gray2.shape[0] if gray2.shape[0] > 0 else 1.0
-			if abs(sc - 1.0) > 0.02:
-				gray2 = cv2.resize(gray2, (max(1, int(gray2.shape[1] * sc)), int(th)), interpolation=cv2.INTER_LINEAR)
-			if args.pad > 0:
-				gray2 = cv2.copyMakeBorder(gray2, args.pad, args.pad, args.pad, args.pad, cv2.BORDER_REPLICATE)
-			proc2 = cv2.cvtColor(gray2, cv2.COLOR_GRAY2BGR)
+			# 备选预处理
+			proc2 = _preprocess_headless_fallback(crop, args.target_h, args.pad, key_colors)
 			ocr_result, _ = ocr(proc2)
 			sv, rt = extract_speed_value(ocr_result)
 		if sv is not None and rt is not None:
@@ -2147,6 +2137,51 @@ def run_headless(args: argparse.Namespace) -> None:
 	corrected_count = sum(r[3] for r in rows)
 	print(f"导出完成: {output_path}")
 	print(f"共 {len(rows)} 条, 纠错 {corrected_count} 条 (准确率 {100 - corrected_count/len(rows)*100:.1f}%)")
+
+
+def _preprocess_headless(crop, target_h, pad, key_colors):
+	"""无头模式预处理：有键值时颜色分割，否则 CLAHE+OTSU。"""
+	if key_colors:
+		h, w = crop.shape[:2]
+		mask = np.zeros((h, w), dtype=np.uint8)
+		cf = crop.astype(np.float32)
+		for kb, kg, kr in key_colors:
+			thr = 35 if (kb + kg + kr) > 600 else 25
+			d = np.sqrt((cf[:,:,0] - kb)**2 + (cf[:,:,1] - kg)**2 + (cf[:,:,2] - kr)**2)
+			mask[d < thr] = 255
+		gray = mask
+	else:
+		gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+		clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+		gray = clahe.apply(gray)
+		_, gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+	return _finish_preprocess(gray, target_h, pad)
+
+
+def _preprocess_headless_fallback(crop, target_h, pad, key_colors):
+	"""无头模式备选预处理。"""
+	if key_colors:
+		gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+		clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+		gray = clahe.apply(gray)
+		_, gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+	else:
+		gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+		_, gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+	return _finish_preprocess(gray, target_h, pad)
+
+
+def _finish_preprocess(gray, target_h, pad):
+	"""统一的缩放+填充+转BGR。"""
+	h, w = gray.shape[:2]
+	th = max(8.0, float(target_h))
+	scale = th / h if h > 0 else 1.0
+	if abs(scale - 1.0) > 0.02:
+		gray = cv2.resize(gray, (max(1, int(w * scale)), int(th)), interpolation=cv2.INTER_LINEAR)
+	pad_int = int(pad)
+	if pad_int > 0:
+		gray = cv2.copyMakeBorder(gray, pad_int, pad_int, pad_int, pad_int, cv2.BORDER_REPLICATE)
+	return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 
 
 def _retry_suspect_frames(
