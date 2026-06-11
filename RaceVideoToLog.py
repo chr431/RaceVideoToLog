@@ -264,6 +264,37 @@ class SpeedObservation:
 	raw_text: str
 
 
+# ── 单数字 MLP 分类器（三位分框模式使用）──
+class _DigitClassifier:
+	"""微型 3 层 MLP（560→128→64→10），用 OCR 标注数据训练。"""
+	def __init__(self, model_path: str | None = None):
+		self._W1 = self._b1 = self._W2 = self._b2 = self._W3 = self._b3 = None
+		if model_path:
+			self.load(model_path)
+
+	def load(self, path: str) -> None:
+		import pickle
+		with open(path, "rb") as f:
+			m = pickle.load(f)
+		self._W1 = m["W1"]; self._b1 = m["b1"]
+		self._W2 = m["W2"]; self._b2 = m["b2"]
+		self._W3 = m["W3"]; self._b3 = m["b3"]
+
+	@property
+	def loaded(self) -> bool:
+		return self._W1 is not None
+
+	def classify(self, gray_20x28: "np.ndarray") -> tuple[int, float]:
+		"""返回 (数字0-9, 置信度0-1)。输入: 20x28 二值化灰度图。"""
+		x = gray_20x28.reshape(1, -1).astype(np.float32) / 255.0
+		z1 = x @ self._W1 + self._b1; a1 = np.maximum(0, z1)
+		z2 = a1 @ self._W2 + self._b2; a2 = np.maximum(0, z2)
+		z3 = a2 @ self._W3 + self._b3
+		e = np.exp(z3 - np.max(z3, axis=1, keepdims=True))
+		probs = e / np.sum(e, axis=1, keepdims=True)
+		return int(np.argmax(probs)), float(np.max(probs))
+
+
 def format_duration(seconds: float) -> str:
 	seconds = max(0.0, float(seconds))
 	total = int(round(seconds))
@@ -765,6 +796,7 @@ class RaceVideoToLogApp:
 		self.backend_var = tk.StringVar(value="auto")
 		self._ocr_model_var = tk.StringVar(value="v5 均衡")  # OCR 模型版本
 		self._multi_box_var = tk.BooleanVar(value=False)  # 三位分框模式
+		self._digit_cls: _DigitClassifier | None = None  # 单数字MLP分类器
 
 		# 时间轴范围
 		self._frame_start_var = tk.StringVar(value="")
@@ -1746,7 +1778,44 @@ class RaceVideoToLogApp:
 	def _ocr_multi_box(
 		self, crop: np.ndarray, ocr, target_h: float, pad_px: float
 	) -> tuple[float | None, str | None]:
-		"""三位分框模式：全图预处理后裁剪1/3+背景填充，保持全宽以维持OCR置信度。"""
+		"""三位分框模式：优先用 MLP 单数字分类器，回退到 RapidOCR 遮罩式。"""
+		digit_cls = getattr(self, "_digit_cls", None)
+		if digit_cls is not None and digit_cls.loaded:
+			return self._ocr_multi_box_mlp(crop, digit_cls)
+		return self._ocr_multi_box_ocr(crop, ocr, target_h, pad_px)
+
+	def _ocr_multi_box_mlp(
+		self, crop: np.ndarray, digit_cls
+	) -> tuple[float | None, str | None]:
+		"""MLP 单数字分类器版本。"""
+		h, w = crop.shape[:2]
+		third = w // 3
+		digits: list[str] = []
+		for slot in range(3):
+			x1 = slot * third
+			x2 = (slot + 1) * third if slot < 2 else w
+			sub = crop[:, x1:x2]
+			gray = cv2.cvtColor(sub, cv2.COLOR_BGR2GRAY)
+			clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+			gray = clahe.apply(gray)
+			_, gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+			if np.mean(gray) < 128:
+				gray = 255 - gray
+			gray = cv2.resize(gray, (20, 28))
+			d, _conf = digit_cls.classify(gray)
+			digits.append(str(d))
+		combined = "".join(digits)
+		if combined and any(c for c in combined):
+			try:
+				return float(combined), combined
+			except ValueError:
+				return None, None
+		return None, None
+
+	def _ocr_multi_box_ocr(
+		self, crop: np.ndarray, ocr, target_h: float, pad_px: float
+	) -> tuple[float | None, str | None]:
+		"""RapidOCR 遮罩式三位分框（回退方案）。"""
 		import re as _re
 		h, w = crop.shape[:2]
 		if w < 15:
@@ -2114,6 +2183,16 @@ class RaceVideoToLogApp:
 		self._check_cancel()
 		ocr = self.get_ocr_engine()
 
+		# 加载单数字 MLP 分类器（三位分框模式使用）
+		if self._multi_box_var.get() and self._digit_cls is None:
+			model_path = Path(__file__).parent / "digit_model.pkl"
+			if model_path.exists():
+				try:
+					self._digit_cls = _DigitClassifier(str(model_path))
+					print("[MLP] 单数字分类器已加载", flush=True)
+				except Exception:
+					pass
+
 		capture = cv2.VideoCapture(str(self.video_path))
 		if not capture.isOpened():
 			raise RuntimeError("无法重新打开视频文件。")
@@ -2436,6 +2515,18 @@ def run_headless(args: argparse.Namespace) -> None:
 		multi_kwargs = dict(model_kwargs or {})
 		multi_kwargs["text_score"] = 0.1
 		ocr = RapidOCR(**multi_kwargs)
+		# 尝试加载 MLP 单数字分类器
+		model_path = Path(__file__).parent / "digit_model.pkl"
+		if model_path.exists():
+			try:
+				_digit_cls = _DigitClassifier(str(model_path))
+				print("[MLP] 单数字分类器已加载")
+			except Exception:
+				_digit_cls = None
+		else:
+			_digit_cls = None
+	else:
+		_digit_cls = None
 
 	# 读取视频信息
 	cap = cv2.VideoCapture(str(video_path))
@@ -2489,7 +2580,7 @@ def run_headless(args: argparse.Namespace) -> None:
 	multi = args.multi_box
 	for idx, (ts, crop) in enumerate(raw_frames):
 		if multi:
-			sv, rt = _ocr_headless_multi_box(crop, ocr, args.target_h, args.pad, key_colors, args)
+			sv, rt = _ocr_headless_multi_box(crop, ocr, args.target_h, args.pad, key_colors, args, _digit_cls)
 		else:
 			proc = _preprocess_headless(crop, args.target_h, args.pad, key_colors)
 			ocr_result, _ = ocr(proc)
@@ -2595,8 +2686,41 @@ def _finish_preprocess(gray, target_h, pad):
 	return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 
 
-def _ocr_headless_multi_box(crop, ocr, target_h, pad, key_colors, args):
-	"""无头模式三位分框：全图预处理→裁剪1/3+背景填充→OCR。"""
+def _ocr_headless_multi_box(crop, ocr, target_h, pad, key_colors, args, digit_cls=None):
+	"""无头模式三位分框：优先 MLP 分类器，回退 RapidOCR 遮罩式。"""
+	if digit_cls is not None and digit_cls.loaded:
+		return _ocr_headless_multi_box_mlp(crop, digit_cls)
+
+
+def _ocr_headless_multi_box_mlp(crop, digit_cls):
+	"""MLP 单数字分类器版本。"""
+	h, w = crop.shape[:2]
+	third = w // 3
+	digits: list[str] = []
+	for slot in range(3):
+		x1 = slot * third
+		x2 = (slot + 1) * third if slot < 2 else w
+		sub = crop[:, x1:x2]
+		gray = cv2.cvtColor(sub, cv2.COLOR_BGR2GRAY)
+		clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+		gray = clahe.apply(gray)
+		_, gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+		if np.mean(gray) < 128:
+			gray = 255 - gray
+		gray = cv2.resize(gray, (20, 28))
+		d, _conf = digit_cls.classify(gray)
+		digits.append(str(d))
+	combined = "".join(digits)
+	if combined and any(c for c in combined):
+		try:
+			return float(combined), combined
+		except ValueError:
+			return None, None
+	return None, None
+
+
+def _ocr_headless_multi_box_ocr(crop, ocr, target_h, pad, key_colors, args):
+	"""RapidOCR 遮罩式三位分框（回退方案）。"""
 	import re as _re
 	h, w = crop.shape[:2]
 	if w < 15:
