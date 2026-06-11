@@ -34,9 +34,29 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('onnxruntime')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
+# ── 精简：移除不需要的文件 ──
+# v5_server 模型 (已从 UI 移除，省 165MB)
+# DirectML provider (仅 CUDA 需要)
+_EXCLUDE_FILES = {
+    'ch_PP-OCRv5_det_server_infer.onnx', 'ch_PP-OCRv5_rec_server_infer.onnx',
+    'DirectML.dll',
+}
+datas = [(s, d) for s, d in datas if os.path.basename(s) not in _EXCLUDE_FILES]
+binaries = [(s, d) for s, d in binaries if os.path.basename(s) not in _EXCLUDE_FILES]
+
 # matplotlib（数据分析 tab）
 tmp_ret = collect_all('matplotlib')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+
+# ── 精简：移除不需要的文件 ──
+# v5_server 模型 (已从 UI 移除，省 165MB)
+# DirectML provider (仅 CUDA 需要)
+_EXCLUDE_FILES = {
+    'ch_PP-OCRv5_det_server_infer.onnx', 'ch_PP-OCRv5_rec_server_infer.onnx',
+    'DirectML.dll',
+}
+datas = [(s, d) for s, d in datas if os.path.basename(s) not in _EXCLUDE_FILES]
+binaries = [(s, d) for s, d in binaries if os.path.basename(s) not in _EXCLUDE_FILES]
 
 # ── 精简二进制：移除不需要的 DLL ──
 _NVIDIA_DLL_PREFIXES = {
@@ -83,8 +103,6 @@ a = Analysis(
         'matplotlib.backends.backend_tkcairo', 'matplotlib.backends.backend_wx',
         'matplotlib.backends.backend_wxagg', 'matplotlib.backends.backend_wxcairo',
         'matplotlib.sphinxext',
-        # sympy: 完全排除
-        'sympy',
         # scipy: 已用纯 numpy 替代 savgol_filter，完全排除
         'scipy',
     ],
