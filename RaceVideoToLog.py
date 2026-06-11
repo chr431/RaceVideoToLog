@@ -764,6 +764,7 @@ class RaceVideoToLogApp:
 		self.num_workers_var = tk.StringVar(value="4")
 		self.backend_var = tk.StringVar(value="auto")
 		self._ocr_model_var = tk.StringVar(value="v5 均衡")  # OCR 模型版本
+		self._multi_box_var = tk.BooleanVar(value=False)  # 三位分框模式
 
 		# 时间轴范围
 		self._frame_start_var = tk.StringVar(value="")
@@ -900,6 +901,9 @@ class RaceVideoToLogApp:
 		_MODELS = {"v3": "v3 快速", "v5_mobile": "v5 均衡"}
 		self._model_combo = ttk.Combobox(perf_box, textvariable=self._ocr_model_var, values=[_MODELS[k] for k in ["v3","v5_mobile"]], width=11, state="readonly")
 		self._model_combo.grid(row=0, column=6, sticky="ew", padx=(6, 2))
+
+		self._multi_box_cb = ttk.Checkbutton(perf_box, text="三位分框", variable=self._multi_box_var)
+		self._multi_box_cb.grid(row=0, column=7, sticky="w", padx=(12, 0))
 
 		ttk.Label(perf_box, text="OCR 高度 (px)").grid(row=1, column=0, sticky="w", pady=(8,0))
 		ttk.Entry(perf_box, textvariable=self.target_height_var, width=8).grid(row=1, column=1, sticky="ew", padx=(6, 14), pady=(8,0))
@@ -1735,6 +1739,49 @@ class RaceVideoToLogApp:
 			gray = cv2.copyMakeBorder(gray, pad_int, pad_int, pad_int, pad_int, cv2.BORDER_REPLICATE)
 		return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 
+	def _ocr_multi_box(
+		self, crop: np.ndarray, ocr, target_h: float, pad_px: float
+	) -> tuple[float | None, str | None]:
+		"""三位分框模式：将 crop 横向三等分，每格独立 OCR，拼接为速度值。"""
+		import re as _re
+		h, w = crop.shape[:2]
+		if w < 15:
+			return None, None  # 框太窄，无法三等分
+		third = w // 3
+		sub_crops = [
+			crop[:, 0:third],
+			crop[:, third:2 * third],
+			crop[:, 2 * third:w],
+		]
+		digits: list[str] = []
+		for sub in sub_crops:
+			proc = self.preprocess_crop(sub, target_h, pad_px)
+			ocr_result, _ = ocr(proc)
+			speed_val, raw_text = extract_speed_value(ocr_result)
+			if speed_val is not None and raw_text is not None:
+				text = _re.sub(r"\D", "", raw_text)
+				if text:
+					digits.append(text[-1])  # 取最右位数字
+					continue
+			# 备选预处理再试
+			proc_fb = self._preprocess_fallback(sub, target_h, pad_px)
+			ocr_result, _ = ocr(proc_fb)
+			speed_val, raw_text = extract_speed_value(ocr_result)
+			if speed_val is not None and raw_text is not None:
+				text = _re.sub(r"\D", "", raw_text)
+				if text:
+					digits.append(text[-1])
+					continue
+			digits.append("")  # 该格识别失败
+
+		combined = "".join(digits)
+		if combined and any(c for c in combined):
+			try:
+				return float(combined), combined
+			except ValueError:
+				return None, None
+		return None, None
+
 	def _ocr_sequential(
 		self,
 		raw_frames: list[tuple[float, np.ndarray]],
@@ -1744,14 +1791,18 @@ class RaceVideoToLogApp:
 		total_frames: int,
 	) -> list[SpeedObservation]:
 		observations: list[SpeedObservation] = []
+		multi = self._multi_box_var.get()
 		for idx, (timestamp, crop) in enumerate(raw_frames):
-			proc = self.preprocess_crop(crop, target_h, pad_px)
-			ocr_result, _ = ocr(proc)
-			speed_value, raw_text = extract_speed_value(ocr_result)
-			if speed_value is None:
-				proc_fb = self._preprocess_fallback(crop, target_h, pad_px)
-				ocr_result, _ = ocr(proc_fb)
+			if multi:
+				speed_value, raw_text = self._ocr_multi_box(crop, ocr, target_h, pad_px)
+			else:
+				proc = self.preprocess_crop(crop, target_h, pad_px)
+				ocr_result, _ = ocr(proc)
 				speed_value, raw_text = extract_speed_value(ocr_result)
+				if speed_value is None:
+					proc_fb = self._preprocess_fallback(crop, target_h, pad_px)
+					ocr_result, _ = ocr(proc_fb)
+					speed_value, raw_text = extract_speed_value(ocr_result)
 			if speed_value is not None and raw_text is not None:
 				observations.append(
 					SpeedObservation(
@@ -1779,11 +1830,16 @@ class RaceVideoToLogApp:
 		q: Queue = Queue(maxsize=queue_size)
 		errors: list[Exception] = []
 
+		multi = self._multi_box_var.get()
+
 		def producer() -> None:
 			try:
 				for timestamp, crop in raw_frames:
-					proc = self.preprocess_crop(crop, target_h, pad_px)
-					q.put((timestamp, proc))
+					if multi:
+						q.put((timestamp, crop))  # 传原始 crop，由消费者分框
+					else:
+						proc = self.preprocess_crop(crop, target_h, pad_px)
+						q.put((timestamp, proc))
 				q.put(None)
 			except Exception as exc:
 				errors.append(exc)
@@ -1798,9 +1854,12 @@ class RaceVideoToLogApp:
 			item = q.get()
 			if item is None:
 				break
-			timestamp, proc_img = item
-			ocr_result, _ = ocr(proc_img)
-			speed_value, raw_text = extract_speed_value(ocr_result)
+			timestamp, img = item
+			if multi:
+				speed_value, raw_text = self._ocr_multi_box(img, ocr, target_h, pad_px)
+			else:
+				ocr_result, _ = ocr(img)
+				speed_value, raw_text = extract_speed_value(ocr_result)
 			if speed_value is not None and raw_text is not None:
 				observations.append(
 					SpeedObservation(
@@ -1956,24 +2015,30 @@ class RaceVideoToLogApp:
 		engines = self.get_ocr_engines(1)
 		engine = engines[0]
 		self._check_cancel()
+		multi = self._multi_box_var.get()
 
-		with ThreadPoolExecutor(max_workers=num_workers) as pool:
-			preprocessed = list(pool.map(
-				lambda item: (item[0], self.preprocess_crop(item[1], target_h, pad_px)),
-				raw_frames,
-			))
+		if not multi:
+			with ThreadPoolExecutor(max_workers=num_workers) as pool:
+				preprocessed = list(pool.map(
+					lambda item: (item[0], self.preprocess_crop(item[1], target_h, pad_px)),
+					raw_frames,
+				))
+		else:
+			preprocessed = [(ts, crop) for ts, crop in raw_frames]  # 传原始 crop
 		self._check_cancel()
 
 		observations: list[SpeedObservation | None] = [None] * len(raw_frames)
 
-		def _ocr_one(idx: int, ts: float, proc: np.ndarray, crop_bgr: np.ndarray) -> tuple[int, SpeedObservation | None]:
-			ocr_result, _ = engine(proc)
-			sv, rt = extract_speed_value(ocr_result)
-			if sv is None:
-				# 备选预处理：CLAHE 增强对比度
-				proc_fb = self._preprocess_fallback(crop_bgr, target_h, pad_px)
-				ocr_result, _ = engine(proc_fb)
+		def _ocr_one(idx: int, ts: float, img: np.ndarray, crop_bgr: np.ndarray) -> tuple[int, SpeedObservation | None]:
+			if multi:
+				sv, rt = self._ocr_multi_box(crop_bgr, engine, target_h, pad_px)
+			else:
+				ocr_result, _ = engine(img)
 				sv, rt = extract_speed_value(ocr_result)
+				if sv is None:
+					proc_fb = self._preprocess_fallback(crop_bgr, target_h, pad_px)
+					ocr_result, _ = engine(proc_fb)
+					sv, rt = extract_speed_value(ocr_result)
 			if sv is not None and rt is not None:
 				return idx, SpeedObservation(
 					timestamp=ts,
@@ -2295,6 +2360,7 @@ def main() -> None:
 		help="键值颜色: 逗号分隔的B,G,R, 多个用分号分隔 (如 255,250,247;135,124,121)")
 	parser.add_argument("--frame-start", type=int, metavar="N", help="起始帧 (含)")
 	parser.add_argument("--frame-end", type=int, metavar="N", help="结束帧 (不含)")
+	parser.add_argument("--multi-box", action="store_true", help="三位分框模式：横向三等分ROI，每格独立OCR")
 	args = parser.parse_args()
 
 	if args.video:
@@ -2334,6 +2400,8 @@ def run_headless(args: argparse.Namespace) -> None:
 	_reset_backend()
 	backend_actual = _select_backend(args.backend)
 	print(f"OCR 后端: {backend_actual}, 模型: {args.ocr_model}")
+	if args.multi_box:
+		print("模式: 三位分框 (ROI 横向三等分独立 OCR)")
 	model_kwargs = _get_model_kwargs(args.ocr_model)
 	if model_kwargs is None and args.ocr_model != "v3":
 		print(f"警告: {args.ocr_model} 模型文件不存在，回退到默认 v3")
@@ -2388,15 +2456,18 @@ def run_headless(args: argparse.Namespace) -> None:
 
 	# OCR
 	observations: list[SpeedObservation] = []
+	multi = args.multi_box
 	for idx, (ts, crop) in enumerate(raw_frames):
-		proc = _preprocess_headless(crop, args.target_h, args.pad, key_colors)
-		ocr_result, _ = ocr(proc)
-		sv, rt = extract_speed_value(ocr_result)
-		if sv is None:
-			# 备选预处理
-			proc2 = _preprocess_headless_fallback(crop, args.target_h, args.pad, key_colors)
-			ocr_result, _ = ocr(proc2)
+		if multi:
+			sv, rt = _ocr_headless_multi_box(crop, ocr, args.target_h, args.pad, key_colors, args)
+		else:
+			proc = _preprocess_headless(crop, args.target_h, args.pad, key_colors)
+			ocr_result, _ = ocr(proc)
 			sv, rt = extract_speed_value(ocr_result)
+			if sv is None:
+				proc2 = _preprocess_headless_fallback(crop, args.target_h, args.pad, key_colors)
+				ocr_result, _ = ocr(proc2)
+				sv, rt = extract_speed_value(ocr_result)
 		if sv is not None and rt is not None:
 			observations.append(SpeedObservation(
 				timestamp=ts,
@@ -2492,6 +2563,43 @@ def _finish_preprocess(gray, target_h, pad):
 	if pad_int > 0:
 		gray = cv2.copyMakeBorder(gray, pad_int, pad_int, pad_int, pad_int, cv2.BORDER_REPLICATE)
 	return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+
+
+def _ocr_headless_multi_box(crop, ocr, target_h, pad, key_colors, args):
+	"""无头模式三位分框：横向三等分，每格独立OCR后拼接。"""
+	import re as _re
+	h, w = crop.shape[:2]
+	if w < 15:
+		return None, None
+	third = w // 3
+	sub_crops = [crop[:, 0:third], crop[:, third:2*third], crop[:, 2*third:w]]
+	digits: list[str] = []
+	for sub in sub_crops:
+		proc = _preprocess_headless(sub, target_h, pad, key_colors)
+		ocr_result, _ = ocr(proc)
+		sv, rt = extract_speed_value(ocr_result)
+		if sv is not None and rt is not None:
+			text = _re.sub(r"\D", "", rt)
+			if text:
+				digits.append(text[-1])
+				continue
+		# 备选
+		proc2 = _preprocess_headless_fallback(sub, target_h, pad, key_colors)
+		ocr_result, _ = ocr(proc2)
+		sv, rt = extract_speed_value(ocr_result)
+		if sv is not None and rt is not None:
+			text = _re.sub(r"\D", "", rt)
+			if text:
+				digits.append(text[-1])
+				continue
+		digits.append("")
+	combined = "".join(digits)
+	if combined and any(c for c in combined):
+		try:
+			return float(combined), combined
+		except ValueError:
+			return None, None
+	return None, None
 
 
 def _retry_suspect_frames(
