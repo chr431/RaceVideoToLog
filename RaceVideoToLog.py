@@ -763,12 +763,11 @@ class RaceVideoToLogApp:
 		self.pad_var = tk.StringVar(value="0")
 		self.num_workers_var = tk.StringVar(value="4")
 		self.backend_var = tk.StringVar(value="auto")
-		self._ocr_model_var = tk.StringVar(value="v5 均衡")  # OCR 模型版本
+		self._ocr_model_var = tk.StringVar(value="v5 首选(推荐)")  # OCR 模型版本
 
 		# 时间轴范围
 		self._frame_start_var = tk.StringVar(value="")
 		self._frame_end_var = tk.StringVar(value="")
-		self._color_threshold_var = tk.StringVar(value="50")  # 色距判定范围 (0=严格, 50=默认, 100=2倍)
 		self._manual_correction_var = tk.BooleanVar(value=False)  # 人工纠错
 
 		self.is_exporting = False
@@ -784,13 +783,6 @@ class RaceVideoToLogApp:
 
 		self._drag_start_x: int | None = None
 		self._drag_start_y: int | None = None
-
-		# 颜色键值拾取（支持双键值）
-		self._key_color1: tuple[int, int, int] | None = None
-		self._key_color2: tuple[int, int, int] | None = None
-		self._key_color_str1 = tk.StringVar(value="未设置")
-		self._key_color_str2 = tk.StringVar(value="未设置")
-		self._pick_color_mode = 0  # 0=关闭, 1=拾取键值1, 2=拾取键值2
 		self._preview_frame_pos = tk.DoubleVar(value=0)  # 预览帧位置
 
 		# 数据分析 tab
@@ -897,7 +889,7 @@ class RaceVideoToLogApp:
 		self.backend_combo.bind("<<ComboboxSelected>>", self._on_backend_changed)
 
 		ttk.Label(perf_box, text="模型").grid(row=0, column=5, sticky="w", padx=(12,0))
-		_MODELS = {"v3": "v3 快速", "v5_mobile": "v5 均衡"}
+		_MODELS = {"v3": "v3 备选", "v5_mobile": "v5 首选(推荐)"}
 		self._model_combo = ttk.Combobox(perf_box, textvariable=self._ocr_model_var, values=[_MODELS[k] for k in ["v3","v5_mobile"]], width=11, state="readonly")
 		self._model_combo.grid(row=0, column=6, sticky="ew", padx=(6, 2))
 
@@ -932,7 +924,7 @@ class RaceVideoToLogApp:
 		self.preview_canvas.bind("<ButtonPress-1>", self._on_drag_start)
 		self.preview_canvas.bind("<B1-Motion>", self._on_drag_motion)
 		self.preview_canvas.bind("<ButtonRelease-1>", self._on_drag_end)
-		self.preview_canvas.bind("<ButtonPress-3>", self._on_color_pick)  # 右键拾取颜色
+		self.preview_canvas.bind("<ButtonPress-3>", lambda e: None)  # 右键保留
 
 		# 视频帧位置滑动条 + 刷新按钮
 		slider_row = ttk.Frame(preview_box)
@@ -943,22 +935,7 @@ class RaceVideoToLogApp:
 		self._preview_slider.grid(row=0, column=0, sticky="ew")
 		ttk.Button(slider_row, text="刷新预览", command=self.refresh_preview).grid(row=0, column=1, padx=(8, 0))
 
-		# 键值颜色拾取工具栏（双键值）
-		key_bar = ttk.Frame(preview_box)
-		key_bar.grid(row=2, column=0, sticky="ew", pady=(6, 0))
-		ttk.Button(key_bar, text="键值1", command=lambda: self._start_color_pick(1)).grid(row=0, column=0, sticky="w")
-		self._key_swatch1 = tk.Canvas(key_bar, width=18, height=18, background="#888888", highlightthickness=1, highlightbackground="#555555")
-		self._key_swatch1.grid(row=0, column=1, padx=(4, 2))
-		ttk.Label(key_bar, textvariable=self._key_color_str1, foreground="#555555", font=("", 8), width=16, anchor="w").grid(row=0, column=2, sticky="w")
-		ttk.Button(key_bar, text="键值2", command=lambda: self._start_color_pick(2)).grid(row=0, column=3, padx=(10, 0))
-		self._key_swatch2 = tk.Canvas(key_bar, width=18, height=18, background="#888888", highlightthickness=1, highlightbackground="#555555")
-		self._key_swatch2.grid(row=0, column=4, padx=(4, 2))
-		ttk.Label(key_bar, textvariable=self._key_color_str2, foreground="#555555", font=("", 8), width=16, anchor="w").grid(row=0, column=5, sticky="w")
-		ttk.Button(key_bar, text="清除全部", command=self._clear_key_color).grid(row=0, column=6, padx=(12, 0))
-		ttk.Label(key_bar, text="范围").grid(row=0, column=7, padx=(12, 0))
-		ttk.Entry(key_bar, textvariable=self._color_threshold_var, width=4, justify="center").grid(row=0, column=8, padx=(2, 0))
-		ttk.Label(key_bar, text="(0=严格, 50默认, 100=2倍)", foreground="#555555", font=("", 7)).grid(row=0, column=9, padx=(2, 0))
-
+		# 预览画布右键：重置视图
 		# ── Tab 2: 数据分析 ──
 		self._build_analysis_tab()
 
@@ -1422,58 +1399,6 @@ class RaceVideoToLogApp:
 		self._drag_start_x = None
 		self._drag_start_y = None
 
-	def _start_color_pick(self, slot: int) -> None:
-		"""激活键值颜色拾取模式（slot=1或2），下一次右键点击预览将采样颜色。"""
-		self._pick_color_mode = slot
-		self.status_var.set(f"请在预览图上右键点击速度数字以拾取键值{slot}...")
-
-	def _clear_key_color(self) -> None:
-		"""清除全部键值颜色，恢复默认的 CLAHE+OTSU 预处理。"""
-		self._key_color1 = None
-		self._key_color2 = None
-		self._key_color_str1.set("未设置")
-		self._key_color_str2.set("未设置")
-		self._key_swatch1.configure(background="#888888")
-		self._key_swatch2.configure(background="#888888")
-		self.status_var.set("已清除键值颜色，将使用默认预处理。")
-
-	def _on_color_pick(self, event: tk.Event) -> None:
-		"""预览图右键采样像素颜色作为 OCR 键值。"""
-		if not self._pick_color_mode:
-			return
-		if self.first_frame_bgr is None:
-			return
-		slot = self._pick_color_mode
-		self._pick_color_mode = 0
-		# 将 canvas 坐标映射到原始图像坐标
-		cw = max(1, self.preview_canvas.winfo_width())
-		ch = max(1, self.preview_canvas.winfo_height())
-		if not self.preview_photo:
-			return
-		img_w = self.preview_photo.width()
-		img_h = self.preview_photo.height()
-		ox = (cw - img_w) / 2
-		oy = (ch - img_h) / 2
-		ix = int((event.x - ox) / self._preview_scale)
-		iy = int((event.y - oy) / self._preview_scale)
-		# 获取当前预览帧像素
-		cur_frame = self._get_preview_frame()
-		if cur_frame is None:
-			cur_frame = self.first_frame_bgr
-		ih, iw = cur_frame.shape[:2]
-		ix = max(0, min(iw - 1, ix))
-		iy = max(0, min(ih - 1, iy))
-		b, g, r = (int(c) for c in cur_frame[iy, ix])
-		if slot == 1:
-			self._key_color1 = (b, g, r)
-			self._key_color_str1.set(f"BGR({b},{g},{r})")
-			self._key_swatch1.configure(background=f"#{r:02x}{g:02x}{b:02x}")
-		else:
-			self._key_color2 = (b, g, r)
-			self._key_color_str2.set(f"BGR({b},{g},{r})")
-			self._key_swatch2.configure(background=f"#{r:02x}{g:02x}{b:02x}")
-		self.status_var.set(f"已拾取键值{slot} BGR({b},{g},{r})")
-
 	def _get_preview_frame(self) -> np.ndarray | None:
 		"""根据滑动条位置读取对应视频帧。"""
 		if self.video_path is None or self.metadata is None:
@@ -1659,7 +1584,7 @@ class RaceVideoToLogApp:
 		selected_label = self.backend_var.get()
 		selected_key = BACKEND_LABELS_REV.get(selected_label, "auto")
 		actual = _select_backend(selected_key)
-		MODEL_REV = {"v3 快速": "v3", "v5 均衡": "v5_mobile"}
+		MODEL_REV = {"v3 备选": "v3", "v5 首选(推荐)": "v5_mobile"}
 		model_key = MODEL_REV.get(self._ocr_model_var.get(), "v5_mobile")
 		print(f"[OCR] 后端: {actual}, 模型: {model_key}", flush=True)
 		kwargs = _get_model_kwargs(model_key)
@@ -1679,34 +1604,11 @@ class RaceVideoToLogApp:
 		return self.ocr_engine
 
 	def preprocess_crop(self, crop: np.ndarray, target_h: float, pad_px: float) -> np.ndarray:
-		h, w = crop.shape[:2]
+		"""预处理：灰度化 + 缩放到 target_h（PP-OCR 内置归一化，无需 CLAHE/OTSU）。"""
+		gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+		h, w = gray.shape[:2]
 		target_h = max(8.0, float(target_h))
 		pad_px = max(0.0, float(pad_px))
-
-		if self._key_color1 is not None or self._key_color2 is not None:
-			# 颜色键值：欧式距离，亮色阈值35暗色25
-			h, w = crop.shape[:2]
-			mask = np.zeros((h, w), dtype=np.uint8)
-			cf = crop.astype(np.float32)
-			for kc in (self._key_color1, self._key_color2):
-				if kc is None:
-					continue
-				kb, kg, kr = kc
-				base = 35.0 if (kb + kg + kr) > 600 else 25.0
-				try:
-					user_scale = max(0.0, float(self._color_threshold_var.get())) / 50.0
-				except ValueError:
-					user_scale = 1.0
-				thr = max(1.0, base * user_scale) if user_scale > 0 else 1  # 0=严格一致
-				d = np.sqrt((cf[:,:,0] - kb)**2 + (cf[:,:,1] - kg)**2 + (cf[:,:,2] - kr)**2)
-				mask[d < thr] = 255
-			gray = mask
-		else:
-			# 默认模式：CLAHE + OTSU
-			gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-			clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-			gray = clahe.apply(gray)
-			_, gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
 		scale = target_h / float(h) if h > 0 else 1.0
 		if abs(scale - 1.0) > 0.02:
@@ -1719,11 +1621,8 @@ class RaceVideoToLogApp:
 		return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 
 	def _preprocess_fallback(self, crop: np.ndarray, target_h: float, pad_px: float) -> np.ndarray:
-		"""备选预处理：有键值时回退到 CLAHE+OTSU，无键值时回退到纯 OTSU。"""
+		"""备选预处理：OTSU 二值化 + 缩放。"""
 		gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-		if self._key_color1 is not None or self._key_color2 is not None:
-			clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-			gray = clahe.apply(gray)
 		_, gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 		h, w = gray.shape[:2]
 		th = max(8.0, float(target_h))
@@ -2287,7 +2186,7 @@ def main() -> None:
 	parser.add_argument("--backend", choices=["auto","cuda","cpu"], default="auto",
 		help="OCR 后端: auto/cuda/cpu (默认 auto)")
 	parser.add_argument("--ocr-model", choices=["v3","v5_mobile"], default="v5_mobile",
-		help="OCR 模型: v3(快速)/v5_mobile(均衡,默认)")
+		help="OCR 模型: v3(备选)/v5_mobile(首选,默认)")
 	parser.add_argument("-o", "--output", type=str, help="输出 CSV 路径 (默认 视频名_log.csv)")
 	parser.add_argument("--analysis", nargs=2, metavar=("CSV1","CSV2"), help="无头分析: 从两个CSV导出v-t/v-x/Δt-x的PNG")
 	parser.add_argument("--analysis-out", type=str, help="分析PNG输出前缀 (默认 CSV1所在目录/分析)")
@@ -2351,15 +2250,6 @@ def run_headless(args: argparse.Namespace) -> None:
 	x1, y1, x2, y2 = clamp_region(*region, width, height)
 	frame_step = max(1, args.div)
 
-	# 解析键值颜色
-	key_colors: list[tuple[int, int, int]] = []
-	if args.key_color:
-		for part in args.key_color.split(";"):
-			ch = [int(c.strip()) for c in part.split(",")]
-			if len(ch) == 3:
-				key_colors.append((ch[0], ch[1], ch[2]))
-		print(f"键值颜色: {key_colors}")
-
 	raw_frames: list[tuple[float, np.ndarray]] = []
 	fi = 0
 	while True:
@@ -2389,12 +2279,11 @@ def run_headless(args: argparse.Namespace) -> None:
 	# OCR
 	observations: list[SpeedObservation] = []
 	for idx, (ts, crop) in enumerate(raw_frames):
-		proc = _preprocess_headless(crop, args.target_h, args.pad, key_colors)
+		proc = _preprocess_headless(crop, args.target_h, args.pad)
 		ocr_result, _ = ocr(proc)
 		sv, rt = extract_speed_value(ocr_result)
 		if sv is None:
-			# 备选预处理
-			proc2 = _preprocess_headless_fallback(crop, args.target_h, args.pad, key_colors)
+			proc2 = _preprocess_headless_fallback(crop, args.target_h, args.pad)
 			ocr_result, _ = ocr(proc2)
 			sv, rt = extract_speed_value(ocr_result)
 		if sv is not None and rt is not None:
@@ -2449,35 +2338,16 @@ def run_headless(args: argparse.Namespace) -> None:
 	print(f"共 {len(rows)} 条, 纠错 {corrected_count} 条 (准确率 {100 - corrected_count/len(rows)*100:.1f}%)")
 
 
-def _preprocess_headless(crop, target_h, pad, key_colors):
-	"""无头模式预处理：有键值时颜色分割，否则 CLAHE+OTSU。"""
-	if key_colors:
-		h, w = crop.shape[:2]
-		mask = np.zeros((h, w), dtype=np.uint8)
-		cf = crop.astype(np.float32)
-		for kb, kg, kr in key_colors:
-			thr = 35 if (kb + kg + kr) > 600 else 25
-			d = np.sqrt((cf[:,:,0] - kb)**2 + (cf[:,:,1] - kg)**2 + (cf[:,:,2] - kr)**2)
-			mask[d < thr] = 255
-		gray = mask
-	else:
-		gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-		clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-		gray = clahe.apply(gray)
-		_, gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+def _preprocess_headless(crop, target_h, pad):
+	"""无头模式预处理：灰度化 + 缩放。"""
+	gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
 	return _finish_preprocess(gray, target_h, pad)
 
 
-def _preprocess_headless_fallback(crop, target_h, pad, key_colors):
-	"""无头模式备选预处理。"""
-	if key_colors:
-		gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-		clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-		gray = clahe.apply(gray)
-		_, gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-	else:
-		gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-		_, gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+def _preprocess_headless_fallback(crop, target_h, pad):
+	"""无头模式备选预处理：OTSU 二值化。"""
+	gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+	_, gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 	return _finish_preprocess(gray, target_h, pad)
 
 
