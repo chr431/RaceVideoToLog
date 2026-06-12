@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
@@ -21,6 +22,7 @@ from PIL import Image, ImageTk
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
+import ocr_engine
 from ocr_engine import *
 
 class RaceVideoToLogApp:
@@ -958,7 +960,7 @@ class RaceVideoToLogApp:
 			if len(observations) % 10 == 0:
 				pct = ((idx + 1) / total_frames * 90.0) + 5.0
 				self.root.after(0, self._update_progress,
-					f"[{_gpu_backend}] 正在处理... {len(observations)} 条 ({pct:.1f}%)", pct)
+					f"[{ocr_engine._gpu_backend}] 正在处理... {len(observations)} 条 ({pct:.1f}%)", pct)
 		return observations
 
 	def _ocr_pipeline(
@@ -1008,7 +1010,7 @@ class RaceVideoToLogApp:
 			if done % 10 == 0:
 				pct = (done / total_frames * 90.0) + 5.0
 				self.root.after(0, self._update_progress,
-					f"[{_gpu_backend}] 正在处理... {len(observations)} 条 ({pct:.1f}%)", pct)
+					f"[{ocr_engine._gpu_backend}] 正在处理... {len(observations)} 条 ({pct:.1f}%)", pct)
 		t.join()
 		if errors:
 			raise errors[0]
@@ -1191,7 +1193,7 @@ class RaceVideoToLogApp:
 				if done % 50 == 0:
 					pct = (done / total_frames * 90.0) + 5.0
 					self.root.after(0, self._update_progress,
-						f"[{_gpu_backend}×{num_workers}] 正在处理... {done}/{total_frames} ({pct:.1f}%)", pct)
+						f"[{ocr_engine._gpu_backend}×{num_workers}] 正在处理... {done}/{total_frames} ({pct:.1f}%)", pct)
 		finally:
 			pool.shutdown(wait=False, cancel_futures=True)
 
@@ -1264,11 +1266,11 @@ class RaceVideoToLogApp:
 			raise RuntimeError("未从视频中读取到任何帧，请检查采样率设置。")
 
 		self.root.after(0, self._update_progress,
-			f"OCR 引擎: {_gpu_backend}，正在处理 {total_frames} 帧 (workers={num_workers})...", 5.0)
+			f"OCR 引擎: {ocr_engine._gpu_backend}，正在处理 {total_frames} 帧 (workers={num_workers})...", 5.0)
 		self._check_cancel()
 
 		# 仅 CUDA 支持并行推理
-		if num_workers > 1 and _gpu_backend == "CUDA":
+		if num_workers > 1 and ocr_engine._gpu_backend == "CUDA":
 			observations = self._ocr_cuda_parallel(raw_frames, target_h, pad_px, total_frames, num_workers)
 		elif num_workers > 1:
 			observations = self._ocr_pipeline(raw_frames, ocr, target_h, pad_px, total_frames, num_workers)
@@ -1316,7 +1318,7 @@ class RaceVideoToLogApp:
 		# 重算准确率（含人工纠正的 flag=2）
 		_corrected_count = sum(1 for r in rows if r[3] >= 1)
 		_accuracy = (1 - _corrected_count / len(rows)) * 100 if rows else 100.0
-		self._write_csv_with_retry(output_path, rows, _t_elapsed, total_frames, _accuracy, _gpu_backend)
+		self._write_csv_with_retry(output_path, rows, _t_elapsed, total_frames, _accuracy, ocr_engine._gpu_backend)
 
 	def _run_manual_correction(self, observations, raw_frames, rows):
 		"""人工纠错：弹出窗口依次展示标记帧，用户手动输入正确速度。"""
