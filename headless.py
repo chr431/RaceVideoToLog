@@ -90,8 +90,11 @@ def run_headless(args: argparse.Namespace) -> None:
 				raw_speed_kmh=sv * SOURCE_TO_KMH[args.format],
 				raw_text=rt,
 			))
-		if (idx + 1) % 100 == 0:
-			print(f"  OCR 进度: {idx + 1}/{total}")
+		if (idx + 1) % 10 == 0:
+			print(f"\r  OCR 进度: {idx + 1}/{total} 已识别: {len(observations)}", end="", flush=True)
+
+	if observations:
+		print(f"\r  OCR 完成: {total} 帧, 识别 {len(observations)} 条" + " " * 10)
 
 	if not observations:
 		print("错误: 未识别到速度数据")
