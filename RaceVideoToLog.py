@@ -1190,7 +1190,7 @@ class RaceVideoToLogApp:
 				idx, obs = f.result()
 				observations[idx] = obs
 				done += 1
-				if done % 50 == 0:
+				if done % 10 == 0:
 					pct = (done / total_frames * 90.0) + 5.0
 					self.root.after(0, self._update_progress,
 						f"[{ocr_engine._gpu_backend}×{num_workers}] 正在处理... {done}/{total_frames} ({pct:.1f}%)", pct)
@@ -1266,7 +1266,7 @@ class RaceVideoToLogApp:
 			raise RuntimeError("未从视频中读取到任何帧，请检查采样率设置。")
 
 		self.root.after(0, self._update_progress,
-			f"OCR 引擎: {ocr_engine._gpu_backend}，正在处理 {total_frames} 帧 (workers={num_workers})...", 5.0)
+			f"开始处理 {total_frames} 帧 (workers={num_workers})...", 5.0)
 		self._check_cancel()
 
 		# 仅 CUDA 支持并行推理
