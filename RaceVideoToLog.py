@@ -13,6 +13,7 @@ import argparse
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
+from queue import Queue
 import threading
 import cv2
 import numpy as np
