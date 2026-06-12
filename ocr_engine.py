@@ -28,6 +28,19 @@ matplotlib.rcParams["axes.unicode_minus"] = False
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
+# ── 导出列表：包含 _ 前缀的私有符号供 RaceVideoToLog.py / headless.py 使用 ──
+__all__ = [
+    "SpeedObservation", "VideoMetadata", "RapidOCR",
+    "extract_speed_value", "convert_speed_to_kmh", "clamp_region",
+    "correct_speed_series", "build_speed_candidates",
+    "normalize_ocr_text", "format_duration", "codec_from_fourcc",
+    "safe_int", "safe_float", "SOURCE_TO_KMH", "OCR_NUMBER_RE",
+    "_reset_backend", "_select_backend", "_get_model_kwargs",
+    "_gpu_backend", "_gpu_patched", "_CancelExport",
+    "_parse_int_or_none", "_estimate_raw_trust", "_savgol_filter_np",
+    "_set_rec_keys_path",
+]
+
 # ═══════════════════ GPU 加速前置：注册 CUDA/cuDNN DLL ═══════════════════
 def _register_gpu_dlls() -> None:
     """将 CUDA 和 cuDNN DLL 按依赖顺序预加载到进程内存。"""

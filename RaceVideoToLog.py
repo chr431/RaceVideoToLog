@@ -10,6 +10,16 @@
 from __future__ import annotations
 
 import argparse
+import tkinter as tk
+from tkinter import filedialog, messagebox, ttk
+from pathlib import Path
+import threading
+import cv2
+import numpy as np
+from PIL import Image, ImageTk
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+
 from ocr_engine import *
 
 class RaceVideoToLogApp:
@@ -862,6 +872,7 @@ class RaceVideoToLogApp:
 		self.status_var.set(f"OCR 后端: {status_map.get(actual, actual)}（选择: {selected_label}）")
 
 	def _create_ocr_engine(self) -> RapidOCR:
+		self._check_cancel()
 		_reset_backend()
 		BACKEND_LABELS_REV = {"自动": "auto", "CUDA": "cuda", "CPU": "cpu"}
 		selected_label = self.backend_var.get()
@@ -873,6 +884,7 @@ class RaceVideoToLogApp:
 		kwargs = _get_model_kwargs(model_key)
 		if kwargs is None and model_key != "v3":
 			print(f"[OCR] 警告: {model_key} 模型文件不存在，回退到默认 v3")
+		self._check_cancel()
 		return RapidOCR(**(kwargs or {}))
 
 	def get_ocr_engines(self, count: int) -> list[RapidOCR]:
@@ -1081,6 +1093,7 @@ class RaceVideoToLogApp:
 		self._cancel_flag = True
 		self.cancel_btn.config(state="disabled")
 		self.status_var.set("正在取消...")
+		self.root.update()  # 立即刷新 GUI 显示取消状态
 
 	def _on_export_cancelled(self) -> None:
 		self.is_exporting = False
@@ -1204,7 +1217,9 @@ class RaceVideoToLogApp:
 
 		self.root.after(0, self._update_progress, "正在初始化 OCR 引擎...", 0.0)
 		self._check_cancel()
+		self.root.update_idletasks()  # 确保进度消息显示
 		ocr = self.get_ocr_engine()
+		self.root.update_idletasks()  # 引擎就绪后刷新
 
 		capture = cv2.VideoCapture(str(self.video_path))
 		if not capture.isOpened():
