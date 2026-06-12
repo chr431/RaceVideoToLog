@@ -35,6 +35,7 @@ __all__ = [
     "correct_speed_series", "build_speed_candidates",
     "normalize_ocr_text", "format_duration", "codec_from_fourcc",
     "safe_int", "safe_float", "SOURCE_TO_KMH", "OCR_NUMBER_RE",
+    "ocr_digital_fallback",
     "_reset_backend", "_select_backend", "_get_model_kwargs",
     "_gpu_backend", "_gpu_patched", "_CancelExport",
     "_parse_int_or_none", "_estimate_raw_trust", "_savgol_filter_np",
@@ -376,6 +377,56 @@ def extract_speed_value(ocr_result) -> tuple[float | None, str | None]:
 		return None, None
 
 
+def ocr_digital_fallback(
+	ocr, crop_bgr, max_speed_kmh=400
+) -> tuple[float | None, str | None]:
+	"""数字仪表 OCR 后备链：CLAHE+OTSU → 常规检测 → 无检测模式。
+
+	用于 PP-OCR 标准预处理未命中时的后备策略（如赛车 HUD 仪表字体）。
+	返回 (speed_value, raw_text) 或 (None, None)。
+	"""
+	gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
+
+	# ── 策略1: CLAHE + OTSU + 常规检测 ──
+	clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+	enhanced = clahe.apply(gray)
+	_, enhanced = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+	h, w = enhanced.shape[:2]
+	for th in (28, 32, 48):
+		scale = th / h
+		resized = cv2.resize(enhanced, (max(1, int(w * scale)), th))
+		bgr_input = cv2.cvtColor(resized, cv2.COLOR_GRAY2BGR)
+		try:
+			result, _ = ocr(bgr_input)
+			sv, rt = extract_speed_value(result)
+			if sv is not None and sv <= max_speed_kmh:
+				return sv, rt
+		except Exception:
+			pass
+
+	# ── 策略2: use_det=False（跳过检测，多预处理变体）──
+	variants = [
+		("clahe_otsu", enhanced),
+		("inv", cv2.bitwise_not(gray)),
+		("otsu", cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]),
+		("otsu_inv", cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]),
+	]
+	for _label, img in variants:
+		for th in (32, 48):
+			scale = th / h
+			resized = cv2.resize(img, (max(1, int(w * scale)), th))
+			bgr_input = cv2.cvtColor(resized, cv2.COLOR_GRAY2BGR)
+			try:
+				result, _ = ocr(bgr_input, use_det=False)
+				sv, rt = extract_speed_value(result)
+				if sv is not None and sv <= max_speed_kmh:
+					return sv, rt
+			except Exception:
+				pass
+
+	return None, None
+
+
 def convert_speed_to_kmh(speed_value: float, source_unit: str) -> float:
 	return float(speed_value) * SOURCE_TO_KMH[source_unit]
 
@@ -453,13 +504,18 @@ def build_speed_candidates(raw_text: str, max_speed_kmh: float) -> list[float]:
 		for candidate in range(suffix_value, max_speed_int + 1, step):
 			candidates.add(float(candidate))
 
-	# 策略3: 常见 OCR 字符混淆替换
-	# 对每位数字尝试替换为视觉相似的字符
+	# 策略3: 常见 OCR 字符混淆替换（对称映射）
 	_CONFUSION_MAP = {
-		"0": ["8"], "8": ["0", "6", "3"],
-		"6": ["8", "5"], "5": ["6"],
-		"3": ["8"], "1": ["7"], "7": ["1", "2", "4"],
-		"2": ["7"], "4": ["7"], "9": ["8"],
+		"0": ["8", "6", "9"],
+		"1": ["7", "2"],
+		"2": ["7", "1", "3"],
+		"3": ["8", "9", "2", "5"],
+		"4": ["7", "9"],
+		"5": ["6", "3", "8", "9"],
+		"6": ["8", "5", "0", "2"],
+		"7": ["1", "2", "4"],
+		"8": ["0", "6", "3", "5", "9"],
+		"9": ["8", "3", "5", "0", "4"],
 	}
 	for i, ch in enumerate(text):
 		for alt in _CONFUSION_MAP.get(ch, []):
@@ -665,6 +721,46 @@ def correct_speed_series(
 			else:
 				seg_candidates[-1] = [raw_val]
 
+		# ── 插值候选：基于锚点的线性插值 + 邻近可信帧引导 ──
+		anchor_left = seg_candidates[0][0]
+		anchor_right = seg_candidates[-1][0]
+		seg_duration = times[seg_end] - times[seg_start]
+
+		# 找段外最近的可信帧（非可疑）作为额外锚点参考
+		ref_before = None
+		for k in range(seg_start - 1, -1, -1):
+			if not suspect[k] and raw_vals[k] <= max_speed_kmh:
+				ref_before = raw_vals[k]
+				break
+		ref_after = None
+		for k in range(seg_end + 1, n):
+			if not suspect[k] and raw_vals[k] <= max_speed_kmh:
+				ref_after = raw_vals[k]
+				break
+
+		for idx in range(seg_start, seg_end + 1):
+			if idx == seg_start or idx == seg_end:
+				continue
+			local_i = idx - seg_start
+			# 线性插值候选
+			if seg_duration > 0:
+				frac = (times[idx] - times[seg_start]) / seg_duration
+				interp_val = anchor_left + (anchor_right - anchor_left) * frac
+				lo = max(0.0, interp_val - 15.0)
+				hi = min(max_speed_kmh, interp_val + 15.0)
+				for v in range(int(lo), int(hi) + 1, 2):
+					if v <= max_speed_kmh:
+						seg_candidates[local_i].append(float(v))
+			# 邻近可信帧候选（段外的可信邻居值）
+			for ref_val in (ref_before, ref_after):
+				if ref_val is not None:
+					lo = max(0.0, ref_val - 10.0)
+					hi = min(max_speed_kmh, ref_val + 10.0)
+					for v in range(int(lo), int(hi) + 1, 2):
+						if v <= max_speed_kmh:
+							seg_candidates[local_i].append(float(v))
+			# 去重排序
+			seg_candidates[local_i] = sorted(set(seg_candidates[local_i]))
 		# DP 初始化
 		states: list[tuple[float, float, int | None]] = []
 		first_cands = seg_candidates[0]
@@ -727,6 +823,46 @@ def correct_speed_series(
 			abs_idx = seg_start + t
 			if suspect[abs_idx]:
 				result[abs_idx] = seg_result[t]
+
+	# ── 后处理：中值离群值检测 ──
+	# DP 可能因候选不足而无法修正某些帧。用滑动中值检测残差。
+	POST_WINDOW = 5
+	POST_THRESH = 30.0  # km/h，超过此偏差视为离群
+	for i in range(n):
+		lo = max(0, i - POST_WINDOW)
+		hi = min(n, i + POST_WINDOW + 1)
+		neighbors = [result[j] for j in range(lo, hi) if j != i]
+		if len(neighbors) >= 3:
+			neighbors.sort()
+			median = neighbors[len(neighbors) // 2]
+			if abs(result[i] - median) > POST_THRESH:
+				# 离群：用最近可信邻居线性插值替换
+				# 找前后最近的非离群帧
+				left_idx = i - 1
+				while left_idx >= 0:
+					nb = [result[j] for j in range(max(0, left_idx - POST_WINDOW), min(n, left_idx + POST_WINDOW + 1)) if j != left_idx]
+					if len(nb) >= 3:
+						nb.sort()
+						if abs(result[left_idx] - nb[len(nb)//2]) <= POST_THRESH:
+							break
+					left_idx -= 1
+				right_idx = i + 1
+				while right_idx < n:
+					nb = [result[j] for j in range(max(0, right_idx - POST_WINDOW), min(n, right_idx + POST_WINDOW + 1)) if j != right_idx]
+					if len(nb) >= 3:
+						nb.sort()
+						if abs(result[right_idx] - nb[len(nb)//2]) <= POST_THRESH:
+							break
+					right_idx += 1
+				if left_idx >= 0 and right_idx < n:
+					# 线性插值
+					frac = (times[i] - times[left_idx]) / max(times[right_idx] - times[left_idx], 1e-6)
+					result[i] = result[left_idx] + (result[right_idx] - result[left_idx]) * frac
+				elif left_idx >= 0:
+					result[i] = result[left_idx]
+				elif right_idx < n:
+					result[i] = result[right_idx]
+				# 否则保持原值
 
 	return result
 

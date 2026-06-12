@@ -5,7 +5,7 @@ from pathlib import Path
 import cv2, numpy as np
 from rapidocr_onnxruntime import RapidOCR
 from ocr_engine import *
-from ocr_engine import _reset_backend, _select_backend, _get_model_kwargs, _savgol_filter_np
+from ocr_engine import _reset_backend, _select_backend, _get_model_kwargs, _savgol_filter_np, ocr_digital_fallback
 
 def run_headless(args: argparse.Namespace) -> None:
 	"""命令行无头模式：不启动 GUI，直接分析并输出 CSV。"""
@@ -84,6 +84,9 @@ def run_headless(args: argparse.Namespace) -> None:
 			proc2 = _preprocess_headless_fallback(crop, args.target_h, args.pad)
 			ocr_result, _ = ocr(proc2)
 			sv, rt = extract_speed_value(ocr_result)
+		if sv is None:
+			# 数字仪表后备链：use_det=False → EasyOCR
+			sv, rt = ocr_digital_fallback(ocr, crop, args.max_speed)
 		if sv is not None and rt is not None:
 			observations.append(SpeedObservation(
 				timestamp=ts,

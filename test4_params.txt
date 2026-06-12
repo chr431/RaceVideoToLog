@@ -1,0 +1,17 @@
+# Test4 参数配置
+# 视频: test4.mp4
+# 说明: 赛车仪表数字显示，依赖 CLAHE+OTSU 预处理（重构后恢复）。
+
+ROI_X1=858
+ROI_Y1=939
+ROI_X2=964
+ROI_Y2=1004
+
+FRAME_START=80
+FRAME_END=6320
+# 时间范围: 1.33s - 105.3s (60fps)
+
+MAX_SPEED=400
+MAX_ACCEL=100
+DIV=2
+BACKEND=cpu
