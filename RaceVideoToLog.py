@@ -64,7 +64,9 @@ class RaceVideoToLogApp:
 		# 时间轴范围
 		self._frame_start_var = tk.StringVar(value="")
 		self._frame_end_var = tk.StringVar(value="")
-		self._manual_correction_var = None  # deprecated，保留以防旧引用
+		self._human_baseline_var = tk.BooleanVar(value=False)  # 人工基准模式
+		self._baseline_freq_var = tk.StringVar(value="10")    # 人工基准抽样频率
+		self._debug_log_var = tk.BooleanVar(value=False)       # 调试日志
 
 		self.is_exporting = False
 		self._cancel_flag = False
@@ -173,8 +175,8 @@ class RaceVideoToLogApp:
 		perf_box.columnconfigure(1, weight=1); perf_box.columnconfigure(3, weight=1); perf_box.columnconfigure(5, weight=1)
 
 		ttk.Label(perf_box, text="采样间隔").grid(row=0, column=0, sticky="w")
-		self.frame_div_combo = ttk.Combobox(perf_box, textvariable=self.frame_div_var, values=["1","2","3","4","5"], width=6, state="readonly")
-		self.frame_div_combo.grid(row=0, column=1, sticky="ew", padx=(6, 2))
+		self.frame_div_spinbox = ttk.Spinbox(perf_box, textvariable=self.frame_div_var, from_=1, to=10, width=5)
+		self.frame_div_spinbox.grid(row=0, column=1, sticky="ew", padx=(6, 2))
 		ttk.Label(perf_box, text="1/N 采集", foreground="#555555").grid(row=0, column=2, sticky="w")
 
 		ttk.Label(perf_box, text="OCR 后端").grid(row=0, column=3, sticky="w", padx=(20,0))
@@ -194,7 +196,17 @@ class RaceVideoToLogApp:
 		ttk.Entry(perf_box, textvariable=self.pad_var, width=8).grid(row=1, column=3, sticky="ew", padx=(6, 14), pady=(8,0))
 		ttk.Label(perf_box, text="并行线程数").grid(row=1, column=4, sticky="w", pady=(8,0))
 		ttk.Entry(perf_box, textvariable=self.num_workers_var, width=8).grid(row=1, column=5, sticky="ew", padx=(6, 14), pady=(8,0))
-		ttk.Label(perf_box, text=">1 时启用并行推理。", foreground="#555555").grid(row=2, column=0, columnspan=6, sticky="w", pady=(8, 0))
+		ttk.Label(perf_box, text=">1 时启用并行推理。", foreground="#555555").grid(row=2, column=0, columnspan=6, sticky="w", pady=(4, 0))
+		baseline_frame = ttk.Frame(perf_box)
+		baseline_frame.grid(row=3, column=0, columnspan=6, sticky="ew", pady=(8, 0))
+		ttk.Checkbutton(baseline_frame, text="人工基准",
+			variable=self._human_baseline_var).grid(row=0, column=0, sticky="w")
+		ttk.Label(baseline_frame, text="抽样频率 1/").grid(row=0, column=1, sticky="w", padx=(12, 0))
+		self._baseline_spinbox = ttk.Spinbox(baseline_frame, textvariable=self._baseline_freq_var,
+			from_=1, to=50, width=4)
+		self._baseline_spinbox.grid(row=0, column=2, sticky="w")
+		ttk.Label(baseline_frame, text="(1=全部人工)", foreground="#888888").grid(row=0, column=3, sticky="w", padx=(4, 0))
+		ttk.Checkbutton(baseline_frame, text="调试日志", variable=self._debug_log_var).grid(row=0, column=4, sticky="w", padx=(12, 0))
 
 		# 时间轴范围
 		time_box = ttk.LabelFrame(config_col, text="时间轴范围", padding=(12, 10, 12, 12))
@@ -969,15 +981,17 @@ class RaceVideoToLogApp:
 			if speed_value is None:
 				# 数字仪表后备链：use_det=False → EasyOCR
 				speed_value, raw_text = ocr_digital_fallback(ocr, crop, max_speed_kmh)
+			# 始终为每一帧生成 observation（OCR 失败用 -1.0，保证索引对齐）
 			if speed_value is not None and raw_text is not None:
-				observations.append(
-					SpeedObservation(
-						timestamp=timestamp,
-						raw_speed_kmh=convert_speed_to_kmh(speed_value, self.speed_format_var.get()),
-						raw_text=raw_text,
-					)
-				)
-			if len(observations) % 10 == 0:
+				observations.append(SpeedObservation(
+					timestamp=timestamp,
+					raw_speed_kmh=convert_speed_to_kmh(speed_value, self.speed_format_var.get()),
+					raw_text=raw_text,
+				))
+			else:
+				observations.append(SpeedObservation(
+					timestamp=timestamp, raw_speed_kmh=-1.0, raw_text=""))
+			if (idx + 1) % 10 == 0:
 				pct = ((idx + 1) / total_frames * 90.0) + 5.0
 				self.root.after(0, self._update_progress,
 					f"[{ocr_engine._gpu_backend}] 正在处理... {len(observations)} 条 ({pct:.1f}%)", pct)
@@ -1026,14 +1040,16 @@ class RaceVideoToLogApp:
 			if speed_value is None:
 				# 数字仪表后备链：use_det=False → EasyOCR
 				speed_value, raw_text = ocr_digital_fallback(ocr, crop, max_speed_kmh)
+			# 始终为每一帧生成 observation
 			if speed_value is not None and raw_text is not None:
-				observations.append(
-					SpeedObservation(
-						timestamp=timestamp,
-						raw_speed_kmh=convert_speed_to_kmh(speed_value, self.speed_format_var.get()),
-						raw_text=raw_text,
-					)
-				)
+				observations.append(SpeedObservation(
+					timestamp=timestamp,
+					raw_speed_kmh=convert_speed_to_kmh(speed_value, self.speed_format_var.get()),
+					raw_text=raw_text,
+				))
+			else:
+				observations.append(SpeedObservation(
+					timestamp=timestamp, raw_speed_kmh=-1.0, raw_text=""))
 			done += 1
 			if done % 10 == 0:
 				pct = (done / total_frames * 90.0) + 5.0
@@ -1116,6 +1132,11 @@ class RaceVideoToLogApp:
 			except: pass
 		import gc; gc.collect()
 
+	def _log(self, msg: str) -> None:
+		"""调试日志：勾选"调试日志"时输出到终端。"""
+		if self._debug_log_var.get():
+			print(f"[DEBUG] {msg}", flush=True)
+
 	def _check_cancel(self) -> None:
 		if self._cancel_flag:
 			raise _CancelExport()
@@ -1134,6 +1155,16 @@ class RaceVideoToLogApp:
 		self.progress_var.set(0.0)
 		self._release_ocr_engines()
 		self.status_var.set("已取消。")
+
+	def _finish_export_state(self) -> None:
+		"""重置导出状态（不弹窗，用于已自行处理结果输出的流程）。"""
+		print("[Baseline] _finish_export_state called", flush=True)
+		self.is_exporting = False
+		self._cancel_flag = False
+		self.export_btn.config(state="normal")
+		self.cancel_btn.config(state="disabled")
+		self.progress_var.set(100.0)
+		self.status_var.set("人工基准完成 — 结果已保存。")
 
 	def _on_export_error(self, err: str) -> None:
 		self.is_exporting = False
@@ -1210,7 +1241,7 @@ class RaceVideoToLogApp:
 					raw_speed_kmh=convert_speed_to_kmh(sv, self.speed_format_var.get()),
 					raw_text=rt,
 				)
-			return idx, None
+			return idx, SpeedObservation(timestamp=ts, raw_speed_kmh=-1.0, raw_text="")
 
 		pool = ThreadPoolExecutor(max_workers=num_workers)
 		try:
@@ -1229,7 +1260,7 @@ class RaceVideoToLogApp:
 		finally:
 			pool.shutdown(wait=False, cancel_futures=True)
 
-		return [o for o in observations if o is not None]
+		return observations  # 所有帧均已填充（失败帧用 -1.0 标记）
 
 	def _run_export(
 		self,
@@ -1248,7 +1279,7 @@ class RaceVideoToLogApp:
 		assert self.video_path is not None
 		assert self.metadata is not None
 
-		num_workers = max(1, min(num_workers, 8))
+		num_workers = max(1, min(num_workers, 32))
 
 		self.root.after(0, self._update_progress, "正在初始化 OCR 引擎...", 0.0)
 		self._check_cancel()
@@ -1296,6 +1327,25 @@ class RaceVideoToLogApp:
 		total_frames = len(raw_frames)
 		if total_frames == 0:
 			raise RuntimeError("未从视频中读取到任何帧，请检查采样率设置。")
+
+		# ── 人工基准模式 ──
+		if self._human_baseline_var.get():
+			try:
+				self._run_baseline_mode(raw_frames, total_frames, output_path, region,
+					max_speed_kmh, max_accel_mps2, frame_div, target_h, pad_px, num_workers,
+					_t_start, ocr)
+			except _CancelExport:
+				self.root.after(0, self._on_export_cancelled)
+			except Exception:
+				import traceback
+				traceback.print_exc()
+				self.root.after(0, lambda: messagebox.showerror(
+					"人工基准错误", traceback.format_exc()))
+				print("[Export] Scheduling _finish_export_state via root.after...", flush=True)
+				self.root.after(0, self._finish_export_state)
+			else:
+				self.root.after(0, self._finish_export_state)
+			return
 
 		self.root.after(0, self._update_progress,
 			f"开始处理 {total_frames} 帧 (workers={num_workers})...", 5.0)
@@ -1404,8 +1454,196 @@ class RaceVideoToLogApp:
 			rows.append((observation.timestamp, distance_m, corrected_speed_kmh, corrected_flag))
 		return rows
 
-	def _run_manual_correction_iterative(self, observations, raw_frames, rows, max_speed_kmh, max_accel_mps2):
-		"""迭代人工纠错：持久窗口，重复直到无 flag=1 或用户跳过。"""
+	def _correct_with_anchors(self, rows, observations, max_speed_kmh, max_accel_mps2, anchor_indices):
+		"""纠错程序 B：以人工基准为硬锚点。anchor_indices 中帧的速度固定不变。"""
+		if len(anchor_indices) < 2:
+			return rows
+		n = len(rows)
+		sorted_anchors = sorted(anchor_indices)
+		self._log(f"_correct_with_anchors: {n} rows, {len(sorted_anchors)} anchors")
+		class _O:
+			def __init__(s, ts, spd, txt):
+				s.timestamp = ts; s.raw_speed_kmh = spd; s.raw_text = txt
+
+		extended = [-1] + sorted_anchors + [n]
+		total_segs = len(extended) - 1
+		for seg in range(total_segs):
+			la, ra = extended[seg], extended[seg + 1]
+			gap = ra - la - 1
+			if gap > 100 and seg % 10 == 0:
+				print(f"  [Correction B] segment {seg}/{total_segs}, gap={gap} frames...", flush=True)
+			if ra - la <= 1:
+				continue
+			seg_s, seg_e = la + 1, ra - 1
+			if seg_s > seg_e:
+				continue
+			seg_idx = list(range(seg_s, seg_e + 1))
+			seg_obs = []
+			for idx in seg_idx:
+				r = rows[idx]
+				txt = observations[idx].raw_text if idx < len(observations) else ""
+				seg_obs.append(_O(r[0], r[2], txt))
+			raw_vals = [o.raw_speed_kmh for o in seg_obs]
+			times = [o.timestamp for o in seg_obs]
+			al_val = rows[la][2] if la >= 0 else raw_vals[0]
+			ar_val = rows[ra][2] if ra < n else raw_vals[-1]
+			al_ts = rows[la][0] if la >= 0 else times[0]
+			ar_ts = rows[ra][0] if ra < n else times[-1]
+			seg_n = len(seg_obs)
+			candidates = []
+			for i, obs in enumerate(seg_obs):
+				if obs.raw_speed_kmh < 0:
+					cands = list(range(0, int(max_speed_kmh) + 1, 25))
+				else:
+					cands = build_speed_candidates(obs.raw_text, max_speed_kmh)
+					if obs.raw_speed_kmh <= max_speed_kmh:
+						cands.append(float(obs.raw_speed_kmh))
+					if not cands:
+						cands = [min(max(obs.raw_speed_kmh, 0.0), max_speed_kmh)]
+				total_dt = max(ar_ts - al_ts, 0.001)
+				frac = (times[i] - al_ts) / total_dt
+				interp = al_val + (ar_val - al_val) * frac
+				for dv in range(-15, 16, 3):
+					v = interp + dv
+					if 0 <= v <= max_speed_kmh:
+						cands.append(float(v))
+				candidates.append(sorted(set(cands)))
+			# 超长段：跳过 DP，直接用线性插值（避免 O(n*c^2) 假死）
+			gap_frames = seg_e - seg_s + 1
+			if gap_frames > 200:
+				for idx in seg_idx:
+					frac = (times[idx - seg_s] - al_ts) / max(ar_ts - al_ts, 0.001)
+					interp_val = al_val + (ar_val - al_val) * frac
+					if abs(rows[idx][2] - interp_val) > 0.5:
+						rows[idx][2] = max(0, min(max_speed_kmh, interp_val))
+						if rows[idx][3] == 0:
+							rows[idx][3] = 1
+				continue  # 跳过 DP，处理下一段
+			fc = candidates[0]
+			states = [(0.0 if (la >= 0 and abs(c - al_val) < 0.5) else abs(c - raw_vals[0]), c, None) for c in fc]
+			bp = [[-1] * len(fc)]
+			for t in range(1, seg_n):
+				cc, pc = candidates[t], candidates[t - 1] if t > 0 else fc
+				dt = max(times[t] - times[t - 1], 1e-6)
+				max_dv = max_accel_mps2 * dt * 3.6
+				cs, cb = [], []
+				for ci, cv in enumerate(cc):
+					bc, bp_i = float("inf"), 0
+					for pi, pv in enumerate(pc):
+						d = abs(cv - pv)
+						if d > max_dv:
+							continue
+						cost = states[pi][0] + d * 0.3 + abs(cv - raw_vals[t])
+						if cost < bc:
+							bc, bp_i = cost, pi
+					if bc == float("inf"):
+						for pi, pv in enumerate(pc):
+							cost = states[pi][0] + abs(cv - pv) * 5.0
+							if cost < bc:
+								bc, bp_i = cost, pi
+					cs.append((bc, cv, bp_i)); cb.append(bp_i)
+				states = [(c, v, p) for c, v, p in cs]
+				bp.append(cb)
+			if ra < n:
+				bf = min(range(len(states)), key=lambda i: abs(states[i][1] - ar_val))
+			else:
+				bf = min(range(len(states)), key=lambda i: states[i][0])
+			sr = [0.0] * seg_n; sr[-1] = states[bf][1]; trace = bf
+			for t in range(seg_n - 1, 0, -1):
+				trace = bp[t][trace]; sr[t - 1] = candidates[t - 1][trace]
+			for t, idx in enumerate(seg_idx):
+				if abs(rows[idx][2] - sr[t]) > 0.5:
+					rows[idx][2] = sr[t]
+					if rows[idx][3] == 0:
+						rows[idx][3] = 1
+		return rows
+
+	def _run_baseline_mode(self, raw_frames, total_frames, output_path, region,
+			max_speed_kmh, max_accel_mps2, frame_div, target_h, pad_px, num_workers,
+			_t_start, ocr):
+		"""人工基准模式完整流程。"""
+		print(f'[Baseline] START: {total_frames} frames, freq={self._baseline_freq_var.get()}', flush=True)
+		import time as _time
+		baseline_freq = max(1, int(_parse_int_or_none(self._baseline_freq_var.get()) or 10))
+		print('[Baseline] Starting OCR...', flush=True)
+		self.root.after(0, self._update_progress, "正在 OCR 自动识别...", 25.0)
+		self._check_cancel()
+		# 基准模式使用串行 OCR（避免后台线程中并行引擎的潜在死锁）
+		observations = self._ocr_sequential(raw_frames, ocr, target_h, pad_px, total_frames, max_speed_kmh)
+		self._check_cancel()
+		print(f'[Baseline] OCR done: {len(observations)} frames', flush=True); n_obs = len(observations)
+		if n_obs == 0:
+			raise RuntimeError("未识别到任何速度数据。")
+		baseline_indices = set(range(0, n_obs, baseline_freq))
+		n_baseline = len(baseline_indices)
+		self.root.after(0, self._update_progress,
+			f"人工基准模式：{n_obs} 帧中 {n_baseline} 帧需人工标注 (1/{baseline_freq})...", 20.0)
+		self._check_cancel()
+		rows = []
+		for i, obs in enumerate(observations):
+			if i in baseline_indices:
+				rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh, 1])
+			else:
+				rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh, 0])
+		if n_baseline > 0:
+			for i in range(n_obs):
+				if i not in baseline_indices:
+					rows[i][3] = 3
+			# 标注窗口必须在主线程创建（后台线程中 Tkinter 窗口无法渲染）
+			import threading as _th
+			_ann_done = _th.Event()
+			_ann_error = []
+			def _do_annotation():
+				try:
+					self._run_manual_correction_iterative(
+						observations, raw_frames, rows, max_speed_kmh, max_accel_mps2,
+						baseline_mode=True)
+				except Exception as e:
+					_ann_error.append(e)
+				finally:
+					_ann_done.set()
+			self.root.after(0, _do_annotation)
+			if not _ann_done.wait(timeout=3600):  # 最多等 1 小时
+				raise RuntimeError("标注窗口超时未响应")
+			if _ann_error:
+				raise _ann_error[0]
+			for i in range(n_obs):
+				if rows[i][3] == 3:
+					rows[i][3] = 0
+		self.root.after(0, self._update_progress,
+			"正在以人工基准为锚点进行物理约束纠错...", 85.0)
+		self._check_cancel()
+		self._log(f"Correction B: {n_obs} rows, anchors={sum(1 for i in range(n_obs) if rows[i][3] >= 2)}")
+		print(f'[Baseline] Annotation done, running correction B...', flush=True); rows = self._correct_with_anchors(rows, observations, max_speed_kmh, max_accel_mps2,
+			{i for i in range(n_obs) if rows[i][3] >= 2})
+		print(f'[Baseline] Correction B done, integrating distance...', flush=True); dist = 0.0; prev_t, prev_v = None, None
+		for r in rows:
+			v = r[2] / 3.6
+			if prev_t is not None and prev_v is not None:
+				dt = r[0] - prev_t
+				if dt > 0: dist += (prev_v + v) * 0.5 * dt
+			prev_t, prev_v = r[0], v; r[1] = dist
+		print(f"[Baseline] Distance integration done, computing hash...", flush=True)
+		_t_elapsed = _time.perf_counter() - _t_start
+		_corrected_count = sum(1 for r in rows if r[3] >= 1)
+		_accuracy = (1 - _corrected_count / len(rows)) * 100 if rows else 100.0
+		# 写出 CSV（含参数头）
+		vhash = compute_video_hash(self.video_path)
+		print(f"[Baseline] Hash computed, opening CSV...", flush=True)
+		with output_path.open("w", newline="", encoding="utf-8-sig") as fh:
+			fh.write(f"# RaceVideoToLog\n")
+			fh.write(f"# video_hash={vhash}, video={self.video_path.name}\n")
+			fh.write(f"# roi={region[0]},{region[1]},{region[2]},{region[3]}, format={self.speed_format_var.get()}\n")
+			fh.write(f"# max_speed={max_speed_kmh}, max_accel={max_accel_mps2}, div={frame_div}, target_h={target_h}, pad={pad_px}, backend={ocr_engine._gpu_backend}, model={self._ocr_model_var.get()}, workers={num_workers}, frame_start={self._frame_start_var.get() or ''}, frame_end={self._frame_end_var.get() or ''}, baseline_freq={baseline_freq}\n")
+			w = csv.writer(fh)
+			for r in rows:
+				w.writerow([f"{r[0]:.2f}", f"{r[1]:.2f}", f"{r[2]:.2f}", str(r[3])])
+
+		print(f"[Baseline] CSV written: {output_path}", flush=True)
+
+	def _run_manual_correction_iterative(self, observations, raw_frames, rows, max_speed_kmh, max_accel_mps2,
+			baseline_mode: bool = False):
+		"""人工纠错窗口。baseline_mode=True 时单轮不迭代，支持跳过。"""
 		trust = _estimate_raw_trust(observations)
 		total_corrected = 0
 		iteration = 0
@@ -1458,7 +1696,8 @@ class RaceVideoToLogApp:
 					current_flagged.append((i, trust[i], observations[i]))
 			if not current_flagged:
 				return False
-			current_flagged.sort(key=lambda x: x[1])
+			if not baseline_mode:
+					current_flagged.sort(key=lambda x: x[1])
 			idx_iter = iter(current_flagged)
 			return True
 
@@ -1467,21 +1706,35 @@ class RaceVideoToLogApp:
 			nonlocal total_corrected
 			total_corrected = sum(1 for r in rows if r[3] >= 2)
 			remaining = sum(1 for r in rows if r[3] == 1)
-			win.title(f"人工纠错 — 第 {iteration} 轮")
-			bottom_var.set(f"已纠正 {total_corrected} 帧  |  当前第 {iteration} 轮  |  剩余 {remaining} 帧")
+			if baseline_mode:
+				win.title("人工基准标注")
+			else:
+				win.title(f"人工纠错 — 第 {iteration} 轮")
+			if baseline_mode:
+				bottom_var.set(f"已标注 {total_corrected} 帧  |  剩余 {remaining} 帧  |  跳过=留空")
+			else:
+				bottom_var.set(f"已纠正 {total_corrected} 帧  |  当前第 {iteration} 轮  |  剩余 {remaining} 帧")
 
 		def _show_next():
 			try:
 				ri, score, obs = next(idx_iter)
 			except StopIteration:
 				done_flag[0] = True
-				# 本轮结束，触发下一轮
-				_next_round()
+				if baseline_mode:
+					win.destroy()
+				else:
+					_next_round()
 				return
 			current[0] = (ri, obs, score)
 			remaining = sum(1 for r in rows if r[3] == 1)
-			progress_var.set(f"帧 #{ri+1}/{len(rows)}  |  可信度 {score:.2f}  |  剩余 {remaining} 帧")
-			info_var.set(f"t={obs.timestamp:.2f}s  纠正值={rows[ri][2]:.1f} km/h  原始={obs.raw_speed_kmh:.1f}")
+			if baseline_mode:
+				progress_var.set(f"帧 #{ri+1}/{len(rows)}  |  剩余 {remaining} 帧")
+			else:
+				progress_var.set(f"帧 #{ri+1}/{len(rows)}  |  可信度 {score:.2f}  |  剩余 {remaining} 帧")
+			if baseline_mode:
+				info_var.set(f"Frame #{ri}  t={obs.timestamp:.2f}s  输入正确速度后按确认")
+			else:
+				info_var.set(f"t={obs.timestamp:.2f}s  纠正值={rows[ri][2]:.1f} km/h  原始={obs.raw_speed_kmh:.1f}")
 			speed_var.set("")
 			speed_entry.focus_set()
 			crop = raw_frames[ri][1]
@@ -1503,7 +1756,7 @@ class RaceVideoToLogApp:
 				val = float(speed_var.get().strip())
 				if val >= 0:
 					t, d, s, f = rows[ri]
-					rows[ri] = (t, d, val, 2)
+					rows[ri] = [t, d, val, 2]
 			except ValueError:
 				pass
 			_show_next()
@@ -1522,6 +1775,13 @@ class RaceVideoToLogApp:
 			ri, obs, _ = current[0]
 			t, d, s, f = rows[ri]
 			rows[ri] = (t, d, s, 2)
+			_show_next()
+
+		def _skip():
+			if current[0] is None or done_flag[0]:
+				return
+			ri, obs, _ = current[0]
+			rows[ri][3] = 0
 			_show_next()
 
 		def _close():
@@ -1562,10 +1822,15 @@ class RaceVideoToLogApp:
 		# ── 构建按钮 ──
 		for widget in btn_frame.winfo_children():
 			widget.destroy()
-		ttk.Button(btn_frame, text="确认 (Enter)", command=_confirm).grid(row=0, column=0, padx=(0, 6))
-		ttk.Button(btn_frame, text="原值", command=_use_raw).grid(row=0, column=1, padx=(0, 6))
-		ttk.Button(btn_frame, text="纠正值", command=_use_corrected).grid(row=0, column=2, padx=(0, 6))
-		ttk.Button(btn_frame, text="跳过剩余", command=_close).grid(row=0, column=3)
+		if baseline_mode:
+			ttk.Button(btn_frame, text="确认 (Enter)", command=_confirm).grid(row=0, column=0, padx=(0, 6))
+			ttk.Button(btn_frame, text="跳过", command=_skip).grid(row=0, column=1, padx=(0, 6))
+			ttk.Button(btn_frame, text="跳过剩余", command=_close).grid(row=0, column=2)
+		else:
+			ttk.Button(btn_frame, text="确认 (Enter)", command=_confirm).grid(row=0, column=0, padx=(0, 6))
+			ttk.Button(btn_frame, text="原值", command=_use_raw).grid(row=0, column=1, padx=(0, 6))
+			ttk.Button(btn_frame, text="纠正值", command=_use_corrected).grid(row=0, column=2, padx=(0, 6))
+			ttk.Button(btn_frame, text="跳过剩余", command=_close).grid(row=0, column=3)
 		win.bind("<Return>", lambda e: _confirm() if not done_flag[0] else None)
 
 		# ── 开始第一轮 ──
@@ -1622,7 +1887,7 @@ def main() -> None:
 	parser.add_argument("video", nargs="?", help="视频文件路径")
 	parser.add_argument("--roi", nargs=4, type=int, metavar=("X1","Y1","X2","Y2"), help="识别范围")
 	parser.add_argument("--format", choices=["m/s","km/h","mile/h"], default="km/h")
-	parser.add_argument("--div", type=int, default=2, choices=[1,2,3,4,5])
+	parser.add_argument("--div", type=int, default=2, choices=list(range(1, 11)))
 	parser.add_argument("--max-speed", type=float, default=400)
 	parser.add_argument("--max-accel", type=float, default=50)
 	parser.add_argument("--target-h", type=int, default=24)
@@ -1635,6 +1900,8 @@ def main() -> None:
 	parser.add_argument("--analysis-out", type=str)
 	parser.add_argument("--frame-start", type=int, metavar="N")
 	parser.add_argument("--frame-end", type=int, metavar="N")
+	parser.add_argument("--baseline-freq", type=int, default=0, metavar="N",
+		help="人工基准抽样频率 1/N (1=全部人工)")
 	parser.add_argument("--multi-box", action="store_true")
 	args = parser.parse_args()
 
