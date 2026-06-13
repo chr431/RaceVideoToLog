@@ -5,7 +5,7 @@ from pathlib import Path
 import cv2, numpy as np
 from rapidocr_onnxruntime import RapidOCR
 from ocr_engine import *
-from ocr_engine import _reset_backend, _select_backend, _get_model_kwargs, _savgol_filter_np, ocr_digital_fallback
+from ocr_engine import _reset_backend, _select_backend, _get_model_kwargs, _savgol_filter_np, ocr_digital_fallback, compute_video_hash, correct_speed_series_v2
 
 def run_headless(args: argparse.Namespace) -> None:
 	"""命令行无头模式：不启动 GUI，直接分析并输出 CSV。"""
@@ -105,12 +105,12 @@ def run_headless(args: argparse.Namespace) -> None:
 
 	# 初次纠错 + 物理超限帧重试 OCR
 	print(f"识别: {len(observations)} 条, 正在进行物理约束纠错...")
-	corrected = correct_speed_series(observations, args.max_speed, args.max_accel)
+	corrected = correct_speed_series_v2(observations, args.max_speed, args.max_accel, fps, args.div)
 	observations, corrected = _retry_suspect_frames(
 		observations, corrected, raw_frames, ocr, args
 	)
 	if corrected is None:
-		corrected = correct_speed_series(observations, args.max_speed, args.max_accel)
+		corrected = correct_speed_series_v2(observations, args.max_speed, args.max_accel, fps, args.div)
 
 	# 积分 + 写出
 	rows: list[tuple[float, float, float, int]] = []
@@ -133,6 +133,13 @@ def run_headless(args: argparse.Namespace) -> None:
 		rows.append((obs.timestamp, dist, cspd, flag))
 
 	with output_path.open("w", newline="", encoding="utf-8-sig") as fh:
+		# ── 参数头（第 1-4 行）──
+		vhash = compute_video_hash(video_path)
+		fh.write(f"# RaceVideoToLog\n")
+		fh.write(f"# video_hash={vhash}, video={video_path.name}\n")
+		fh.write(f"# roi={region[0]},{region[1]},{region[2]},{region[3]}, format={args.format}\n")
+		fh.write(f"# max_speed={args.max_speed}, max_accel={args.max_accel}, div={args.div}, target_h={args.target_h}, pad={args.pad}, backend={backend_actual}, model={args.ocr_model}, workers={args.workers}, frame_start={args.frame_start or ''}, frame_end={args.frame_end or ''}\n")
+		# ── 数据行 ──
 		w = csv.writer(fh)
 		for t, d, s, fl in rows:
 			w.writerow([f"{t:.2f}", f"{d:.2f}", f"{s:.2f}", str(fl)])
@@ -328,12 +335,18 @@ def run_analysis_headless(args: argparse.Namespace) -> None:
 		times, dists, speeds, flags = [], [], [], []
 		with open(p, "r", encoding="utf-8-sig") as f:
 			for line in f:
-				parts = line.strip().split(",")
+				line = line.strip()
+				if not line or line.startswith("#"):
+					continue
+				parts = line.split(",")
 				if len(parts) >= 3:
-					times.append(float(parts[0]))
-					dists.append(float(parts[1]))
-					speeds.append(float(parts[2]))
-					flags.append(int(parts[3]) if len(parts) > 3 else 0)
+					try:
+						times.append(float(parts[0]))
+						dists.append(float(parts[1]))
+						speeds.append(float(parts[2]))
+						flags.append(int(parts[3]) if len(parts) > 3 else 0)
+					except ValueError:
+						continue
 		# 去开头静止帧
 		start = 0
 		for i, s in enumerate(speeds):
