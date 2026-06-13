@@ -618,6 +618,7 @@ def compute_video_hash(video_path: str | Path, chunk_size: int = 1_048_576) -> s
 	return h.hexdigest()[:16]  # 前 16 字符足够区分
 
 
+
 def correct_speed_series(
 	samples: list[SpeedObservation],
 	max_speed_kmh: float,
@@ -1001,6 +1002,35 @@ def correct_speed_series_v2(
     # In boost zones, we use 2× the nominal max_accel for correction
     boost_multiplier = _detect_boost_zones(raw_vals, times, max_accel_mps2, typical_dt)
 
+    # ── Step 0: Spike detection — catch isolated single-frame OCR errors ──
+    # These can slip through the reachability scan because the wide window
+    # may still connect through the spike. We detect them by checking
+    # neighbor consistency: a spike differs from both neighbors by more
+    # than physics allows, while the neighbors are consistent with each other.
+    spike_suspect = [False] * n
+    for i in range(2, n - 2):
+        if raw_vals[i] < 0 or raw_vals[i] > max_speed_kmh:
+            continue
+        left_v = raw_vals[i - 1] if raw_vals[i - 1] >= 0 else raw_vals[i - 2] if i >= 2 and raw_vals[i - 2] >= 0 else None
+        right_v = raw_vals[i + 1] if raw_vals[i + 1] >= 0 else raw_vals[i + 2] if i + 2 < n and raw_vals[i + 2] >= 0 else None
+        if left_v is None or right_v is None:
+            continue
+        # Check if neighbors are consistent with each other
+        dt_left = max(times[i] - times[i - 1], 0.001)
+        dt_right = max(times[i + 1] - times[i], 0.001)
+        dt_cross = dt_left + dt_right
+        dv_cross = abs(right_v - left_v)
+        max_dv_cross = max_accel_mps2 * dt_cross * 3.6 * 2.0  # generous cross tolerance
+        if dv_cross > max_dv_cross:
+            continue  # neighbors themselves are inconsistent; broader issue
+        # Neighbors are consistent — check if this frame is an outlier
+        dv_left = abs(raw_vals[i] - left_v)
+        dv_right = abs(raw_vals[i] - right_v)
+        max_dv_left = max_accel_mps2 * dt_left * 3.6 * 1.5
+        max_dv_right = max_accel_mps2 * dt_right * 3.6 * 1.5
+        if dv_left > max_dv_left and dv_right > max_dv_right:
+            spike_suspect[i] = True
+
     # ── Step 1: Multi-frame reachability scan ──
     can_reach_fwd = [False] * n
     can_reach_bwd = [False] * n
@@ -1071,13 +1101,17 @@ def correct_speed_series_v2(
                     can_reach_bwd[i] = True
                     break
 
-    # Mark suspect frames
+    # Mark suspect frames (combine reachability failures + spike detection)
     suspect = [False] * n
     for i in range(n):
+        # Spike-detected frames are always suspect
+        if spike_suspect[i]:
+            suspect[i] = True
+            continue
         reach_fail = not can_reach_fwd[i] and not can_reach_bwd[i]
         if not reach_fail:
             continue
-        # Display-stable frames are protected
+        # Display-stable frames are protected (unless spike-detected)
         stable = _is_display_hold(raw_vals, i, n, typical_dt, display_hold_dt, times)
         if not stable:
             suspect[i] = True
@@ -1125,12 +1159,33 @@ def correct_speed_series_v2(
     result = [s.raw_speed_kmh for s in samples]
 
     for seg_start, seg_end in segments:
+        seg_n = seg_end - seg_start + 1
         seg_candidates: list[list[float]] = []
         for idx in range(seg_start, seg_end + 1):
             sample = samples[idx]
             cands = build_speed_candidates(sample.raw_text, max_speed_kmh)
-            if sample.raw_speed_kmh <= max_speed_kmh:
+            if sample.raw_speed_kmh <= max_speed_kmh and sample.raw_speed_kmh > 0:
                 cands.append(float(sample.raw_speed_kmh))
+            # For OCR-failure frames (raw <= 0) inside suspect segments,
+            # build candidates from interpolation between segment anchors
+            if sample.raw_speed_kmh <= 0 and seg_n > 2:
+                local_i = idx - seg_start
+                frac = local_i / max(seg_n - 1, 1)
+                # Use segment boundary raw values as interpolation anchors
+                left_v = samples[seg_start].raw_speed_kmh
+                right_v = samples[seg_end].raw_speed_kmh
+                if left_v > 0 and right_v > 0:
+                    interp_v = left_v + (right_v - left_v) * frac
+                elif left_v > 0:
+                    interp_v = left_v
+                elif right_v > 0:
+                    interp_v = right_v
+                else:
+                    interp_v = max_speed_kmh / 2  # fallback
+                for dv in range(-25, 26, 2):
+                    v = interp_v + dv
+                    if 0 <= v <= max_speed_kmh:
+                        cands.append(float(v))
             if not cands:
                 cands = [min(max(sample.raw_speed_kmh, 0.0), max_speed_kmh)]
             seg_candidates.append(sorted(set(cands)))

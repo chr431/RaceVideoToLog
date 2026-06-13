@@ -1503,7 +1503,10 @@ class RaceVideoToLogApp:
 				total_dt = max(ar_ts - al_ts, 0.001)
 				frac = (times[i] - al_ts) / total_dt
 				interp = al_val + (ar_val - al_val) * frac
-				for dv in range(-15, 16, 3):
+				# Adaptive interpolation range: wider when anchors span larger speed range
+				interp_range = int(abs(ar_val - al_val) * 0.2 + 8)  # min ±8, scales with anchor spread
+				interp_range = min(interp_range, 25)  # cap at ±25
+				for dv in range(-interp_range, interp_range + 1, max(1, interp_range // 3)):
 					v = interp + dv
 					if 0 <= v <= max_speed_kmh:
 						cands.append(float(v))
