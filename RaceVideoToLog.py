@@ -65,10 +65,9 @@ class RaceVideoToLogApp:
 		# 时间轴范围
 		self._frame_start_var = tk.StringVar(value="")
 		self._frame_end_var = tk.StringVar(value="")
-		self._human_baseline_var = tk.BooleanVar(value=False)  # 人工基准模式
+		self._correction_mode_var = tk.StringVar(value="auto")  # 纠错模式: auto/baseline
 		self._baseline_freq_var = tk.StringVar(value="10")    # 人工基准抽样频率
 		self._debug_log_var = tk.BooleanVar(value=False)       # 调试日志
-		self._auto_anchor_var = tk.BooleanVar(value=False)    # 自动锚点纠错
 
 		self.is_exporting = False
 		self._cancel_flag = False
@@ -186,17 +185,19 @@ class RaceVideoToLogApp:
 		ttk.Label(perf_box, text="并行线程数").grid(row=1, column=4, sticky="w", pady=(8,0))
 		ttk.Entry(perf_box, textvariable=self.num_workers_var, width=8).grid(row=1, column=5, sticky="ew", padx=(6, 14), pady=(8,0))
 		ttk.Label(perf_box, text=">1 时启用并行推理。", foreground="#555555").grid(row=2, column=0, columnspan=6, sticky="w", pady=(4, 0))
-		baseline_frame = ttk.Frame(perf_box)
-		baseline_frame.grid(row=3, column=0, columnspan=6, sticky="ew", pady=(8, 0))
-		ttk.Checkbutton(baseline_frame, text="人工基准",
-			variable=self._human_baseline_var).grid(row=0, column=0, sticky="w")
-		ttk.Label(baseline_frame, text="抽样频率 1/").grid(row=0, column=1, sticky="w", padx=(12, 0))
-		self._baseline_spinbox = ttk.Spinbox(baseline_frame, textvariable=self._baseline_freq_var,
-			from_=1, to=50, width=4)
-		self._baseline_spinbox.grid(row=0, column=2, sticky="w")
-		ttk.Label(baseline_frame, text="(1=全部人工)", foreground="#888888").grid(row=0, column=3, sticky="w", padx=(4, 0))
-		ttk.Checkbutton(baseline_frame, text="调试日志", variable=self._debug_log_var).grid(row=0, column=4, sticky="w", padx=(12, 0))
-		ttk.Checkbutton(baseline_frame, text="自动锚点纠错", variable=self._auto_anchor_var).grid(row=0, column=5, sticky="w", padx=(12, 0))
+		# 纠错模式选择
+		mode_frame = ttk.LabelFrame(config_col, text="纠错模式", padding=(12, 10, 12, 12))
+		mode_frame.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+		mode_frame.columnconfigure(0, weight=1)
+		ttk.Radiobutton(mode_frame, text="自动锚点纠错（全自动，推荐）", variable=self._correction_mode_var, value="auto").grid(row=0, column=0, sticky="w")
+		ttk.Radiobutton(mode_frame, text="人工基准标注", variable=self._correction_mode_var, value="baseline").grid(row=1, column=0, sticky="w", pady=(4, 0))
+		baseline_frame = ttk.Frame(mode_frame)
+		baseline_frame.grid(row=1, column=0, sticky="w", padx=(140, 0), pady=(4, 0))
+		ttk.Label(baseline_frame, text="抽样频率 1/").grid(row=0, column=0, sticky="w")
+		self._baseline_spinbox = ttk.Spinbox(baseline_frame, textvariable=self._baseline_freq_var, from_=1, to=50, width=4)
+		self._baseline_spinbox.grid(row=0, column=1, sticky="w")
+		ttk.Label(baseline_frame, text="(1=全部人工)", foreground="#888888").grid(row=0, column=2, sticky="w", padx=(4, 0))
+		ttk.Checkbutton(mode_frame, text="调试日志", variable=self._debug_log_var).grid(row=2, column=0, sticky="w", pady=(8, 0))
 
 		# 时间轴范围
 		time_box = ttk.LabelFrame(config_col, text="时间轴范围", padding=(12, 10, 12, 12))
@@ -925,8 +926,9 @@ class RaceVideoToLogApp:
 		if total_frames == 0:
 			raise RuntimeError("未从视频中读取到任何帧，请检查采样率设置。")
 
-		# ── 自动锚点模式 ──
-		if self._auto_anchor_var.get():
+		# ── 纠错模式分发 ──
+		mode = self._correction_mode_var.get()
+		if mode == "auto":
 			try:
 				self._run_auto_anchor_mode(raw_frames, total_frames, output_path, region,
 					max_speed_kmh, max_accel_mps2, frame_div, target_h, pad_px, num_workers,
@@ -941,10 +943,7 @@ class RaceVideoToLogApp:
 				self.root.after(0, self._finish_export_state)
 			else:
 				self.root.after(0, self._finish_export_state)
-			return
-
-		# ── 人工基准模式 ──
-		if self._human_baseline_var.get():
+		elif mode == "baseline":
 			try:
 				self._run_baseline_mode(raw_frames, total_frames, output_path, region,
 					max_speed_kmh, max_accel_mps2, frame_div, target_h, pad_px, num_workers,
@@ -956,118 +955,15 @@ class RaceVideoToLogApp:
 				traceback.print_exc()
 				self.root.after(0, lambda: messagebox.showerror(
 					"人工基准错误", traceback.format_exc()))
-				print("[Export] Scheduling _finish_export_state via root.after...", flush=True)
 				self.root.after(0, self._finish_export_state)
 			else:
 				self.root.after(0, self._finish_export_state)
-			return
-
-		self.root.after(0, self._update_progress,
-			f"开始处理 {total_frames} 帧 (workers={num_workers})...", 5.0)
-		self._check_cancel()
-
-		# 仅 CUDA 支持并行推理
-		if num_workers > 1 and ocr_engine._gpu_backend == "CUDA":
-			observations = self._ocr_cuda_parallel(raw_frames, target_h, pad_px, total_frames, num_workers, max_speed_kmh)
-		elif num_workers > 1:
-			observations = self._ocr_pipeline(raw_frames, ocr, target_h, pad_px, total_frames, num_workers, max_speed_kmh)
 		else:
-			observations = self._ocr_sequential(raw_frames, ocr, target_h, pad_px, total_frames, max_speed_kmh)
-
-		if not observations:
-			raise RuntimeError("未识别到任何速度数据，请检查识别范围与速度格式。")
-
-		# 阶段4：物理约束纠错
-		self.root.after(0, self._update_progress, "正在进行物理约束纠错...", 96.0)
-		corrected_speeds = correct_speed_series(observations, max_speed_kmh, max_accel_mps2)
-
-		# 构建初始 rows
-		rows = self._build_rows(observations, corrected_speeds, max_accel_mps2)
-
-		# 计算统计信息
-		_t_elapsed = _time.perf_counter() - _t_start
-		_corrected_count = sum(1 for r in rows if r[3] >= 1)
-		_accuracy = (1 - _corrected_count / len(rows)) * 100 if rows else 100.0
-
-		# 弹出结果对话框
-		action = self._show_result_dialog(len(rows), _corrected_count, _accuracy)
-		if action == "discard":
+			messagebox.showwarning("未选择模式", "请选择纠错模式（自动锚点或人工基准）。")
 			raise _CancelExport()
-		elif action == "correct":
-			# 人工纠错（迭代，持久窗口）
-			self._run_manual_correction_iterative(
-				observations, raw_frames, rows, max_speed_kmh, max_accel_mps2)
-			# 重新计算统计
-			_corrected_count = sum(1 for r in rows if r[3] >= 1)
-			_accuracy = (1 - _corrected_count / len(rows)) * 100 if rows else 100.0
+		return
 
-		self._write_csv_with_retry(output_path, rows, _t_elapsed, total_frames, _accuracy, ocr_engine._gpu_backend)
 
-	def _show_result_dialog(self, total_rows: int, corrected_count: int, accuracy: float) -> str:
-		"""识别完成对话框。返回 "save" | "correct" | "discard"。"""
-		result: list[str] = []
-
-		win = tk.Toplevel(self.root)
-		win.title("识别完成")
-		win.geometry("420x260")
-		win.transient(self.root)
-		win.grab_set()
-		win.resizable(False, False)
-		# 居中于主窗口
-		win.update_idletasks()
-		rx = self.root.winfo_rootx() + (self.root.winfo_width() - 420) // 2
-		ry = self.root.winfo_rooty() + (self.root.winfo_height() - 260) // 2
-		win.geometry(f"+{rx}+{ry}")
-
-		frame = ttk.Frame(win, padding=(20, 16, 20, 16))
-		frame.pack(fill="both", expand=True)
-
-		ttk.Label(frame, text="识别完成", font=("", 14, "bold")).pack(anchor="center")
-		stats = (
-			f"共 {total_rows} 条记录\n"
-			f"自动纠错 {corrected_count} 条  |  准确率 {accuracy:.1f}%"
-		)
-		ttk.Label(frame, text=stats, font=("", 10), justify="center").pack(pady=(12, 4))
-
-		hint_text = "自动纠错可能仍有误判，建议人工复核。"
-		ttk.Label(frame, text=hint_text, foreground="#888888", font=("", 9)).pack(pady=(0, 16))
-
-		btn_frame = ttk.Frame(frame)
-		btn_frame.pack()
-		ttk.Button(btn_frame, text="确认保存", command=lambda: _choose("save"), width=12).pack(side="left", padx=4)
-		ttk.Button(btn_frame, text="人工纠错", command=lambda: _choose("correct"), width=12).pack(side="left", padx=4)
-		ttk.Button(btn_frame, text="舍弃结果", command=lambda: _choose("discard"), width=12).pack(side="left", padx=4)
-
-		def _choose(action: str) -> None:
-			result.append(action)
-			win.destroy()
-
-		self.root.wait_window(win)
-		return result[0] if result else "discard"
-
-	def _build_rows(self, observations, corrected_speeds, max_accel_mps2):
-		"""从 observations 和 corrected_speeds 构建 rows 列表。"""
-		rows: list[tuple[float, float, float, int]] = []
-		distance_m = 0.0
-		previous_sample_time: float | None = None
-		previous_speed_ms: float | None = None
-		prev_corrected_kmh: float | None = None
-		for observation, corrected_speed_kmh in zip(observations, corrected_speeds):
-			current_speed_ms = corrected_speed_kmh / 3.6
-			if previous_sample_time is not None and previous_speed_ms is not None:
-				delta_t = observation.timestamp - previous_sample_time
-				if delta_t > 0:
-					distance_m += (previous_speed_ms + current_speed_ms) * 0.5 * delta_t
-			previous_sample_time = observation.timestamp
-			previous_speed_ms = current_speed_ms
-			corrected_flag = 1 if abs(observation.raw_speed_kmh - corrected_speed_kmh) > 0.01 else 0
-			if not corrected_flag and prev_corrected_kmh is not None:
-				delta_t = observation.timestamp - (rows[-1][0] if rows else 0)
-				if delta_t > 0 and abs(corrected_speed_kmh - prev_corrected_kmh) / (delta_t * 3.6) > max_accel_mps2:
-					corrected_flag = 1
-			prev_corrected_kmh = corrected_speed_kmh
-			rows.append((observation.timestamp, distance_m, corrected_speed_kmh, corrected_flag))
-		return rows
 
 	def _correct_with_anchors(self, rows, observations, raw_frames, ocr, max_speed_kmh, max_accel_mps2, anchor_indices):
 		"""纠错程序 B v2：5 阶段流水线。
@@ -1550,9 +1446,8 @@ class RaceVideoToLogApp:
 			_ann_error = []
 			def _do_annotation():
 				try:
-					self._run_manual_correction_iterative(
-						observations, raw_frames, rows, max_speed_kmh, max_accel_mps2,
-						baseline_mode=True)
+					self._run_baseline_annotation(
+						observations, raw_frames, rows, max_speed_kmh, max_accel_mps2)
 				except Exception as e:
 					_ann_error.append(e)
 				finally:
@@ -1596,16 +1491,14 @@ class RaceVideoToLogApp:
 
 		print(f"[Baseline] CSV written: {output_path}", flush=True)
 
-	def _run_manual_correction_iterative(self, observations, raw_frames, rows, max_speed_kmh, max_accel_mps2,
-			baseline_mode: bool = False):
-		"""人工纠错窗口。baseline_mode=True 时单轮不迭代，支持跳过。"""
+	def _run_baseline_annotation(self, observations, raw_frames, rows, max_speed_kmh, max_accel_mps2):
+		"""人工基准标注窗口。用户逐帧检查并输入正确速度值。"""
 		trust = _estimate_raw_trust(observations)
-		total_corrected = 0
-		iteration = 0
+		total_labeled = 0
 
-		# ── 创建持久窗口 ──
+		# ── 创建窗口 ──
 		win = tk.Toplevel(self.root)
-		win.title("人工纠错")
+		win.title("人工基准标注")
 		win.geometry("500x480")
 		win.transient(self.root)
 		win.resizable(False, False)
@@ -1614,7 +1507,7 @@ class RaceVideoToLogApp:
 		ry = self.root.winfo_rooty() + (self.root.winfo_height() - 480) // 2
 		win.geometry(f"+{rx}+{ry}")
 
-		# ── 界面元素（持久）──
+		# ── UI 元素 ──
 		img_label = ttk.Label(win)
 		img_label.grid(row=0, column=0, columnspan=2, pady=(12, 8))
 		info_var = tk.StringVar()
@@ -1636,60 +1529,37 @@ class RaceVideoToLogApp:
 		btn_frame = ttk.Frame(win)
 		btn_frame.grid(row=4, column=0, columnspan=2, pady=(12, 8))
 
-		# ── 可变状态 ──
-		current_flagged: list[tuple[int, float, SpeedObservation]] = []
+		# ── 状态 ──
+		current_flagged: list = []
 		idx_iter = iter([])
 		current = [None]
 		done_flag = [False]
 
 		def _rebuild_flagged():
-			"""收集当前 flag=1 帧，更新迭代。"""
 			nonlocal idx_iter, current_flagged
-			current_flagged = []
-			for i, r in enumerate(rows):
-				if r[3] == 1:
-					current_flagged.append((i, trust[i], observations[i]))
+			current_flagged = [(i, trust[i], observations[i]) for i, r in enumerate(rows) if r[3] == 1]
 			if not current_flagged:
 				return False
-			if not baseline_mode:
-					current_flagged.sort(key=lambda x: x[1])
 			idx_iter = iter(current_flagged)
 			return True
 
 		def _refresh_window():
-			"""更新标题和底部统计。"""
-			nonlocal total_corrected
-			total_corrected = sum(1 for r in rows if r[3] >= 2)
+			nonlocal total_labeled
+			total_labeled = sum(1 for r in rows if r[3] >= 2)
 			remaining = sum(1 for r in rows if r[3] == 1)
-			if baseline_mode:
-				win.title("人工基准标注")
-			else:
-				win.title(f"人工纠错 — 第 {iteration} 轮")
-			if baseline_mode:
-				bottom_var.set(f"已标注 {total_corrected} 帧  |  剩余 {remaining} 帧  |  跳过=留空")
-			else:
-				bottom_var.set(f"已纠正 {total_corrected} 帧  |  当前第 {iteration} 轮  |  剩余 {remaining} 帧")
+			bottom_var.set(f"已标注 {total_labeled} 帧  |  剩余 {remaining} 帧  |  跳过=留空并确认")
 
 		def _show_next():
 			try:
 				ri, score, obs = next(idx_iter)
 			except StopIteration:
 				done_flag[0] = True
-				if baseline_mode:
-					win.destroy()
-				else:
-					_next_round()
+				win.destroy()
 				return
 			current[0] = (ri, obs, score)
 			remaining = sum(1 for r in rows if r[3] == 1)
-			if baseline_mode:
-				progress_var.set(f"帧 #{ri+1}/{len(rows)}  |  剩余 {remaining} 帧")
-			else:
-				progress_var.set(f"帧 #{ri+1}/{len(rows)}  |  可信度 {score:.2f}  |  剩余 {remaining} 帧")
-			if baseline_mode:
-				info_var.set(f"Frame #{ri}  t={obs.timestamp:.2f}s  输入正确速度后按确认")
-			else:
-				info_var.set(f"t={obs.timestamp:.2f}s  纠正值={rows[ri][2]:.1f} km/h  原始={obs.raw_speed_kmh:.1f}")
+			progress_var.set(f"帧 #{ri+1}/{len(rows)}  |  剩余 {remaining} 帧")
+			info_var.set(f"Frame #{ri}  t={obs.timestamp:.2f}s  输入正确速度后按确认")
 			speed_var.set("")
 			speed_entry.focus_set()
 			crop = raw_frames[ri][1]
@@ -1702,7 +1572,7 @@ class RaceVideoToLogApp:
 			img_label.image = img
 			_refresh_window()
 
-		# ── 按钮动作 ──
+		# ── 按钮 ──
 		def _confirm():
 			if current[0] is None or done_flag[0]:
 				return
@@ -1713,23 +1583,8 @@ class RaceVideoToLogApp:
 					t, d, s, f = rows[ri]
 					rows[ri] = [t, d, val, 2]
 			except ValueError:
-				pass
-			_show_next()
-
-		def _use_raw():
-			if current[0] is None or done_flag[0]:
-				return
-			ri, obs, _ = current[0]
-			t, d, s, f = rows[ri]
-			rows[ri] = (t, d, obs.raw_speed_kmh, 2)
-			_show_next()
-
-		def _use_corrected():
-			if current[0] is None or done_flag[0]:
-				return
-			ri, obs, _ = current[0]
-			t, d, s, f = rows[ri]
-			rows[ri] = (t, d, s, 2)
+				# 留空=跳过当前帧
+				rows[ri][3] = 0
 			_show_next()
 
 		def _skip():
@@ -1743,52 +1598,15 @@ class RaceVideoToLogApp:
 			done_flag[0] = True
 			win.destroy()
 
-		def _next_round():
-			"""本轮结束：重新纠错并展示下一轮。"""
-			nonlocal iteration
-			# 用 flag=2 帧重建 observations 再纠错
-			flag2 = set(i for i, r in enumerate(rows) if r[3] == 2)
-			if flag2:
-				new_obs = list(observations)
-				for i in flag2:
-					t, d, s, f = rows[i]
-					new_obs[i] = SpeedObservation(
-						timestamp=observations[i].timestamp,
-						raw_speed_kmh=s, raw_text=str(int(s)))
-				new_speeds = correct_speed_series(new_obs, max_speed_kmh, max_accel_mps2)
-				new_rows = self._build_rows(new_obs, new_speeds, max_accel_mps2)
-				for i in flag2:
-					new_rows[i] = rows[i]
-				rows.clear()
-				rows.extend(new_rows)
-
-			iteration += 1
-			if _rebuild_flagged():
-				done_flag[0] = False
-				current[0] = None
-				_refresh_window()
-				win.deiconify()
-				win.lift()
-				win.grab_set()
-				win.after(10, _show_next)  # 异步调用，避免递归
-			else:
-				win.destroy()
-
 		# ── 构建按钮 ──
 		for widget in btn_frame.winfo_children():
 			widget.destroy()
-		if baseline_mode:
-			ttk.Button(btn_frame, text="确认 (Enter)", command=_confirm).grid(row=0, column=0, padx=(0, 6))
-			ttk.Button(btn_frame, text="跳过", command=_skip).grid(row=0, column=1, padx=(0, 6))
-			ttk.Button(btn_frame, text="跳过剩余", command=_close).grid(row=0, column=2)
-		else:
-			ttk.Button(btn_frame, text="确认 (Enter)", command=_confirm).grid(row=0, column=0, padx=(0, 6))
-			ttk.Button(btn_frame, text="原值", command=_use_raw).grid(row=0, column=1, padx=(0, 6))
-			ttk.Button(btn_frame, text="纠正值", command=_use_corrected).grid(row=0, column=2, padx=(0, 6))
-			ttk.Button(btn_frame, text="跳过剩余", command=_close).grid(row=0, column=3)
+		ttk.Button(btn_frame, text="确认 (Enter)", command=_confirm).grid(row=0, column=0, padx=(0, 6))
+		ttk.Button(btn_frame, text="跳过", command=_skip).grid(row=0, column=1, padx=(0, 6))
+		ttk.Button(btn_frame, text="跳过剩余", command=_close).grid(row=0, column=2)
 		win.bind("<Return>", lambda e: _confirm() if not done_flag[0] else None)
 
-		# ── 开始第一轮 ──
+		# ── 开始 ──
 		if _rebuild_flagged():
 			_refresh_window()
 			win.grab_set()
@@ -1796,44 +1614,6 @@ class RaceVideoToLogApp:
 			self.root.wait_window(win)
 		else:
 			win.destroy()
-
-	def _write_csv_with_retry(self, initial_path: Path, rows: list[tuple[float, float, float, int]],
-		elapsed: float = 0.0, total_frames: int = 0,
-
-		accuracy: float = 100.0, backend: str = "CPU") -> None:
-
-		"""写入 CSV，若文件被占用则弹窗让用户另选路径，避免分析结果丢失。"""
-		output_path = initial_path
-		while True:
-			try:
-				with output_path.open("w", newline="", encoding="utf-8-sig") as fh:
-					writer = csv.writer(fh)
-					for timestamp, distance, speed_kmh, flag in rows:
-						writer.writerow([f"{timestamp:.2f}", f"{distance:.2f}", f"{speed_kmh:.2f}", str(flag)])
-				self.root.after(0, self._on_export_success, output_path, len(rows),
-					elapsed, total_frames, accuracy, backend)
-
-				return
-			except (OSError, PermissionError):
-				picked = threading.Event()
-				result: list[str | None] = [None]
-
-				def _ask() -> None:
-					result[0] = filedialog.asksaveasfilename(
-						title="无法写入，请选择其他位置",
-						defaultextension=".csv",
-						initialdir=str(output_path.parent),
-						initialfile=f"{output_path.stem}_new.csv",
-						filetypes=[("CSV 文件", "*.csv")],
-					)
-					picked.set()
-
-				self.root.after(0, _ask)
-				picked.wait()
-				if not result[0]:
-					self.root.after(0, self._on_export_error, "用户取消了保存。")
-					return
-				output_path = Path(result[0])
 
 	def run(self) -> None:
 		self.root.mainloop()

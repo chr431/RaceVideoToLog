@@ -627,7 +627,7 @@ def compute_video_hash(video_path: str | Path, chunk_size: int = 1_048_576) -> s
 
 
 
-def auto_select_anchors(observations, max_speed_kmh=400.0, window=7, max_dev=5.0):
+def auto_select_anchors(observations, max_speed_kmh=400.0, window=7, max_dev=4.0):
 	"""Select reliable OCR frames as Correction B anchors.
 	Uses local median filter: for each frame, compute median in a sliding
 	window. If frame value deviates <= max_dev from median, it is reliable.
