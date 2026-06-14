@@ -114,29 +114,44 @@ def plot_segmented(ax, x, y, flags, normal_color: str, show_red: bool,
 
 	# 红色段（flag=1 自动纠错）
 	rx, ry = [], []
-	for i in range(n_orig - 1):
-		if flags[i] == 1 and flags[i + 1] == 1:
-			si = int(i * n_smooth / n_orig)
-			ei = int((i + 2) * n_smooth / n_orig)
-			si = min(si, n_smooth - 2)
-			ei = min(ei, n_smooth)
-			if ei > si:
-				rx.extend(_x[si:ei] + [float('nan')])
-				ry.extend(_y[si:ei] + [float('nan')])
+	i = 0
+	while i < n_orig:
+		if flags[i] == 1:
+			# 找到连续 flag=1 段
+			j = i
+			while j < n_orig and flags[j] == 1:
+				j += 1
+			run_len = j - i
+			# 映射到平滑后的索引：覆盖 run_len+1 个数据点（段头尾各延半帧）
+			si = int(max(0, i - 0.5) * n_smooth / n_orig)
+			ei = int(min(n_orig, j + 0.5) * n_smooth / n_orig)
+			si = max(0, min(si, n_smooth - 2))
+			ei = min(n_smooth, max(ei, si + 1))
+			rx.extend(_x[si:ei] + [float('nan')])
+			ry.extend(_y[si:ei] + [float('nan')])
+			i = j + 1
+		else:
+			i += 1
 	if rx:
 		ax.plot(rx, ry, color=red, linewidth=1.2)
 
 	# 绿色段（flag>=2 人工纠错）
 	gx, gy = [], []
-	for i in range(n_orig - 1):
-		if flags[i] >= 2 or flags[i + 1] >= 2:
-			si = int(i * n_smooth / n_orig)
-			ei = int((i + 2) * n_smooth / n_orig)
-			si = min(si, n_smooth - 2)
-			ei = min(ei, n_smooth)
-			if ei > si:
-				gx.extend(_x[si:ei] + [float('nan')])
-				gy.extend(_y[si:ei] + [float('nan')])
+	i = 0
+	while i < n_orig:
+		if flags[i] >= 2:
+			j = i
+			while j < n_orig and flags[j] >= 2:
+				j += 1
+			si = int(max(0, i - 0.5) * n_smooth / n_orig)
+			ei = int(min(n_orig, j + 0.5) * n_smooth / n_orig)
+			si = max(0, min(si, n_smooth - 2))
+			ei = min(n_smooth, max(ei, si + 1))
+			gx.extend(_x[si:ei] + [float('nan')])
+			gy.extend(_y[si:ei] + [float('nan')])
+			i = j + 1
+		else:
+			i += 1
 	if gx:
 		ax.plot(gx, gy, color=green, linewidth=1.5, alpha=0.8)
 
