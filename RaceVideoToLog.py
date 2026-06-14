@@ -231,9 +231,6 @@ class RaceVideoToLogApp:
 		ttk.Button(slider_row, text="刷新预览", command=self.refresh_preview).grid(row=0, column=1, padx=(8, 0))
 
 		# 预览画布右键：重置视图
-		# ── Tab 2: 数据分析 ──
-		self._analysis_tab = AnalysisTab(self._notebook, self._footer, self.status_var, self.progress_var)
-
 		# Row 1: 底部状态栏（OCR 处理 tab 使用，数据分析 tab 隐藏）
 		self._footer = ttk.Frame(self.root, padding=(12, 0, 12, 12))
 		self._footer.grid(row=1, column=0, sticky="ew")
@@ -241,6 +238,9 @@ class RaceVideoToLogApp:
 		ttk.Label(self._footer, textvariable=self.status_var).grid(row=0, column=0, sticky="w")
 		self.progress_bar = ttk.Progressbar(self._footer, variable=self.progress_var, maximum=100.0)
 		self.progress_bar.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+
+		# ── Tab 2: 数据分析 ──
+		self._analysis_tab = AnalysisTab(self._notebook, self._footer, self.status_var, self.progress_var)
 
 	def _add_info_row(self, parent: ttk.LabelFrame, column: int, title: str, variable: tk.StringVar) -> None:
 		cell = ttk.Frame(parent)

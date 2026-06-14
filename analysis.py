@@ -20,9 +20,6 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 import numpy as np
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from matplotlib.widgets import SpanSelector
 
 from ocr_engine import _savgol_filter_np
 
@@ -157,6 +154,11 @@ class AnalysisTab:
 	def __init__(self, notebook: ttk.Notebook, footer: ttk.Frame,
 		status_var: tk.StringVar, progress_var: tk.DoubleVar) -> None:
 
+		from matplotlib.figure import Figure
+		from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+		self._Figure = Figure
+		self._FigureCanvasTkAgg = FigureCanvasTkAgg
+
 		self._notebook = notebook
 		self._footer = footer
 		self.status_var = status_var
@@ -235,8 +237,8 @@ class AnalysisTab:
 		self._notebook.bind("<<NotebookTabChanged>>", _on_tab_change)
 
 		# Matplotlib 画布
-		self._analysis_figure = Figure(figsize=(8, 5), dpi=100)
-		self._analysis_canvas = FigureCanvasTkAgg(self._analysis_figure, master=tab)
+		self._analysis_figure = self._Figure(figsize=(8, 5), dpi=100)
+		self._analysis_canvas = self._FigureCanvasTkAgg(self._analysis_figure, master=tab)
 		self._analysis_canvas.get_tk_widget().grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 10))
 
 	def _update_footer_visibility(self) -> None:

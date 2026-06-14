@@ -20,13 +20,15 @@ import cv2
 import numpy as np
 from PIL import Image, ImageTk
 
-import matplotlib
-matplotlib.use("TkAgg")
-# 配置中文字体支持
-matplotlib.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
-matplotlib.rcParams["axes.unicode_minus"] = False
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+try:
+	import matplotlib
+	matplotlib.use("TkAgg")
+	matplotlib.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
+	matplotlib.rcParams["axes.unicode_minus"] = False
+	from matplotlib.figure import Figure
+	from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+except ImportError:
+	pass
 
 # ── 导出列表：包含 _ 前缀的私有符号供 RaceVideoToLog.py / headless.py 使用 ──
 __all__ = [
