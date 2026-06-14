@@ -637,13 +637,15 @@ class RaceVideoToLogApp:
 		times, dists, speeds, flags = [], [], [], []
 		with open(path, "r", encoding="utf-8-sig") as f:
 			for line in f:
-				parts = line.strip().split(",")
+				line = line.strip()
+				if line.startswith("#") or not line:
+					continue
+				parts = line.split(",")
 				if len(parts) >= 3:
 					times.append(float(parts[0]))
 					dists.append(float(parts[1]))
 					speeds.append(float(parts[2]))
 					flags.append(int(parts[3]) if len(parts) > 3 else 0)
-		# 去除开头的静止帧（speed=0 且 distance=0），从第一个有效速度开始
 		start = 0
 		for i, s in enumerate(speeds):
 			if s > 0:
