@@ -626,6 +626,59 @@ def compute_video_hash(video_path: str | Path, chunk_size: int = 1_048_576) -> s
 
 
 
+
+def auto_select_anchors(observations, max_speed_kmh=400.0, window=7, max_dev=5.0):
+	"""Select reliable OCR frames as Correction B anchors.
+	Uses local median filter: for each frame, compute median in a sliding
+	window. If frame value deviates <= max_dev from median, it is reliable.
+	Returns set of trusted frame indices."""
+	n = len(observations)
+	raw_vals = [o.raw_speed_kmh for o in observations]
+	anchors = set()
+	half = window // 2
+
+	for i in range(half, n - half):
+		if raw_vals[i] <= 0:
+			continue
+		local = []
+		for j in range(i - half, i + half + 1):
+			if j != i and raw_vals[j] > 0 and raw_vals[j] <= max_speed_kmh:
+				local.append(raw_vals[j])
+		if len(local) < 3:
+			continue
+		local.sort()
+		median = local[len(local) // 2]
+		if abs(raw_vals[i] - median) <= max_dev:
+			anchors.add(i)
+
+	# Head boundary frames
+	for i in range(0, half):
+		if raw_vals[i] <= 0:
+			continue
+		local = [raw_vals[j] for j in range(0, min(window, n))
+		         if j != i and raw_vals[j] > 0 and raw_vals[j] <= max_speed_kmh]
+		if len(local) < 2:
+			continue
+		local.sort()
+		median = local[len(local) // 2]
+		if abs(raw_vals[i] - median) <= max_dev:
+			anchors.add(i)
+
+	# Tail boundary frames
+	for i in range(n - half, n):
+		if raw_vals[i] <= 0:
+			continue
+		local = [raw_vals[j] for j in range(max(0, n - window), n)
+		         if j != i and raw_vals[j] > 0 and raw_vals[j] <= max_speed_kmh]
+		if len(local) < 2:
+			continue
+		local.sort()
+		median = local[len(local) // 2]
+		if abs(raw_vals[i] - median) <= max_dev:
+			anchors.add(i)
+
+	return anchors
+
 def correct_speed_series(
 	samples: list[SpeedObservation],
 	max_speed_kmh: float,

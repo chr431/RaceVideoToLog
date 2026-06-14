@@ -68,6 +68,7 @@ class RaceVideoToLogApp:
 		self._human_baseline_var = tk.BooleanVar(value=False)  # 人工基准模式
 		self._baseline_freq_var = tk.StringVar(value="10")    # 人工基准抽样频率
 		self._debug_log_var = tk.BooleanVar(value=False)       # 调试日志
+		self._auto_anchor_var = tk.BooleanVar(value=False)    # 自动锚点纠错
 
 		self.is_exporting = False
 		self._cancel_flag = False
@@ -195,6 +196,7 @@ class RaceVideoToLogApp:
 		self._baseline_spinbox.grid(row=0, column=2, sticky="w")
 		ttk.Label(baseline_frame, text="(1=全部人工)", foreground="#888888").grid(row=0, column=3, sticky="w", padx=(4, 0))
 		ttk.Checkbutton(baseline_frame, text="调试日志", variable=self._debug_log_var).grid(row=0, column=4, sticky="w", padx=(12, 0))
+		ttk.Checkbutton(baseline_frame, text="自动锚点纠错", variable=self._auto_anchor_var).grid(row=0, column=5, sticky="w", padx=(12, 0))
 
 		# 时间轴范围
 		time_box = ttk.LabelFrame(config_col, text="时间轴范围", padding=(12, 10, 12, 12))
@@ -923,6 +925,24 @@ class RaceVideoToLogApp:
 		if total_frames == 0:
 			raise RuntimeError("未从视频中读取到任何帧，请检查采样率设置。")
 
+		# ── 自动锚点模式 ──
+		if self._auto_anchor_var.get():
+			try:
+				self._run_auto_anchor_mode(raw_frames, total_frames, output_path, region,
+					max_speed_kmh, max_accel_mps2, frame_div, target_h, pad_px, num_workers,
+					_t_start, ocr)
+			except _CancelExport:
+				self.root.after(0, self._on_export_cancelled)
+			except Exception:
+				import traceback
+				traceback.print_exc()
+				self.root.after(0, lambda: messagebox.showerror(
+					"自动锚点错误", traceback.format_exc()))
+				self.root.after(0, self._finish_export_state)
+			else:
+				self.root.after(0, self._finish_export_state)
+			return
+
 		# ── 人工基准模式 ──
 		if self._human_baseline_var.get():
 			try:
@@ -1426,6 +1446,72 @@ class RaceVideoToLogApp:
 		except Exception:
 			pass
 
+
+
+	def _run_auto_anchor_mode(self, raw_frames, total_frames, output_path, region,
+			max_speed_kmh, max_accel_mps2, frame_div, target_h, pad_px, num_workers,
+			_t_start, ocr):
+		"""Auto anchor mode: select reliable OCR frames, run Correction B."""
+		print(f'[AutoAnchor] START: {total_frames} frames', flush=True)
+		import time as _time
+		print('[AutoAnchor] Starting OCR...', flush=True)
+		self.root.after(0, self._update_progress, "正在 OCR 自动识别...", 25.0)
+		self._check_cancel()
+		observations = self._ocr_sequential(raw_frames, ocr, target_h, pad_px, total_frames, max_speed_kmh)
+		self._check_cancel()
+		n_obs = len(observations)
+		print(f'[AutoAnchor] OCR done: {n_obs} frames', flush=True)
+		if n_obs == 0:
+			raise RuntimeError("未识别到任何速度数据。")
+
+		# Auto-select anchors
+		self.root.after(0, self._update_progress, "正在自动识别可靠锚点...", 40.0)
+		anchor_indices = auto_select_anchors(observations, max_speed_kmh, window=7, max_dev=5.0)
+		print(f'[AutoAnchor] Selected {len(anchor_indices)} anchors ({100*len(anchor_indices)/n_obs:.1f}% of frames)', flush=True)
+		if len(anchor_indices) < 3:
+			raise RuntimeError("自动锚点选择失败：未找到足够的可靠帧。")
+
+		# Build rows with anchors
+		rows = []
+		for i, obs in enumerate(observations):
+			if i in anchor_indices:
+				rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh, 2])
+			else:
+				rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh, 0])
+
+		# Run Correction B
+		self.root.after(0, self._update_progress, "正在以自动锚点进行物理约束纠错...", 60.0)
+		self._check_cancel()
+		print(f'[AutoAnchor] Running Correction B...', flush=True)
+		rows = self._correct_with_anchors(rows, observations, raw_frames, ocr, max_speed_kmh, max_accel_mps2, anchor_indices)
+		print(f'[AutoAnchor] Correction B done, integrating distance...', flush=True)
+
+		# Distance integration
+		dist = 0.0; prev_t, prev_v = None, None
+		for r in rows:
+			v = r[2] / 3.6
+			if prev_t is not None and prev_v is not None:
+				dt = r[0] - prev_t
+				if dt > 0: dist += (prev_v + v) * 0.5 * dt
+			prev_t, prev_v = r[0], v; r[1] = dist
+
+		print(f'[AutoAnchor] Distance integrated, writing CSV...', flush=True)
+		_t_elapsed = _time.perf_counter() - _t_start
+		_corrected_count = sum(1 for r in rows if r[3] >= 1)
+		_accuracy = (1 - _corrected_count / len(rows)) * 100 if rows else 100.0
+
+		# Write CSV
+		vhash = compute_video_hash(self.video_path)
+		with output_path.open("w", newline="", encoding="utf-8-sig") as fh:
+			fh.write(f"# RaceVideoToLog\n")
+			fh.write(f"# video_hash={vhash}, video={self.video_path.name}\n")
+			fh.write(f"# roi={region[0]},{region[1]},{region[2]},{region[3]}, format={self.speed_format_var.get()}\n")
+			fh.write(f"# max_speed={max_speed_kmh}, max_accel={max_accel_mps2}, div={frame_div}, target_h={target_h}, pad={pad_px}, backend={ocr_engine._gpu_backend}, model={self._ocr_model_var.get()}, workers={num_workers}, frame_start={self._frame_start_var.get() or ''}, frame_end={self._frame_end_var.get() or ''}, auto_anchor=1\n")
+			w = csv.writer(fh)
+			for r in rows:
+				w.writerow([f"{r[0]:.2f}", f"{r[1]:.2f}", f"{r[2]:.2f}", str(r[3])])
+
+		print(f'[AutoAnchor] CSV written: {output_path}', flush=True)
 
 	def _run_baseline_mode(self, raw_frames, total_frames, output_path, region,
 			max_speed_kmh, max_accel_mps2, frame_div, target_h, pad_px, num_workers,
