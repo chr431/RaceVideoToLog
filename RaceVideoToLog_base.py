@@ -24,7 +24,6 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 import ocr_engine
 from ocr_engine import *
-from analysis import AnalysisTab
 
 class RaceVideoToLogApp:
 	def __init__(self) -> None:
@@ -65,9 +64,7 @@ class RaceVideoToLogApp:
 		# 时间轴范围
 		self._frame_start_var = tk.StringVar(value="")
 		self._frame_end_var = tk.StringVar(value="")
-		self._human_baseline_var = tk.BooleanVar(value=False)  # 人工基准模式
-		self._baseline_freq_var = tk.StringVar(value="10")    # 人工基准抽样频率
-		self._debug_log_var = tk.BooleanVar(value=False)       # 调试日志
+		self._manual_correction_var = None  # deprecated，保留以防旧引用
 
 		self.is_exporting = False
 		self._cancel_flag = False
@@ -83,6 +80,19 @@ class RaceVideoToLogApp:
 		self._drag_start_x: int | None = None
 		self._drag_start_y: int | None = None
 		self._preview_frame_pos = tk.DoubleVar(value=0)  # 预览帧位置
+
+		# 数据分析 tab
+		self._analysis_csvs: list[str | None] = [None, None, None]  # 最多 3 个 CSV
+		self._analysis_labels: list[tk.StringVar] = []
+		self._analysis_figure: Figure | None = None
+		self._analysis_canvas: FigureCanvasTkAgg | None = None
+		self._chart_mode = tk.StringVar(value="v-x")
+		self._show_corrected = tk.BooleanVar(value=False)
+		self._saved_limits: dict[str, tuple | None] = {}  # 按模式保存视图范围
+		self._last_rendered_mode: str | None = None  # 上次实际渲染的模式
+		self._smooth_strength = tk.IntVar(value=25)
+		self._smooth_entry_var = tk.StringVar(value="25")  # 平滑输入框同步
+		self._span_selector = None  # matplotlib SpanSelector
 
 		self._build_ui()
 		self._bind_preview_updates()
@@ -163,8 +173,8 @@ class RaceVideoToLogApp:
 		perf_box.columnconfigure(1, weight=1); perf_box.columnconfigure(3, weight=1); perf_box.columnconfigure(5, weight=1)
 
 		ttk.Label(perf_box, text="采样间隔").grid(row=0, column=0, sticky="w")
-		self.frame_div_spinbox = ttk.Spinbox(perf_box, textvariable=self.frame_div_var, from_=1, to=10, width=5)
-		self.frame_div_spinbox.grid(row=0, column=1, sticky="ew", padx=(6, 2))
+		self.frame_div_combo = ttk.Combobox(perf_box, textvariable=self.frame_div_var, values=["1","2","3","4","5"], width=6, state="readonly")
+		self.frame_div_combo.grid(row=0, column=1, sticky="ew", padx=(6, 2))
 		ttk.Label(perf_box, text="1/N 采集", foreground="#555555").grid(row=0, column=2, sticky="w")
 
 		ttk.Label(perf_box, text="OCR 后端").grid(row=0, column=3, sticky="w", padx=(20,0))
@@ -184,17 +194,7 @@ class RaceVideoToLogApp:
 		ttk.Entry(perf_box, textvariable=self.pad_var, width=8).grid(row=1, column=3, sticky="ew", padx=(6, 14), pady=(8,0))
 		ttk.Label(perf_box, text="并行线程数").grid(row=1, column=4, sticky="w", pady=(8,0))
 		ttk.Entry(perf_box, textvariable=self.num_workers_var, width=8).grid(row=1, column=5, sticky="ew", padx=(6, 14), pady=(8,0))
-		ttk.Label(perf_box, text=">1 时启用并行推理。", foreground="#555555").grid(row=2, column=0, columnspan=6, sticky="w", pady=(4, 0))
-		baseline_frame = ttk.Frame(perf_box)
-		baseline_frame.grid(row=3, column=0, columnspan=6, sticky="ew", pady=(8, 0))
-		ttk.Checkbutton(baseline_frame, text="人工基准",
-			variable=self._human_baseline_var).grid(row=0, column=0, sticky="w")
-		ttk.Label(baseline_frame, text="抽样频率 1/").grid(row=0, column=1, sticky="w", padx=(12, 0))
-		self._baseline_spinbox = ttk.Spinbox(baseline_frame, textvariable=self._baseline_freq_var,
-			from_=1, to=50, width=4)
-		self._baseline_spinbox.grid(row=0, column=2, sticky="w")
-		ttk.Label(baseline_frame, text="(1=全部人工)", foreground="#888888").grid(row=0, column=3, sticky="w", padx=(4, 0))
-		ttk.Checkbutton(baseline_frame, text="调试日志", variable=self._debug_log_var).grid(row=0, column=4, sticky="w", padx=(12, 0))
+		ttk.Label(perf_box, text=">1 时启用并行推理。", foreground="#555555").grid(row=2, column=0, columnspan=6, sticky="w", pady=(8, 0))
 
 		# 时间轴范围
 		time_box = ttk.LabelFrame(config_col, text="时间轴范围", padding=(12, 10, 12, 12))
@@ -232,7 +232,7 @@ class RaceVideoToLogApp:
 
 		# 预览画布右键：重置视图
 		# ── Tab 2: 数据分析 ──
-		self._analysis_tab = AnalysisTab(self._notebook, self._footer, self.status_var, self.progress_var)
+		self._build_analysis_tab()
 
 		# Row 1: 底部状态栏（OCR 处理 tab 使用，数据分析 tab 隐藏）
 		self._footer = ttk.Frame(self.root, padding=(12, 0, 12, 12))
@@ -255,16 +255,413 @@ class RaceVideoToLogApp:
 		ttk.Entry(cell, textvariable=variable, width=10).grid(row=1, column=0, sticky="ew", pady=(4, 0))
 
 	# ═══════════════════ 数据分析 Tab ═══════════════════
-	
-	
-	
-	
-	
-	
-	
-	
-	
-	
+	def _build_analysis_tab(self) -> None:
+		tab = ttk.Frame(self._notebook)
+		self._notebook.add(tab, text="数据分析")
+		tab.columnconfigure(0, weight=1)
+		tab.rowconfigure(1, weight=1)
+
+		# 顶部控制栏
+		ctrl = ttk.Frame(tab, padding=(12, 10, 12, 6))
+		ctrl.grid(row=0, column=0, sticky="ew")
+		for i in range(3):
+			ctrl.columnconfigure(i, weight=1)
+			var = tk.StringVar(value="未导入")
+			self._analysis_labels.append(var)
+			slot = ttk.LabelFrame(ctrl, text=f"CSV {i+1}", padding=(8, 6, 8, 6))
+			slot.grid(row=0, column=i, sticky="ew", padx=(0, 6) if i < 2 else (0, 0))
+			btn = ttk.Button(slot, text="导入", command=lambda idx=i: self._import_csv(idx))
+			btn.grid(row=0, column=0, sticky="w")
+			ttk.Button(slot, text="清除", command=lambda idx=i: self._clear_csv(idx)).grid(row=0, column=1, sticky="w", padx=(4, 0))
+			ttk.Label(slot, textvariable=var, foreground="#555555").grid(row=0, column=2, sticky="w", padx=(6, 0))
+
+		ttk.Button(ctrl, text="渲染曲线", command=self._render_curves).grid(row=0, column=3, sticky="e", padx=(12, 6))
+		ttk.Button(ctrl, text="导出 PNG", command=self._export_png).grid(row=0, column=4, sticky="e")
+		ttk.Radiobutton(ctrl, text="v-t", variable=self._chart_mode, value="v-t").grid(row=1, column=3, sticky="e", padx=(12, 0))
+		ttk.Radiobutton(ctrl, text="v-x", variable=self._chart_mode, value="v-x").grid(row=1, column=4, sticky="w")
+		ttk.Radiobutton(ctrl, text="Δt-x", variable=self._chart_mode, value="dt-x").grid(row=1, column=5, sticky="w", padx=(6, 0))
+		ttk.Button(ctrl, text="自动调整", command=self._auto_fit).grid(row=1, column=6, sticky="e", padx=(6, 0))
+		ttk.Checkbutton(ctrl, text="标记纠错点", variable=self._show_corrected).grid(row=1, column=0, sticky="w", padx=(0, 6))
+		ttk.Label(ctrl, text="平滑").grid(row=1, column=1, sticky="e", padx=(0, 2))
+		ttk.Scale(ctrl, from_=0, to=100, variable=self._smooth_strength,
+			orient="horizontal", length=80).grid(row=1, column=2, sticky="w")
+		smooth_entry = ttk.Entry(ctrl, textvariable=self._smooth_entry_var, width=4, justify="center")
+		smooth_entry.grid(row=1, column=2, sticky="e", padx=(0, 4))
+
+		# 滑块 ↔ 输入框双向同步
+		def _slider_to_entry(*_):
+			self._smooth_entry_var.set(str(self._smooth_strength.get()))
+		def _entry_to_slider(*_):
+			try:
+				v = int(self._smooth_entry_var.get())
+				self._smooth_strength.set(max(0, min(100, v)))
+			except ValueError:
+				pass
+		self._smooth_strength.trace_add("write", _slider_to_entry)
+		self._smooth_entry_var.trace_add("write", _entry_to_slider)
+
+		# 切换到数据分析 tab 时隐藏底部进度条/状态
+		def _on_tab_change(event):
+			cur = self._notebook.index(self._notebook.select())
+			if cur == 1:  # 数据分析 tab
+				self.status_var.set("")
+				self.progress_var.set(0.0)
+			self._update_footer_visibility()
+		self._notebook.bind("<<NotebookTabChanged>>", _on_tab_change)
+
+		# Matplotlib 画布
+		self._analysis_figure = Figure(figsize=(8, 5), dpi=100)
+		self._analysis_canvas = FigureCanvasTkAgg(self._analysis_figure, master=tab)
+		self._analysis_canvas.get_tk_widget().grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 10))
+
+	def _update_footer_visibility(self) -> None:
+		"""OCR 处理 tab 显示底部状态栏，数据分析 tab 隐藏。"""
+		cur = self._notebook.index(self._notebook.select())
+		if cur == 1:
+			self._footer.grid_remove()
+		else:
+			self._footer.grid()
+
+	def _import_csv(self, index: int) -> None:
+		path = filedialog.askopenfilename(
+			title=f"选择 CSV {index + 1}",
+			filetypes=[("CSV 文件", "*.csv"), ("所有文件", "*.*")],
+		)
+		if path:
+			self._analysis_csvs[index] = path
+			self._analysis_labels[index].set(Path(path).name)
+			self._saved_limits.clear()  # 数据已变，清空视图缓存
+
+	def _clear_csv(self, index: int) -> None:
+		"""清除已导入的 CSV。"""
+		self._analysis_csvs[index] = None
+		self._analysis_labels[index].set("未导入")
+		self._saved_limits.clear()
+
+	def _render_curves(self) -> None:
+		from matplotlib.widgets import SpanSelector
+		fig = self._analysis_figure
+
+		# 保存当前视图范围（按上次实际渲染的模式记忆；Δt-x 不缓存）
+		if fig.axes and self._last_rendered_mode and self._last_rendered_mode != "dt-x":
+			self._saved_limits[self._last_rendered_mode] = (
+				fig.axes[0].get_xlim(), fig.axes[0].get_ylim()
+			)
+
+		fig.clear()
+		ax = fig.add_subplot(111)
+		colors = ["#2196F3", "#FF5722", "#4CAF50"]
+		mode = self._chart_mode.get()
+		show_corrected = self._show_corrected.get()
+		has_data = False
+
+		# 存储所有数据用于范围选择计算
+		all_x_data: list[list[float]] = [[], [], []]
+		all_y_data: list[list[float]] = [[], [], []]
+		all_times: list[list[float]] = [[], [], []]
+		all_dists: list[list[float]] = [[], [], []]
+		all_flags: list[list[int]] = [[], [], []]
+		is_vt = (mode == "v-t")
+		is_dtx = (mode == "dt-x")
+
+		if is_dtx:
+			# ── Δt-x 模式：仅用 CSV1/CSV2，无视 CSV3 ──
+			if not self._analysis_csvs[0] or not self._analysis_csvs[1]:
+				messagebox.showwarning("数据不足", "Δt-x 需要 CSV 1 和 CSV 2 均已导入。")
+				return
+			times1, dists1, speeds1, _ = self._parse_csv(self._analysis_csvs[0])
+			times2, dists2, speeds2, _ = self._parse_csv(self._analysis_csvs[1])
+			# 以 CSV1 距离为基准，插值 CSV2 时间
+			t2_interp = np.interp(dists1, dists2, times2)
+			dt = np.array(times1) - t2_interp  # 正数=CSV1更慢
+			all_x_data[0] = dists1
+			all_y_data[0] = dt.tolist()
+			x_data = dists1
+			y_data = dt.tolist()
+			name1 = Path(self._analysis_csvs[0]).stem
+			name2 = Path(self._analysis_csvs[1]).stem
+			label = f"{name1} - {name2}"
+			if self._smooth_strength.get() > 0:
+				sx, sy = self._smooth_data(x_data, y_data, self._smooth_strength.get())
+				ax.plot(sx, sy, color=colors[0], linewidth=0.8)
+			else:
+				ax.plot(x_data, y_data, color=colors[0], linewidth=0.8)
+			ax.plot([], [], color=colors[0], linewidth=0.8, label=label)
+			has_data = True
+		else:
+			for i, csv_path in enumerate(self._analysis_csvs):
+				if not csv_path:
+					continue
+				try:
+					times, dists, speeds, flags = self._parse_csv(csv_path)
+					name = Path(csv_path).stem
+					all_times[i] = times
+					all_dists[i] = dists
+					if is_vt:
+						x_data = times
+						y_data = speeds
+					else:  # v-x
+						x_data = dists
+						y_data = speeds
+					all_x_data[i] = x_data
+					all_y_data[i] = y_data
+					all_flags[i] = flags
+
+					if show_corrected or self._smooth_strength.get() > 0:
+						self._plot_segmented(ax, x_data, speeds, flags, colors[i], show_corrected)
+					else:
+						ax.plot(x_data, speeds, color=colors[i], linewidth=0.8)
+					ax.plot([], [], color=colors[i], linewidth=0.8, label=name)
+					has_data = True
+				except Exception as e:
+					messagebox.showerror("解析失败", f"{Path(csv_path).name}: {e}")
+					return
+
+		if not has_data:
+			return
+
+		if is_dtx:
+			xlabel = "距离 (m)"
+			ylabel = "Δt (s)"
+			title = f"时间差-距离 ({name1} vs {name2})"
+			delta_label_text = "Δ(Δt)"
+		elif is_vt:
+			xlabel = "时间 (s)"
+			ylabel = "速度 (km/h)"
+			title = "速度-时间曲线"
+			delta_label_text = "行驶距离"
+		else:
+			xlabel = "距离 (m)"
+			ylabel = "速度 (km/h)"
+			title = "速度-距离曲线"
+			delta_label_text = "用时"
+
+		ax.set_xlabel(xlabel)
+		ax.set_ylabel(ylabel)
+		ax.set_title(title)
+		ax.legend(loc="upper right")
+		ax.grid(True, alpha=0.3)
+
+		# Δt-x 模式：绘制 y=0 参考线
+		if is_dtx:
+			ax.axhline(y=0, color="#888888", linewidth=1.2, linestyle="--", alpha=0.7)
+
+		# 范围选择器统计文本
+		delta_text = ax.text(0.02, 0.97, "", transform=ax.transAxes,
+			va="top", fontsize=9, color="#333333",
+			bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
+
+		# 跨 CSV 的范围选择器
+		def _on_select(xmin, xmax):
+			if xmin > xmax:
+				xmin, xmax = xmax, xmin
+			results = []
+			for i in range(3):
+				xd = all_x_data[i]
+				if not xd:
+					continue
+				name = Path(self._analysis_csvs[i]).stem if self._analysis_csvs[i] else ""
+				total = 0.0
+				if is_dtx:
+					# Δt-x: 显示 Δt 在该范围内的变化量
+					y_start = y_end = None
+					for j, x in enumerate(xd):
+						if y_start is None and x >= xmin:
+							y_start = all_y_data[i][j]
+						if x <= xmax:
+							y_end = all_y_data[i][j]
+					if y_start is not None and y_end is not None:
+						total = y_end - y_start  # Δ(Δt)
+				else:
+					for j, x in enumerate(xd):
+						if xmin <= x <= xmax:
+							if is_vt:
+								# v-t: 累计行驶距离 = Σ(速度 × 时间间隔)
+								if j > 0:
+									dt = xd[j] - xd[j - 1]
+									avg_spd = (all_y_data[i][j] + all_y_data[i][j - 1]) / 2 / 3.6
+									total += avg_spd * dt
+							else:
+								# v-x: 累计用时
+								if j > 0:
+									dx = xd[j] - xd[j - 1]
+									avg_spd_mps = ((all_y_data[i][j] + all_y_data[i][j - 1]) / 2) / 3.6 if dx > 0 else 999
+									total += dx / avg_spd_mps if avg_spd_mps > 0 else 0
+				if is_dtx:
+					sign = "+" if total >= 0 else ""
+					results.append(f"{label}: {sign}{total:.2f}s")
+				elif total > 0:
+					unit = "m" if is_vt else "s"
+					results.append(f"{name}: {total:.2f}{unit}")
+			delta_text.set_text("\n".join(results) if results else "")
+
+		# 移除旧的选择器
+		if self._span_selector is not None:
+			try:
+				self._span_selector.disconnect_events()
+			except Exception:
+				pass
+		self._span_selector = SpanSelector(ax, _on_select, "horizontal",
+			props=dict(facecolor="#2196F3", alpha=0.15),
+			interactive=True, drag_from_anywhere=True,
+			button=1)  # 仅左键触发
+		delta_text.set_text(f"← 拖拽选择范围查看{delta_label_text}")
+
+		# ── 滚轮缩放 + 右键拖动平移 ──
+		_press_xy = [None, None]  # 右键拖动起始点
+
+		def _on_scroll(event):
+			scale = 0.85 if event.button == "up" else 1.15
+			xlim = ax.get_xlim(); ylim = ax.get_ylim()
+			xmid = (xlim[0] + xlim[1]) / 2; ymid = (ylim[0] + ylim[1]) / 2
+			dx = (xlim[1] - xlim[0]) * (1 - scale) / 2
+			dy = (ylim[1] - ylim[0]) * (1 - scale) / 2
+			ax.set_xlim(xmid - (xmid - xlim[0]) * scale, xmid + (xlim[1] - xmid) * scale)
+			ax.set_ylim(ymid - (ymid - ylim[0]) * scale, ymid + (ylim[1] - ymid) * scale)
+			self._analysis_canvas.draw_idle()
+
+		def _on_press(event):
+			if event.button == 3:  # 右键
+				_press_xy[0], _press_xy[1] = event.xdata, event.ydata
+
+		def _on_motion(event):
+			if event.button == 3 and _press_xy[0] is not None and event.xdata is not None:
+				dx = _press_xy[0] - event.xdata; dy = _press_xy[1] - event.ydata
+				xlim = ax.get_xlim(); ylim = ax.get_ylim()
+				ax.set_xlim(xlim[0] + dx, xlim[1] + dx)
+				ax.set_ylim(ylim[0] + dy, ylim[1] + dy)
+				self._analysis_canvas.draw_idle()
+
+		fig.canvas.mpl_connect("scroll_event", _on_scroll)
+		fig.canvas.mpl_connect("button_press_event", _on_press)
+		fig.canvas.mpl_connect("motion_notify_event", _on_motion)
+
+		fig.tight_layout()
+
+		# 恢复当前模式的上次视图范围（Δt-x 不缓存）
+		if not is_dtx:
+			saved = self._saved_limits.get(mode)
+			if saved is not None:
+				ax.set_xlim(saved[0])
+				ax.set_ylim(saved[1])
+
+		self._analysis_canvas.draw()
+		self._last_rendered_mode = mode
+
+	def _auto_fit(self) -> None:
+		"""重置图表缩放和位置到默认状态。"""
+		fig = self._analysis_figure
+		if not fig.axes:
+			return
+		mode = self._chart_mode.get()
+		self._saved_limits.pop(mode, None)
+		ax = fig.axes[0]
+		ax.autoscale(enable=True, axis="both")
+		ax.relim()
+		ax.autoscale_view()
+		self._analysis_canvas.draw_idle()
+
+	def _smooth_data(self, xv, yv, strength):
+		"""Savitzky-Golay 滤波（纯 numpy 实现）：多项式滑动窗口拟合，保留峰谷形状。"""
+		if strength <= 0 or len(xv) < 5:
+			return np.array(xv), np.array(yv, dtype=float)
+		win = int(len(xv) * strength / 100.0 * 0.0175)
+		win = max(5, min(win, len(xv) - 2))
+		if win % 2 == 0:
+			win += 1
+		polyorder = min(3, win - 1)
+		sy = _savgol_filter_np(np.array(yv, dtype=float), win, polyorder)
+		return np.array(xv, dtype=float), sy
+
+	def _plot_segmented(self, ax, x, y, flags, normal_color, show_red):
+		"""平滑 + 纠错段着色。show_red 控制是否绘制标记段。
+		红色=自动纠错(flag=1), 绿色=人工纠错(flag=2)。"""
+		red = "#F44336"
+		green = "#81C784"  # 浅绿色（人工纠错）
+		strength = self._smooth_strength.get()
+
+		if strength > 0:
+			x, y = self._smooth_data(x, y, strength)
+
+		ax.plot(x, y, color=normal_color, linewidth=0.8)
+
+		if not show_red or not flags or not any(f >= 1 for f in flags):
+			return
+
+		n_orig = len(flags)
+		n_smooth = len(x)
+		_x = x.tolist() if hasattr(x, 'tolist') else list(x)
+		_y = y.tolist() if hasattr(y, 'tolist') else list(y)
+
+		# 红色段（flag=1）
+		rx, ry = [], []
+		for i in range(n_orig - 1):
+			if flags[i] == 1 and flags[i + 1] == 1:
+				si = int(i * n_smooth / n_orig)
+				ei = int((i + 2) * n_smooth / n_orig)
+				si = min(si, n_smooth - 2)
+				ei = min(ei, n_smooth)
+				if ei > si:
+					rx.extend(_x[si:ei] + [float('nan')])
+					ry.extend(_y[si:ei] + [float('nan')])
+		if rx:
+			ax.plot(rx, ry, color=red, linewidth=1.2)
+
+		# 绿色段（flag=2 人工纠错）
+		gx, gy = [], []
+		for i in range(n_orig - 1):
+			if flags[i] >= 2 or flags[i + 1] >= 2:
+				si = int(i * n_smooth / n_orig)
+				ei = int((i + 2) * n_smooth / n_orig)
+				si = min(si, n_smooth - 2)
+				ei = min(ei, n_smooth)
+				if ei > si:
+					gx.extend(_x[si:ei] + [float('nan')])
+					gy.extend(_y[si:ei] + [float('nan')])
+		if gx:
+			ax.plot(gx, gy, color=green, linewidth=1.5, alpha=0.8)
+
+	def _parse_csv(self, path: str) -> tuple[list[float], list[float], list[float], list[int]]:
+		times, dists, speeds, flags = [], [], [], []
+		with open(path, "r", encoding="utf-8-sig") as f:
+			for line in f:
+				parts = line.strip().split(",")
+				if len(parts) >= 3:
+					times.append(float(parts[0]))
+					dists.append(float(parts[1]))
+					speeds.append(float(parts[2]))
+					flags.append(int(parts[3]) if len(parts) > 3 else 0)
+		# 去除开头的静止帧（speed=0 且 distance=0），从第一个有效速度开始
+		start = 0
+		for i, s in enumerate(speeds):
+			if s > 0:
+				start = i
+				break
+		if start > 0:
+			times = times[start:]
+			speeds = speeds[start:]
+			# 距离归一化：从第一帧有效速度处开始重新计算
+			base_dist = dists[start]
+			dists = [d - base_dist for d in dists[start:]]
+			flags = flags[start:]
+			# 时间也归零
+			base_time = times[0]
+			times = [t - base_time for t in times]
+		return times, dists, speeds, flags
+
+	def _export_png(self) -> None:
+		if self._analysis_figure is None or not self._analysis_figure.axes:
+			messagebox.showwarning("无数据", "请先渲染曲线。")
+			return
+		path = filedialog.asksaveasfilename(
+			title="导出 PNG",
+			defaultextension=".png",
+			filetypes=[("PNG 图片", "*.png")],
+		)
+		if path:
+			self._analysis_figure.savefig(path, dpi=150, bbox_inches="tight")
+			messagebox.showinfo("导出完成", f"已保存: {path}")
+
 	def _parse_positive_float(self, value: str, field_name: str, allow_zero: bool = False) -> float:
 		parsed = safe_float(value)
 		if parsed is None:
@@ -575,17 +972,15 @@ class RaceVideoToLogApp:
 			if speed_value is None:
 				# 数字仪表后备链：use_det=False → EasyOCR
 				speed_value, raw_text = ocr_digital_fallback(ocr, crop, max_speed_kmh)
-			# 始终为每一帧生成 observation（OCR 失败用 -1.0，保证索引对齐）
 			if speed_value is not None and raw_text is not None:
-				observations.append(SpeedObservation(
-					timestamp=timestamp,
-					raw_speed_kmh=convert_speed_to_kmh(speed_value, self.speed_format_var.get()),
-					raw_text=raw_text,
-				))
-			else:
-				observations.append(SpeedObservation(
-					timestamp=timestamp, raw_speed_kmh=-1.0, raw_text=""))
-			if (idx + 1) % 10 == 0:
+				observations.append(
+					SpeedObservation(
+						timestamp=timestamp,
+						raw_speed_kmh=convert_speed_to_kmh(speed_value, self.speed_format_var.get()),
+						raw_text=raw_text,
+					)
+				)
+			if len(observations) % 10 == 0:
 				pct = ((idx + 1) / total_frames * 90.0) + 5.0
 				self.root.after(0, self._update_progress,
 					f"[{ocr_engine._gpu_backend}] 正在处理... {len(observations)} 条 ({pct:.1f}%)", pct)
@@ -634,16 +1029,14 @@ class RaceVideoToLogApp:
 			if speed_value is None:
 				# 数字仪表后备链：use_det=False → EasyOCR
 				speed_value, raw_text = ocr_digital_fallback(ocr, crop, max_speed_kmh)
-			# 始终为每一帧生成 observation
 			if speed_value is not None and raw_text is not None:
-				observations.append(SpeedObservation(
-					timestamp=timestamp,
-					raw_speed_kmh=convert_speed_to_kmh(speed_value, self.speed_format_var.get()),
-					raw_text=raw_text,
-				))
-			else:
-				observations.append(SpeedObservation(
-					timestamp=timestamp, raw_speed_kmh=-1.0, raw_text=""))
+				observations.append(
+					SpeedObservation(
+						timestamp=timestamp,
+						raw_speed_kmh=convert_speed_to_kmh(speed_value, self.speed_format_var.get()),
+						raw_text=raw_text,
+					)
+				)
 			done += 1
 			if done % 10 == 0:
 				pct = (done / total_frames * 90.0) + 5.0
@@ -726,11 +1119,6 @@ class RaceVideoToLogApp:
 			except: pass
 		import gc; gc.collect()
 
-	def _log(self, msg: str) -> None:
-		"""调试日志：勾选"调试日志"时输出到终端。"""
-		if self._debug_log_var.get():
-			print(f"[DEBUG] {msg}", flush=True)
-
 	def _check_cancel(self) -> None:
 		if self._cancel_flag:
 			raise _CancelExport()
@@ -749,16 +1137,6 @@ class RaceVideoToLogApp:
 		self.progress_var.set(0.0)
 		self._release_ocr_engines()
 		self.status_var.set("已取消。")
-
-	def _finish_export_state(self) -> None:
-		"""重置导出状态（不弹窗，用于已自行处理结果输出的流程）。"""
-		print("[Baseline] _finish_export_state called", flush=True)
-		self.is_exporting = False
-		self._cancel_flag = False
-		self.export_btn.config(state="normal")
-		self.cancel_btn.config(state="disabled")
-		self.progress_var.set(100.0)
-		self.status_var.set("人工基准完成 — 结果已保存。")
 
 	def _on_export_error(self, err: str) -> None:
 		self.is_exporting = False
@@ -836,7 +1214,7 @@ class RaceVideoToLogApp:
 					raw_speed_kmh=convert_speed_to_kmh(sv, self.speed_format_var.get()),
 					raw_text=rt,
 				)
-			return idx, SpeedObservation(timestamp=ts, raw_speed_kmh=-1.0, raw_text="")
+			return idx, None
 
 		pool = ThreadPoolExecutor(max_workers=num_workers)
 		try:
@@ -855,7 +1233,7 @@ class RaceVideoToLogApp:
 		finally:
 			pool.shutdown(wait=False, cancel_futures=True)
 
-		return observations  # 所有帧均已填充（失败帧用 -1.0 标记）
+		return [o for o in observations if o is not None]
 
 	def _run_export(
 		self,
@@ -874,7 +1252,7 @@ class RaceVideoToLogApp:
 		assert self.video_path is not None
 		assert self.metadata is not None
 
-		num_workers = max(1, min(num_workers, 32))
+		num_workers = max(1, min(num_workers, 8))
 
 		self.root.after(0, self._update_progress, "正在初始化 OCR 引擎...", 0.0)
 		self._check_cancel()
@@ -922,25 +1300,6 @@ class RaceVideoToLogApp:
 		total_frames = len(raw_frames)
 		if total_frames == 0:
 			raise RuntimeError("未从视频中读取到任何帧，请检查采样率设置。")
-
-		# ── 人工基准模式 ──
-		if self._human_baseline_var.get():
-			try:
-				self._run_baseline_mode(raw_frames, total_frames, output_path, region,
-					max_speed_kmh, max_accel_mps2, frame_div, target_h, pad_px, num_workers,
-					_t_start, ocr)
-			except _CancelExport:
-				self.root.after(0, self._on_export_cancelled)
-			except Exception:
-				import traceback
-				traceback.print_exc()
-				self.root.after(0, lambda: messagebox.showerror(
-					"人工基准错误", traceback.format_exc()))
-				print("[Export] Scheduling _finish_export_state via root.after...", flush=True)
-				self.root.after(0, self._finish_export_state)
-			else:
-				self.root.after(0, self._finish_export_state)
-			return
 
 		self.root.after(0, self._update_progress,
 			f"开始处理 {total_frames} 帧 (workers={num_workers})...", 5.0)
@@ -1049,199 +1408,8 @@ class RaceVideoToLogApp:
 			rows.append((observation.timestamp, distance_m, corrected_speed_kmh, corrected_flag))
 		return rows
 
-	def _correct_with_anchors(self, rows, observations, max_speed_kmh, max_accel_mps2, anchor_indices):
-		"""纠错程序 B：以人工基准为硬锚点。anchor_indices 中帧的速度固定不变。"""
-		if len(anchor_indices) < 2:
-			return rows
-		n = len(rows)
-		sorted_anchors = sorted(anchor_indices)
-		self._log(f"_correct_with_anchors: {n} rows, {len(sorted_anchors)} anchors")
-		class _O:
-			def __init__(s, ts, spd, txt):
-				s.timestamp = ts; s.raw_speed_kmh = spd; s.raw_text = txt
-
-		extended = [-1] + sorted_anchors + [n]
-		total_segs = len(extended) - 1
-		for seg in range(total_segs):
-			la, ra = extended[seg], extended[seg + 1]
-			gap = ra - la - 1
-			if gap > 100 and seg % 10 == 0:
-				print(f"  [Correction B] segment {seg}/{total_segs}, gap={gap} frames...", flush=True)
-			if ra - la <= 1:
-				continue
-			seg_s, seg_e = la + 1, ra - 1
-			if seg_s > seg_e:
-				continue
-			seg_idx = list(range(seg_s, seg_e + 1))
-			seg_obs = []
-			for idx in seg_idx:
-				r = rows[idx]
-				txt = observations[idx].raw_text if idx < len(observations) else ""
-				seg_obs.append(_O(r[0], r[2], txt))
-			raw_vals = [o.raw_speed_kmh for o in seg_obs]
-			times = [o.timestamp for o in seg_obs]
-			al_val = rows[la][2] if la >= 0 else raw_vals[0]
-			ar_val = rows[ra][2] if ra < n else raw_vals[-1]
-			al_ts = rows[la][0] if la >= 0 else times[0]
-			ar_ts = rows[ra][0] if ra < n else times[-1]
-			seg_n = len(seg_obs)
-			candidates = []
-			for i, obs in enumerate(seg_obs):
-				if obs.raw_speed_kmh < 0:
-					cands = list(range(0, int(max_speed_kmh) + 1, 25))
-				else:
-					cands = build_speed_candidates(obs.raw_text, max_speed_kmh)
-					if obs.raw_speed_kmh <= max_speed_kmh:
-						cands.append(float(obs.raw_speed_kmh))
-					if not cands:
-						cands = [min(max(obs.raw_speed_kmh, 0.0), max_speed_kmh)]
-				total_dt = max(ar_ts - al_ts, 0.001)
-				frac = (times[i] - al_ts) / total_dt
-				interp = al_val + (ar_val - al_val) * frac
-				# Adaptive interpolation range: wider when anchors span larger speed range
-				interp_range = int(abs(ar_val - al_val) * 0.2 + 8)  # min ±8, scales with anchor spread
-				interp_range = min(interp_range, 25)  # cap at ±25
-				for dv in range(-interp_range, interp_range + 1, max(1, interp_range // 3)):
-					v = interp + dv
-					if 0 <= v <= max_speed_kmh:
-						cands.append(float(v))
-				candidates.append(sorted(set(cands)))
-			# 超长段：跳过 DP，直接用线性插值（避免 O(n*c^2) 假死）
-			gap_frames = seg_e - seg_s + 1
-			if gap_frames > 200:
-				for idx in seg_idx:
-					frac = (times[idx - seg_s] - al_ts) / max(ar_ts - al_ts, 0.001)
-					interp_val = al_val + (ar_val - al_val) * frac
-					if abs(rows[idx][2] - interp_val) > 0.5:
-						rows[idx][2] = max(0, min(max_speed_kmh, interp_val))
-						if rows[idx][3] == 0:
-							rows[idx][3] = 1
-				continue  # 跳过 DP，处理下一段
-			fc = candidates[0]
-			states = [(0.0 if (la >= 0 and abs(c - al_val) < 0.5) else abs(c - raw_vals[0]), c, None) for c in fc]
-			bp = [[-1] * len(fc)]
-			for t in range(1, seg_n):
-				cc, pc = candidates[t], candidates[t - 1] if t > 0 else fc
-				dt = max(times[t] - times[t - 1], 1e-6)
-				max_dv = max_accel_mps2 * dt * 3.6
-				cs, cb = [], []
-				for ci, cv in enumerate(cc):
-					bc, bp_i = float("inf"), 0
-					for pi, pv in enumerate(pc):
-						d = abs(cv - pv)
-						if d > max_dv:
-							continue
-						cost = states[pi][0] + d * 0.3 + abs(cv - raw_vals[t])
-						if cost < bc:
-							bc, bp_i = cost, pi
-					if bc == float("inf"):
-						for pi, pv in enumerate(pc):
-							cost = states[pi][0] + abs(cv - pv) * 5.0
-							if cost < bc:
-								bc, bp_i = cost, pi
-					cs.append((bc, cv, bp_i)); cb.append(bp_i)
-				states = [(c, v, p) for c, v, p in cs]
-				bp.append(cb)
-			if ra < n:
-				bf = min(range(len(states)), key=lambda i: abs(states[i][1] - ar_val))
-			else:
-				bf = min(range(len(states)), key=lambda i: states[i][0])
-			sr = [0.0] * seg_n; sr[-1] = states[bf][1]; trace = bf
-			for t in range(seg_n - 1, 0, -1):
-				trace = bp[t][trace]; sr[t - 1] = candidates[t - 1][trace]
-			for t, idx in enumerate(seg_idx):
-				if abs(rows[idx][2] - sr[t]) > 0.5:
-					rows[idx][2] = sr[t]
-					if rows[idx][3] == 0:
-						rows[idx][3] = 1
-		return rows
-
-	def _run_baseline_mode(self, raw_frames, total_frames, output_path, region,
-			max_speed_kmh, max_accel_mps2, frame_div, target_h, pad_px, num_workers,
-			_t_start, ocr):
-		"""人工基准模式完整流程。"""
-		print(f'[Baseline] START: {total_frames} frames, freq={self._baseline_freq_var.get()}', flush=True)
-		import time as _time
-		baseline_freq = max(1, int(_parse_int_or_none(self._baseline_freq_var.get()) or 10))
-		print('[Baseline] Starting OCR...', flush=True)
-		self.root.after(0, self._update_progress, "正在 OCR 自动识别...", 25.0)
-		self._check_cancel()
-		# 基准模式使用串行 OCR（避免后台线程中并行引擎的潜在死锁）
-		observations = self._ocr_sequential(raw_frames, ocr, target_h, pad_px, total_frames, max_speed_kmh)
-		self._check_cancel()
-		print(f'[Baseline] OCR done: {len(observations)} frames', flush=True); n_obs = len(observations)
-		if n_obs == 0:
-			raise RuntimeError("未识别到任何速度数据。")
-		baseline_indices = set(range(0, n_obs, baseline_freq))
-		n_baseline = len(baseline_indices)
-		self.root.after(0, self._update_progress,
-			f"人工基准模式：{n_obs} 帧中 {n_baseline} 帧需人工标注 (1/{baseline_freq})...", 20.0)
-		self._check_cancel()
-		rows = []
-		for i, obs in enumerate(observations):
-			if i in baseline_indices:
-				rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh, 1])
-			else:
-				rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh, 0])
-		if n_baseline > 0:
-			for i in range(n_obs):
-				if i not in baseline_indices:
-					rows[i][3] = 3
-			# 标注窗口必须在主线程创建（后台线程中 Tkinter 窗口无法渲染）
-			import threading as _th
-			_ann_done = _th.Event()
-			_ann_error = []
-			def _do_annotation():
-				try:
-					self._run_manual_correction_iterative(
-						observations, raw_frames, rows, max_speed_kmh, max_accel_mps2,
-						baseline_mode=True)
-				except Exception as e:
-					_ann_error.append(e)
-				finally:
-					_ann_done.set()
-			self.root.after(0, _do_annotation)
-			if not _ann_done.wait(timeout=3600):  # 最多等 1 小时
-				raise RuntimeError("标注窗口超时未响应")
-			if _ann_error:
-				raise _ann_error[0]
-			for i in range(n_obs):
-				if rows[i][3] == 3:
-					rows[i][3] = 0
-		self.root.after(0, self._update_progress,
-			"正在以人工基准为锚点进行物理约束纠错...", 85.0)
-		self._check_cancel()
-		self._log(f"Correction B: {n_obs} rows, anchors={sum(1 for i in range(n_obs) if rows[i][3] >= 2)}")
-		print(f'[Baseline] Annotation done, running correction B...', flush=True); rows = self._correct_with_anchors(rows, observations, max_speed_kmh, max_accel_mps2,
-			{i for i in range(n_obs) if rows[i][3] >= 2})
-		print(f'[Baseline] Correction B done, integrating distance...', flush=True); dist = 0.0; prev_t, prev_v = None, None
-		for r in rows:
-			v = r[2] / 3.6
-			if prev_t is not None and prev_v is not None:
-				dt = r[0] - prev_t
-				if dt > 0: dist += (prev_v + v) * 0.5 * dt
-			prev_t, prev_v = r[0], v; r[1] = dist
-		print(f"[Baseline] Distance integration done, computing hash...", flush=True)
-		_t_elapsed = _time.perf_counter() - _t_start
-		_corrected_count = sum(1 for r in rows if r[3] >= 1)
-		_accuracy = (1 - _corrected_count / len(rows)) * 100 if rows else 100.0
-		# 写出 CSV（含参数头）
-		vhash = compute_video_hash(self.video_path)
-		print(f"[Baseline] Hash computed, opening CSV...", flush=True)
-		with output_path.open("w", newline="", encoding="utf-8-sig") as fh:
-			fh.write(f"# RaceVideoToLog\n")
-			fh.write(f"# video_hash={vhash}, video={self.video_path.name}\n")
-			fh.write(f"# roi={region[0]},{region[1]},{region[2]},{region[3]}, format={self.speed_format_var.get()}\n")
-			fh.write(f"# max_speed={max_speed_kmh}, max_accel={max_accel_mps2}, div={frame_div}, target_h={target_h}, pad={pad_px}, backend={ocr_engine._gpu_backend}, model={self._ocr_model_var.get()}, workers={num_workers}, frame_start={self._frame_start_var.get() or ''}, frame_end={self._frame_end_var.get() or ''}, baseline_freq={baseline_freq}\n")
-			w = csv.writer(fh)
-			for r in rows:
-				w.writerow([f"{r[0]:.2f}", f"{r[1]:.2f}", f"{r[2]:.2f}", str(r[3])])
-
-		print(f"[Baseline] CSV written: {output_path}", flush=True)
-
-	def _run_manual_correction_iterative(self, observations, raw_frames, rows, max_speed_kmh, max_accel_mps2,
-			baseline_mode: bool = False):
-		"""人工纠错窗口。baseline_mode=True 时单轮不迭代，支持跳过。"""
+	def _run_manual_correction_iterative(self, observations, raw_frames, rows, max_speed_kmh, max_accel_mps2):
+		"""迭代人工纠错：持久窗口，重复直到无 flag=1 或用户跳过。"""
 		trust = _estimate_raw_trust(observations)
 		total_corrected = 0
 		iteration = 0
@@ -1294,8 +1462,7 @@ class RaceVideoToLogApp:
 					current_flagged.append((i, trust[i], observations[i]))
 			if not current_flagged:
 				return False
-			if not baseline_mode:
-					current_flagged.sort(key=lambda x: x[1])
+			current_flagged.sort(key=lambda x: x[1])
 			idx_iter = iter(current_flagged)
 			return True
 
@@ -1304,35 +1471,21 @@ class RaceVideoToLogApp:
 			nonlocal total_corrected
 			total_corrected = sum(1 for r in rows if r[3] >= 2)
 			remaining = sum(1 for r in rows if r[3] == 1)
-			if baseline_mode:
-				win.title("人工基准标注")
-			else:
-				win.title(f"人工纠错 — 第 {iteration} 轮")
-			if baseline_mode:
-				bottom_var.set(f"已标注 {total_corrected} 帧  |  剩余 {remaining} 帧  |  跳过=留空")
-			else:
-				bottom_var.set(f"已纠正 {total_corrected} 帧  |  当前第 {iteration} 轮  |  剩余 {remaining} 帧")
+			win.title(f"人工纠错 — 第 {iteration} 轮")
+			bottom_var.set(f"已纠正 {total_corrected} 帧  |  当前第 {iteration} 轮  |  剩余 {remaining} 帧")
 
 		def _show_next():
 			try:
 				ri, score, obs = next(idx_iter)
 			except StopIteration:
 				done_flag[0] = True
-				if baseline_mode:
-					win.destroy()
-				else:
-					_next_round()
+				# 本轮结束，触发下一轮
+				_next_round()
 				return
 			current[0] = (ri, obs, score)
 			remaining = sum(1 for r in rows if r[3] == 1)
-			if baseline_mode:
-				progress_var.set(f"帧 #{ri+1}/{len(rows)}  |  剩余 {remaining} 帧")
-			else:
-				progress_var.set(f"帧 #{ri+1}/{len(rows)}  |  可信度 {score:.2f}  |  剩余 {remaining} 帧")
-			if baseline_mode:
-				info_var.set(f"Frame #{ri}  t={obs.timestamp:.2f}s  输入正确速度后按确认")
-			else:
-				info_var.set(f"t={obs.timestamp:.2f}s  纠正值={rows[ri][2]:.1f} km/h  原始={obs.raw_speed_kmh:.1f}")
+			progress_var.set(f"帧 #{ri+1}/{len(rows)}  |  可信度 {score:.2f}  |  剩余 {remaining} 帧")
+			info_var.set(f"t={obs.timestamp:.2f}s  纠正值={rows[ri][2]:.1f} km/h  原始={obs.raw_speed_kmh:.1f}")
 			speed_var.set("")
 			speed_entry.focus_set()
 			crop = raw_frames[ri][1]
@@ -1354,7 +1507,7 @@ class RaceVideoToLogApp:
 				val = float(speed_var.get().strip())
 				if val >= 0:
 					t, d, s, f = rows[ri]
-					rows[ri] = [t, d, val, 2]
+					rows[ri] = (t, d, val, 2)
 			except ValueError:
 				pass
 			_show_next()
@@ -1373,13 +1526,6 @@ class RaceVideoToLogApp:
 			ri, obs, _ = current[0]
 			t, d, s, f = rows[ri]
 			rows[ri] = (t, d, s, 2)
-			_show_next()
-
-		def _skip():
-			if current[0] is None or done_flag[0]:
-				return
-			ri, obs, _ = current[0]
-			rows[ri][3] = 0
 			_show_next()
 
 		def _close():
@@ -1420,15 +1566,10 @@ class RaceVideoToLogApp:
 		# ── 构建按钮 ──
 		for widget in btn_frame.winfo_children():
 			widget.destroy()
-		if baseline_mode:
-			ttk.Button(btn_frame, text="确认 (Enter)", command=_confirm).grid(row=0, column=0, padx=(0, 6))
-			ttk.Button(btn_frame, text="跳过", command=_skip).grid(row=0, column=1, padx=(0, 6))
-			ttk.Button(btn_frame, text="跳过剩余", command=_close).grid(row=0, column=2)
-		else:
-			ttk.Button(btn_frame, text="确认 (Enter)", command=_confirm).grid(row=0, column=0, padx=(0, 6))
-			ttk.Button(btn_frame, text="原值", command=_use_raw).grid(row=0, column=1, padx=(0, 6))
-			ttk.Button(btn_frame, text="纠正值", command=_use_corrected).grid(row=0, column=2, padx=(0, 6))
-			ttk.Button(btn_frame, text="跳过剩余", command=_close).grid(row=0, column=3)
+		ttk.Button(btn_frame, text="确认 (Enter)", command=_confirm).grid(row=0, column=0, padx=(0, 6))
+		ttk.Button(btn_frame, text="原值", command=_use_raw).grid(row=0, column=1, padx=(0, 6))
+		ttk.Button(btn_frame, text="纠正值", command=_use_corrected).grid(row=0, column=2, padx=(0, 6))
+		ttk.Button(btn_frame, text="跳过剩余", command=_close).grid(row=0, column=3)
 		win.bind("<Return>", lambda e: _confirm() if not done_flag[0] else None)
 
 		# ── 开始第一轮 ──
@@ -1488,7 +1629,7 @@ def main() -> None:
 	parser.add_argument("video", nargs="?", help="视频文件路径")
 	parser.add_argument("--roi", nargs=4, type=int, metavar=("X1","Y1","X2","Y2"), help="识别范围")
 	parser.add_argument("--format", choices=["m/s","km/h","mile/h"], default="km/h")
-	parser.add_argument("--div", type=int, default=2, choices=list(range(1, 11)))
+	parser.add_argument("--div", type=int, default=2, choices=[1,2,3,4,5])
 	parser.add_argument("--max-speed", type=float, default=400)
 	parser.add_argument("--max-accel", type=float, default=50)
 	parser.add_argument("--target-h", type=int, default=24)
@@ -1501,8 +1642,6 @@ def main() -> None:
 	parser.add_argument("--analysis-out", type=str)
 	parser.add_argument("--frame-start", type=int, metavar="N")
 	parser.add_argument("--frame-end", type=int, metavar="N")
-	parser.add_argument("--baseline-freq", type=int, default=0, metavar="N",
-		help="人工基准抽样频率 1/N (1=全部人工)")
 	parser.add_argument("--multi-box", action="store_true")
 	args = parser.parse_args()
 
@@ -1510,7 +1649,7 @@ def main() -> None:
 		from headless import run_headless
 		run_headless(args)
 	elif args.analysis:
-		from analysis import run_analysis_headless
+		from headless import run_analysis_headless
 		run_analysis_headless(args)
 	else:
 		if sys.platform == "win32":
