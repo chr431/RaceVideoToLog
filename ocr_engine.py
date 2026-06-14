@@ -37,7 +37,7 @@ __all__ = [
 	"correct_speed_series", "correct_speed_series_v2", "build_speed_candidates",
 	"normalize_ocr_text", "format_duration", "codec_from_fourcc",
 	"safe_int", "safe_float", "SOURCE_TO_KMH", "OCR_NUMBER_RE",
-	"ocr_digital_fallback", "compute_video_hash",
+	"ocr_digital_fallback", "compute_video_hash", "auto_select_anchors",
 	"_reset_backend", "_select_backend", "_get_model_kwargs",
 	"_gpu_backend", "_gpu_patched", "_CancelExport",
 	"_parse_int_or_none", "_estimate_raw_trust", "_savgol_filter_np",
