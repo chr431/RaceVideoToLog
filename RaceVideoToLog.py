@@ -1049,112 +1049,364 @@ class RaceVideoToLogApp:
 			rows.append((observation.timestamp, distance_m, corrected_speed_kmh, corrected_flag))
 		return rows
 
-	def _correct_with_anchors(self, rows, observations, max_speed_kmh, max_accel_mps2, anchor_indices):
-		"""纠错程序 B：以人工基准为硬锚点。anchor_indices 中帧的速度固定不变。"""
+	def _correct_with_anchors(self, rows, observations, raw_frames, ocr, max_speed_kmh, max_accel_mps2, anchor_indices):
+		"""纠错程序 B v2：5 阶段流水线。
+
+		1. 错误检测 — 物理一致性检查标记异常帧
+		2. 重 OCR — 多种预处理变体获取备选值
+		3. 最优选择 — 评分备选值，选最物理合理的
+		4. 残留检测 — 多轮迭代收敛
+		5. 最终填充 — 插值 + 加速度裁剪 + 轻量平滑
+
+		锚点帧 (anchor_indices) 的值固定不变。
+		"""
 		if len(anchor_indices) < 2:
 			return rows
-		n = len(rows)
-		sorted_anchors = sorted(anchor_indices)
-		self._log(f"_correct_with_anchors: {n} rows, {len(sorted_anchors)} anchors")
-		class _O:
-			def __init__(s, ts, spd, txt):
-				s.timestamp = ts; s.raw_speed_kmh = spd; s.raw_text = txt
 
-		extended = [-1] + sorted_anchors + [n]
-		total_segs = len(extended) - 1
-		for seg in range(total_segs):
-			la, ra = extended[seg], extended[seg + 1]
-			gap = ra - la - 1
-			if gap > 100 and seg % 10 == 0:
-				print(f"  [Correction B] segment {seg}/{total_segs}, gap={gap} frames...", flush=True)
-			if ra - la <= 1:
-				continue
-			seg_s, seg_e = la + 1, ra - 1
-			if seg_s > seg_e:
-				continue
-			seg_idx = list(range(seg_s, seg_e + 1))
-			seg_obs = []
-			for idx in seg_idx:
-				r = rows[idx]
-				txt = observations[idx].raw_text if idx < len(observations) else ""
-				seg_obs.append(_O(r[0], r[2], txt))
-			raw_vals = [o.raw_speed_kmh for o in seg_obs]
-			times = [o.timestamp for o in seg_obs]
-			al_val = rows[la][2] if la >= 0 else raw_vals[0]
-			ar_val = rows[ra][2] if ra < n else raw_vals[-1]
-			al_ts = rows[la][0] if la >= 0 else times[0]
-			ar_ts = rows[ra][0] if ra < n else times[-1]
-			seg_n = len(seg_obs)
-			candidates = []
-			for i, obs in enumerate(seg_obs):
-				if obs.raw_speed_kmh < 0:
-					cands = list(range(0, int(max_speed_kmh) + 1, 25))
-				else:
-					cands = build_speed_candidates(obs.raw_text, max_speed_kmh)
-					if obs.raw_speed_kmh <= max_speed_kmh:
-						cands.append(float(obs.raw_speed_kmh))
-					if not cands:
-						cands = [min(max(obs.raw_speed_kmh, 0.0), max_speed_kmh)]
-				total_dt = max(ar_ts - al_ts, 0.001)
-				frac = (times[i] - al_ts) / total_dt
-				interp = al_val + (ar_val - al_val) * frac
-				# Adaptive interpolation range: wider when anchors span larger speed range
-				interp_range = int(abs(ar_val - al_val) * 0.2 + 8)  # min ±8, scales with anchor spread
-				interp_range = min(interp_range, 25)  # cap at ±25
-				for dv in range(-interp_range, interp_range + 1, max(1, interp_range // 3)):
-					v = interp + dv
-					if 0 <= v <= max_speed_kmh:
-						cands.append(float(v))
-				candidates.append(sorted(set(cands)))
-			# 超长段：跳过 DP，直接用线性插值（避免 O(n*c^2) 假死）
-			gap_frames = seg_e - seg_s + 1
-			if gap_frames > 200:
-				for idx in seg_idx:
-					frac = (times[idx - seg_s] - al_ts) / max(ar_ts - al_ts, 0.001)
-					interp_val = al_val + (ar_val - al_val) * frac
-					if abs(rows[idx][2] - interp_val) > 0.5:
-						rows[idx][2] = max(0, min(max_speed_kmh, interp_val))
-						if rows[idx][3] == 0:
-							rows[idx][3] = 1
-				continue  # 跳过 DP，处理下一段
-			fc = candidates[0]
-			states = [(0.0 if (la >= 0 and abs(c - al_val) < 0.5) else abs(c - raw_vals[0]), c, None) for c in fc]
-			bp = [[-1] * len(fc)]
-			for t in range(1, seg_n):
-				cc, pc = candidates[t], candidates[t - 1] if t > 0 else fc
-				dt = max(times[t] - times[t - 1], 1e-6)
-				max_dv = max_accel_mps2 * dt * 3.6
-				cs, cb = [], []
-				for ci, cv in enumerate(cc):
-					bc, bp_i = float("inf"), 0
-					for pi, pv in enumerate(pc):
-						d = abs(cv - pv)
-						if d > max_dv:
-							continue
-						cost = states[pi][0] + d * 0.3 + abs(cv - raw_vals[t])
-						if cost < bc:
-							bc, bp_i = cost, pi
-					if bc == float("inf"):
-						for pi, pv in enumerate(pc):
-							cost = states[pi][0] + abs(cv - pv) * 5.0
-							if cost < bc:
-								bc, bp_i = cost, pi
-					cs.append((bc, cv, bp_i)); cb.append(bp_i)
-				states = [(c, v, p) for c, v, p in cs]
-				bp.append(cb)
-			if ra < n:
-				bf = min(range(len(states)), key=lambda i: abs(states[i][1] - ar_val))
-			else:
-				bf = min(range(len(states)), key=lambda i: states[i][0])
-			sr = [0.0] * seg_n; sr[-1] = states[bf][1]; trace = bf
-			for t in range(seg_n - 1, 0, -1):
-				trace = bp[t][trace]; sr[t - 1] = candidates[t - 1][trace]
-			for t, idx in enumerate(seg_idx):
-				if abs(rows[idx][2] - sr[t]) > 0.5:
-					rows[idx][2] = sr[t]
-					if rows[idx][3] == 0:
-						rows[idx][3] = 1
+		n = len(rows)
+		anchors = anchor_indices
+		times = [r[0] for r in rows]
+
+		self._log(f"Correction B v2: {n} rows, {len(anchors)} anchors")
+
+		# ── 阶段 1：错误检测 ──
+		error_set = self._detect_errors(rows, anchors, times, max_speed_kmh, max_accel_mps2)
+		self._log(f"  Stage 1: detected {len(error_set)} errors")
+
+		if not error_set:
+			return rows
+
+		# ── 阶段 2+3：重 OCR + 最优选择（首轮）──
+		fixed = self._fix_errors(rows, observations, raw_frames, ocr, error_set, anchors, times, max_speed_kmh, max_accel_mps2)
+		self._log(f"  Stage 2+3: fixed {fixed} frames in round 1")
+
+		# ── 阶段 4：多轮迭代 ──
+		max_rounds = 3
+		prev_error_count = len(error_set)
+		for rnd in range(2, max_rounds + 1):
+			error_set = self._detect_errors(rows, anchors, times, max_speed_kmh, max_accel_mps2)
+			if not error_set or len(error_set) >= prev_error_count:
+				break
+			prev_error_count = len(error_set)
+			fixed = self._fix_errors(rows, observations, raw_frames, ocr, error_set, anchors, times, max_speed_kmh, max_accel_mps2)
+			self._log(f"  Stage 4 round {rnd}: {len(error_set)} errors, fixed {fixed}")
+
+		# ── 阶段 5：最终填充不可恢复帧 + 轻量平滑 ──
+		error_set = self._detect_errors(rows, anchors, times, max_speed_kmh, max_accel_mps2)
+		if error_set:
+			self._fill_unrecoverable(rows, anchors, error_set, times, max_speed_kmh, max_accel_mps2)
+			self._log(f"  Stage 5: filled {len(error_set)} unrecoverable frames")
+
+		self._apply_final_smooth(rows, anchors, max_speed_kmh, max_accel_mps2)
+		self._log("  Final smooth applied")
+
 		return rows
+
+	def _detect_errors(self, rows, anchors, times, max_speed_kmh, max_accel_mps2):
+		"""阶段 1：错误检测。三种检测器并行标记异常帧。
+
+		A. 邻帧跳变 — 与前后邻帧的加速度超限
+		B. 锚点趋势偏离 — 偏离锚点间线性插值过多
+		C. 孤立离群 (spike) — 与两边都冲突但邻居彼此一致
+		"""
+		n = len(rows)
+		raw_vals = [r[2] for r in rows]
+		error_set = set()
+
+		for i in range(n):
+			if i in anchors:
+				continue
+			v = raw_vals[i]
+			if v < 0 or v > max_speed_kmh:
+				error_set.add(i)
+				continue
+
+			# ── A. 邻帧跳变检测 ──
+			fwd_fail = False
+			bwd_fail = False
+
+			if i > 0:
+				prev_v = raw_vals[i - 1]
+				if prev_v >= 0 and prev_v <= max_speed_kmh:
+					dt = max(times[i] - times[i - 1], 0.001)
+					max_dv = max_accel_mps2 * dt * 3.6 * 1.2
+					if abs(v - prev_v) > max_dv:
+						# 跳过显示保持帧（同值且 dt < 0.15s）
+						if not (i + 1 < n and v == raw_vals[i + 1] and times[i + 1] - times[i] < 0.15):
+							fwd_fail = True
+
+			if i + 1 < n:
+				next_v = raw_vals[i + 1]
+				if next_v >= 0 and next_v <= max_speed_kmh:
+					dt = max(times[i + 1] - times[i], 0.001)
+					max_dv = max_accel_mps2 * dt * 3.6 * 1.2
+					if abs(next_v - v) > max_dv:
+						if not (i > 0 and v == raw_vals[i - 1] and times[i] - times[i - 1] < 0.15):
+							bwd_fail = True
+
+			if fwd_fail and bwd_fail:
+				error_set.add(i)
+				continue
+
+			# ── B. 锚点趋势偏离 ──
+			la = None; ra = None
+			for j in range(i - 1, -1, -1):
+				if j in anchors:
+					la = j; break
+			for j in range(i + 1, n):
+				if j in anchors:
+					ra = j; break
+			if la is not None and ra is not None:
+				lv = rows[la][2]; rv = rows[ra][2]
+				lt = rows[la][0]; rt = rows[ra][0]
+				total_dt = max(rt - lt, 0.001)
+				frac = (times[i] - lt) / total_dt
+				interp = lv + (rv - lv) * frac
+				seg_dt = times[i] - lt
+				threshold = max(5.0, 3.0 * max_accel_mps2 * max(seg_dt, 0.1) * 3.6)
+				if abs(v - interp) > threshold:
+					error_set.add(i)
+					continue
+
+			# ── C. 孤立离群 (spike) ──
+			if i >= 2 and i + 2 < n:
+				left_v = raw_vals[i - 1] if raw_vals[i - 1] >= 0 else (raw_vals[i - 2] if raw_vals[i - 2] >= 0 else None)
+				right_v = raw_vals[i + 1] if raw_vals[i + 1] >= 0 else (raw_vals[i + 2] if raw_vals[i + 2] >= 0 else None)
+				if left_v is not None and right_v is not None:
+					dt_cross = max(times[i + 2] - times[i - 2], 0.01)
+					max_dv_cross = max_accel_mps2 * dt_cross * 3.6 * 1.5
+					if abs(right_v - left_v) <= max_dv_cross:
+						dt_left = max(times[i] - times[i - 1], 0.001)
+						dt_right = max(times[i + 1] - times[i], 0.001)
+						max_dv_l = max_accel_mps2 * dt_left * 3.6 * 1.5
+						max_dv_r = max_accel_mps2 * dt_right * 3.6 * 1.5
+						if abs(v - left_v) > max_dv_l and abs(right_v - v) > max_dv_r:
+							error_set.add(i)
+
+		return error_set
+
+	def _fix_errors(self, rows, observations, raw_frames, ocr, error_set, anchors, times, max_speed_kmh, max_accel_mps2):
+		"""阶段 2+3：对每个 error 帧重 OCR 获取备选，选最优值填入。"""
+		fixed = 0
+		for i in error_set:
+			if i in anchors:
+				continue
+			candidates = list(self._re_ocr_frame(raw_frames[i][1], ocr, max_speed_kmh))
+			# 加入锚点插值候选
+			interp_cand = self._interp_candidate(i, rows, anchors, times, max_speed_kmh)
+			if interp_cand is not None:
+				candidates.append(interp_cand)
+			# 加入混淆表候选
+			oid = min(i, len(observations) - 1)
+			confusion_cands = build_speed_candidates(observations[oid].raw_text, max_speed_kmh)
+			candidates.extend(c for c in confusion_cands if c not in candidates)
+
+			if not candidates:
+				continue
+
+			best_val = None
+			best_score = -1.0
+			for cand in set(candidates):
+				if not (0 <= cand <= max_speed_kmh):
+					continue
+				score = self._score_candidate(cand, i, rows, anchors, error_set, times, max_speed_kmh, max_accel_mps2)
+				if score > best_score:
+					best_score = score
+					best_val = cand
+
+			if best_val is not None and abs(rows[i][2] - best_val) > 0.5:
+				rows[i][2] = best_val
+				if rows[i][3] == 0:
+					rows[i][3] = 1
+				fixed += 1
+		return fixed
+
+	def _re_ocr_frame(self, crop_bgr, ocr, max_speed_kmh):
+		"""阶段 2：对单帧尝试 6 种预处理变体重 OCR，返回所有有效备选值集合。"""
+		candidates = set()
+		if crop_bgr is None or crop_bgr.size == 0:
+			return candidates
+
+		gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
+		h, w = gray.shape[:2]
+		if h <= 0 or w <= 0:
+			return candidates
+
+		def _do_ocr(img_bgr):
+			res, _ = ocr(img_bgr)
+			sv, rt = extract_speed_value(res)
+			if sv is not None and sv <= max_speed_kmh:
+				candidates.add(float(sv))
+
+		# 变体 1: 标准灰度 (h=24)
+		scale = 24.0 / h if h > 0 else 1.0
+		proc = cv2.resize(gray, (max(1, int(w * scale)), 24))
+		_do_ocr(cv2.cvtColor(proc, cv2.COLOR_GRAY2BGR))
+
+		# 变体 2: CLAHE + OTSU (h=32)
+		clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+		_, otsu = cv2.threshold(clahe.apply(gray), 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+		scale32 = 32.0 / h if h > 0 else 1.0
+		proc = cv2.resize(otsu, (max(1, int(w * scale32)), 32))
+		_do_ocr(cv2.cvtColor(proc, cv2.COLOR_GRAY2BGR))
+
+		# 变体 3: OTSU 二值化 (h=32)
+		_, otsu2 = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+		proc = cv2.resize(otsu2, (max(1, int(w * scale32)), 32))
+		_do_ocr(cv2.cvtColor(proc, cv2.COLOR_GRAY2BGR))
+
+		# 变体 4: 反相灰度 (h=32)
+		proc = cv2.resize(cv2.bitwise_not(gray), (max(1, int(w * scale32)), 32))
+		_do_ocr(cv2.cvtColor(proc, cv2.COLOR_GRAY2BGR))
+
+		# 变体 5: OTSU 反相 (h=32)
+		_, otsu3 = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+		proc = cv2.resize(otsu3, (max(1, int(w * scale32)), 32))
+		_do_ocr(cv2.cvtColor(proc, cv2.COLOR_GRAY2BGR))
+
+		# 变体 6: EasyOCR 后备
+		try:
+			sv, _rt = ocr_digital_fallback(ocr, crop_bgr, max_speed_kmh)
+			if sv is not None:
+				candidates.add(float(sv))
+		except Exception:
+			pass
+
+		return candidates
+
+	def _interp_candidate(self, i, rows, anchors, times, max_speed_kmh):
+		"""计算帧 i 在左右锚点间的线性插值估计。"""
+		n = len(rows)
+		la = None; ra = None
+		for j in range(i - 1, -1, -1):
+			if j in anchors:
+				la = j; break
+		for j in range(i + 1, n):
+			if j in anchors:
+				ra = j; break
+		if la is not None and ra is not None:
+			lv = rows[la][2]; rv = rows[ra][2]
+			lt = rows[la][0]; rt = rows[ra][0]
+			total_dt = max(rt - lt, 0.001)
+			frac = (times[i] - lt) / total_dt
+			val = lv + (rv - lv) * frac
+			if 0 <= val <= max_speed_kmh:
+				return val
+		return None
+
+	def _score_candidate(self, val, i, rows, anchors, error_set, times, max_speed_kmh, max_accel_mps2):
+		"""阶段 3：对候选值评分。
+
+		score = neighbor_score * 0.4 + anchor_score * 0.35 + smoothness_score * 0.25
+		"""
+		n = len(rows)
+
+		# 1. neighbor_score: 与前后可信邻帧的加速度一致性
+		neighbor_score = 0.0
+		count = 0
+		for j in range(i - 1, max(i - 4, -1), -1):
+			if j in error_set or rows[j][2] < 0 or rows[j][2] > max_speed_kmh:
+				continue
+			dt = max(times[i] - times[j], 0.001)
+			max_dv = max_accel_mps2 * dt * 3.6
+			dv = abs(val - rows[j][2])
+			neighbor_score += 1.0 - dv / max(max_dv, 0.1) if dv <= max_dv else 0.0
+			count += 1
+			break
+		for j in range(i + 1, min(i + 5, n)):
+			if j in error_set or rows[j][2] < 0 or rows[j][2] > max_speed_kmh:
+				continue
+			dt = max(times[j] - times[i], 0.001)
+			max_dv = max_accel_mps2 * dt * 3.6
+			dv = abs(rows[j][2] - val)
+			neighbor_score += 1.0 - dv / max(max_dv, 0.1) if dv <= max_dv else 0.0
+			count += 1
+			break
+		neighbor_score = neighbor_score / max(count, 1)
+
+		# 2. anchor_score: 与锚点插值的接近度
+		anchor_score = 0.0
+		interp = self._interp_candidate(i, rows, anchors, times, max_speed_kmh)
+		if interp is not None:
+			dev = abs(val - interp)
+			threshold = max(5.0, max_accel_mps2 * 3.6)
+			anchor_score = max(0.0, 1.0 - dev / threshold)
+
+		# 3. smoothness_score: 检查是否产生平滑的加速度剖面
+		smoothness_score = 0.5
+		if i >= 1 and i + 1 < n:
+			prev_v = None
+			for j in range(i - 1, max(i - 3, -1), -1):
+				if j not in error_set and 0 <= rows[j][2] <= max_speed_kmh:
+					prev_v = rows[j][2]; break
+			next_v = None
+			for j in range(i + 1, min(i + 4, n)):
+				if j not in error_set and 0 <= rows[j][2] <= max_speed_kmh:
+					next_v = rows[j][2]; break
+			if prev_v is not None and next_v is not None:
+				expected = (prev_v + next_v) / 2.0
+				dev2 = abs(val - expected)
+				smoothness_score = max(0.0, 1.0 - dev2 / max(10.0, max_accel_mps2 * 1.8 * 3.6))
+
+		return neighbor_score * 0.4 + anchor_score * 0.35 + smoothness_score * 0.25
+
+	def _fill_unrecoverable(self, rows, anchors, error_set, times, max_speed_kmh, max_accel_mps2):
+		"""阶段 5：对无法通过重 OCR 修复的帧，直接计算物理合理值。"""
+		n = len(rows)
+		for i in error_set:
+			if i in anchors:
+				continue
+			la = None; ra = None
+			for j in range(i - 1, -1, -1):
+				if j in anchors or j not in error_set:
+					if 0 <= rows[j][2] <= max_speed_kmh:
+						la = j; break
+			for j in range(i + 1, n):
+				if j in anchors or j not in error_set:
+					if 0 <= rows[j][2] <= max_speed_kmh:
+						ra = j; break
+			if la is not None and ra is not None:
+				lv = rows[la][2]; rv = rows[ra][2]
+				lt = rows[la][0]; rt = rows[ra][0]
+				total_dt = max(rt - lt, 0.001)
+				frac = (times[i] - lt) / total_dt
+				val = lv + (rv - lv) * frac
+			elif la is not None:
+				val = rows[la][2]
+			elif ra is not None:
+				val = rows[ra][2]
+			else:
+				continue
+
+			# 加速度裁剪
+			if la is not None:
+				dt = max(times[i] - rows[la][0], 0.001)
+				max_dv = max_accel_mps2 * dt * 3.6
+				val = max(rows[la][2] - max_dv, min(rows[la][2] + max_dv, val))
+
+			val = max(0.0, min(max_speed_kmh, val))
+			rows[i][2] = val
+			if rows[i][3] == 0:
+				rows[i][3] = 1
+
+	def _apply_final_smooth(self, rows, anchors, max_speed_kmh, max_accel_mps2):
+		"""阶段 5 末尾：轻量 Savitzky-Golay 平滑。只触动非锚点帧且变化 < 3 km/h。"""
+		n = len(rows)
+		if n < 7:
+			return
+		vals = [r[2] for r in rows]
+		win = min(n, 7) | 1  # 奇数窗口
+		try:
+			smoothed = _savgol_filter_np(np.array(vals, dtype=float), win, 2)
+			for i in range(n):
+				if i in anchors:
+					continue
+				diff = abs(smoothed[i] - vals[i])
+				if diff < 3.0:
+					rows[i][2] = max(0.0, min(max_speed_kmh, float(smoothed[i])))
+		except Exception:
+			pass
+
 
 	def _run_baseline_mode(self, raw_frames, total_frames, output_path, region,
 			max_speed_kmh, max_accel_mps2, frame_div, target_h, pad_px, num_workers,
@@ -1212,7 +1464,7 @@ class RaceVideoToLogApp:
 			"正在以人工基准为锚点进行物理约束纠错...", 85.0)
 		self._check_cancel()
 		self._log(f"Correction B: {n_obs} rows, anchors={sum(1 for i in range(n_obs) if rows[i][3] >= 2)}")
-		print(f'[Baseline] Annotation done, running correction B...', flush=True); rows = self._correct_with_anchors(rows, observations, max_speed_kmh, max_accel_mps2,
+		print(f'[Baseline] Annotation done, running correction B...', flush=True); rows = self._correct_with_anchors(rows, observations, raw_frames, ocr, max_speed_kmh, max_accel_mps2,
 			{i for i in range(n_obs) if rows[i][3] >= 2})
 		print(f'[Baseline] Correction B done, integrating distance...', flush=True); dist = 0.0; prev_t, prev_v = None, None
 		for r in rows:
