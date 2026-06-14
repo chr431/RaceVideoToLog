@@ -1183,6 +1183,25 @@ class RaceVideoToLogApp:
 						if abs(v - left_v) > max_dv_l and abs(right_v - v) > max_dv_r:
 							error_set.add(i)
 
+			# ── D. 局部趋势偏离 ──
+			# 5 帧滑动窗口中值作为局部期望值。
+			# 若本帧偏离期望 > 3 km/h 且两侧邻帧与期望一致，则为短暂闪变（OCR 误读特征）。
+			if i >= 2 and i + 2 < n:
+				window = []
+				for j in range(max(0, i - 2), min(n, i + 3)):
+					if j != i and raw_vals[j] >= 0 and raw_vals[j] <= max_speed_kmh:
+						window.append(raw_vals[j])
+				if len(window) >= 3:
+					window.sort()
+					local_median = window[len(window) // 2]
+					dev = abs(v - local_median)
+					if dev > 3.0:
+						# 验证：两侧邻帧与中位数一致（偏差 < 2 km/h）
+						left_ok = (i >= 1 and raw_vals[i - 1] >= 0 and abs(raw_vals[i - 1] - local_median) < 2.0)
+						right_ok = (i + 1 < n and raw_vals[i + 1] >= 0 and abs(raw_vals[i + 1] - local_median) < 2.0)
+						if left_ok and right_ok:
+							error_set.add(i)
+
 		return error_set
 
 	def _fix_errors(self, rows, observations, raw_frames, ocr, error_set, anchors, times, max_speed_kmh, max_accel_mps2):
