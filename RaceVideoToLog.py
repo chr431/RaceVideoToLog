@@ -1015,8 +1015,6 @@ class RaceVideoToLogApp:
 			self._log(f"  Stage 5 pass {fill_pass+1}: filled {len(error_set)} unrecoverable frames")
 			fill_pass += 1
 
-		self._apply_final_smooth(rows, anchors, max_speed_kmh, max_accel_mps2)
-		self._log("  Final smooth applied")
 
 		return rows
 
@@ -1209,6 +1207,11 @@ class RaceVideoToLogApp:
 
 	def _re_ocr_frame(self, crop_bgr, ocr, max_speed_kmh):
 		"""阶段 2：对单帧尝试 6 种预处理变体重 OCR，返回所有有效备选值集合。"""
+		if not hasattr(self, "_reocr_cache"):
+			self._reocr_cache = {}
+		cache_key = hash(crop_bgr.tobytes()) if crop_bgr is not None and crop_bgr.size > 0 else None
+		if cache_key is not None and cache_key in self._reocr_cache:
+			return self._reocr_cache[cache_key]
 		candidates = set()
 		if crop_bgr is None or crop_bgr.size == 0:
 			return candidates
@@ -1236,16 +1239,7 @@ class RaceVideoToLogApp:
 		proc = cv2.resize(otsu, (max(1, int(w * scale32)), 32))
 		_do_ocr(cv2.cvtColor(proc, cv2.COLOR_GRAY2BGR))
 
-		# 变体 3: OTSU 二值化 (h=32)
-		_, otsu2 = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-		proc = cv2.resize(otsu2, (max(1, int(w * scale32)), 32))
-		_do_ocr(cv2.cvtColor(proc, cv2.COLOR_GRAY2BGR))
-
-		# 变体 4: 反相灰度 (h=32)
-		proc = cv2.resize(cv2.bitwise_not(gray), (max(1, int(w * scale32)), 32))
-		_do_ocr(cv2.cvtColor(proc, cv2.COLOR_GRAY2BGR))
-
-		# 变体 5: OTSU 反相 (h=32)
+		# 变体 3: OTSU 反相 (h=32) — 合并为变体3(原5)
 		_, otsu3 = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 		proc = cv2.resize(otsu3, (max(1, int(w * scale32)), 32))
 		_do_ocr(cv2.cvtColor(proc, cv2.COLOR_GRAY2BGR))
@@ -1258,6 +1252,8 @@ class RaceVideoToLogApp:
 		except Exception:
 			pass
 
+		if cache_key is not None:
+			self._reocr_cache[cache_key] = candidates
 		return candidates
 
 	def _interp_candidate(self, i, rows, anchors, times, max_speed_kmh):
@@ -1368,25 +1364,6 @@ class RaceVideoToLogApp:
 			rows[i][2] = val
 			if rows[i][3] == 0:
 				rows[i][3] = 1
-
-
-	def _apply_final_smooth(self, rows, anchors, max_speed_kmh, max_accel_mps2):
-		"""阶段 5 末尾：轻量 Savitzky-Golay 平滑。只触动非锚点帧且变化 < 3 km/h。"""
-		n = len(rows)
-		if n < 7:
-			return
-		vals = [r[2] for r in rows]
-		win = min(n, 7) | 1  # 奇数窗口
-		try:
-			smoothed = _savgol_filter_np(np.array(vals, dtype=float), win, 2)
-			for i in range(n):
-				if i in anchors:
-					continue
-				diff = abs(smoothed[i] - vals[i])
-				if diff < 3.0:
-					rows[i][2] = max(0.0, min(max_speed_kmh, float(smoothed[i])))
-		except Exception:
-			pass
 
 
 
