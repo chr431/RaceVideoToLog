@@ -187,7 +187,7 @@ class RaceVideoToLogApp:
 		ttk.Label(perf_box, text=">1 时启用并行推理。", foreground="#555555").grid(row=2, column=0, columnspan=6, sticky="w", pady=(4, 0))
 		# 纠错模式选择
 		mode_frame = ttk.LabelFrame(config_col, text="纠错模式", padding=(12, 10, 12, 12))
-		mode_frame.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+		mode_frame.grid(row=3, column=0, sticky="ew", pady=(8, 0))
 		mode_frame.columnconfigure(0, weight=1)
 		ttk.Radiobutton(mode_frame, text="自动锚点纠错（全自动，推荐）", variable=self._correction_mode_var, value="auto").grid(row=0, column=0, sticky="w")
 		ttk.Radiobutton(mode_frame, text="人工基准标注", variable=self._correction_mode_var, value="baseline").grid(row=1, column=0, sticky="w", pady=(4, 0))
@@ -201,7 +201,7 @@ class RaceVideoToLogApp:
 
 		# 时间轴范围
 		time_box = ttk.LabelFrame(config_col, text="时间轴范围", padding=(12, 10, 12, 12))
-		time_box.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+		time_box.grid(row=4, column=0, sticky="ew", pady=(8, 0))
 		time_box.columnconfigure(1, weight=1); time_box.columnconfigure(4, weight=1)
 		ttk.Label(time_box, text="起始帧").grid(row=0, column=0, sticky="w")
 		ttk.Entry(time_box, textvariable=self._frame_start_var, width=8).grid(row=0, column=1, sticky="ew", padx=(4, 4))
@@ -1362,7 +1362,7 @@ class RaceVideoToLogApp:
 
 		# Auto-select anchors
 		self.root.after(0, self._update_progress, "正在自动识别可靠锚点...", 40.0)
-		anchor_indices = auto_select_anchors(observations, max_speed_kmh, window=7, max_dev=5.0)
+		anchor_indices = auto_select_anchors(observations, max_speed_kmh)
 		print(f'[AutoAnchor] Selected {len(anchor_indices)} anchors ({100*len(anchor_indices)/n_obs:.1f}% of frames)', flush=True)
 		if len(anchor_indices) < 3:
 			raise RuntimeError("自动锚点选择失败：未找到足够的可靠帧。")
