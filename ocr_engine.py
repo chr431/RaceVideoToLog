@@ -688,7 +688,23 @@ def auto_select_anchors(observations, max_speed_kmh=400.0, window=0, max_dev=4.0
 		if abs(raw_vals[i] - median) <= max_dev:
 			anchors.add(i)
 
-	return anchors
+	# Post-filter: remove anchors that are extreme outliers vs immediate neighbors
+	# An anchor must be within 10 km/h of at least one immediate neighbor
+	anchors_filtered = set()
+	for i in anchors:
+		keep = True
+		v = raw_vals[i]
+		# Check against both neighbors
+		left_ok = (i > 0 and raw_vals[i - 1] > 0 and abs(v - raw_vals[i - 1]) <= 10.0)
+		right_ok = (i + 1 < n and raw_vals[i + 1] > 0 and abs(raw_vals[i + 1] - v) <= 10.0)
+		# Keep if at least one neighbor is within 10 km/h
+		if not left_ok and not right_ok:
+			# Extreme outlier: not close to either neighbor
+			keep = False
+		if keep:
+			anchors_filtered.add(i)
+
+	return anchors_filtered
 
 def correct_speed_series(
 	samples: list[SpeedObservation],

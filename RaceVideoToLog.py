@@ -998,20 +998,22 @@ class RaceVideoToLogApp:
 
 		# ── 阶段 4：多轮迭代 ──
 		max_rounds = 3
-		prev_error_count = len(error_set)
 		for rnd in range(2, max_rounds + 1):
 			error_set = self._detect_errors(rows, anchors, times, max_speed_kmh, max_accel_mps2)
-			if not error_set or len(error_set) >= prev_error_count:
+			if not error_set:
 				break
-			prev_error_count = len(error_set)
 			fixed = self._fix_errors(rows, observations, raw_frames, ocr, error_set, anchors, times, max_speed_kmh, max_accel_mps2)
 			self._log(f"  Stage 4 round {rnd}: {len(error_set)} errors, fixed {fixed}")
 
-		# ── 阶段 5：最终填充不可恢复帧 + 轻量平滑 ──
-		error_set = self._detect_errors(rows, anchors, times, max_speed_kmh, max_accel_mps2)
-		if error_set:
+		# ── 阶段 5：迭代填充直到收敛（处理级联效应）──
+		fill_pass = 0
+		while fill_pass < 10:
+			error_set = self._detect_errors(rows, anchors, times, max_speed_kmh, max_accel_mps2)
+			if not error_set:
+				break
 			self._fill_unrecoverable(rows, anchors, error_set, times, max_speed_kmh, max_accel_mps2)
-			self._log(f"  Stage 5: filled {len(error_set)} unrecoverable frames")
+			self._log(f"  Stage 5 pass {fill_pass+1}: filled {len(error_set)} unrecoverable frames")
+			fill_pass += 1
 
 		self._apply_final_smooth(rows, anchors, max_speed_kmh, max_accel_mps2)
 		self._log("  Final smooth applied")
@@ -1063,6 +1065,43 @@ class RaceVideoToLogApp:
 			if fwd_fail and bwd_fail:
 				error_set.add(i)
 				continue
+
+			# ── A2. V 字形检测（单侧极端跳变 + 对侧反向）──
+			if i > 0 and i + 1 < n:
+				prev_v = raw_vals[i - 1]
+				next_v = raw_vals[i + 1]
+				if prev_v > 0 and next_v > 0:
+					dt_left = max(times[i] - times[i - 1], 0.001)
+					dt_right = max(times[i + 1] - times[i], 0.001)
+					accel_left = (v - prev_v) / dt_left
+					accel_right = (next_v - v) / dt_right
+					accel_limit = max_accel_mps2 * 3.6 * 2.5
+					if abs(accel_left) > accel_limit and accel_left * accel_right < 0:
+						if not (i + 1 < n and v == raw_vals[i + 1] and times[i + 1] - times[i] < 0.15):
+							error_set.add(i)
+							continue
+					if abs(accel_right) > accel_limit and accel_right * accel_left < 0:
+						if not (i > 0 and v == raw_vals[i - 1] and times[i] - times[i - 1] < 0.15):
+							error_set.add(i)
+							continue
+
+			# ── A3. 单侧极端跳变检测（cliff / 悬崖）──
+			# 一侧加速度远超物理极限(3x)，即使另一侧正常也标记
+			if i > 0 and i + 1 < n:
+				prev_v = raw_vals[i - 1]
+				next_v = raw_vals[i + 1]
+				if prev_v > 0 and next_v > 0:
+					dt_left = max(times[i] - times[i - 1], 0.001)
+					dt_right = max(times[i + 1] - times[i], 0.001)
+					accel_left = (v - prev_v) / dt_left
+					accel_right = (next_v - v) / dt_right
+					cliff_limit = max_accel_mps2 * 3.6 * 3.0
+					if abs(accel_left) > cliff_limit and abs(accel_right) < cliff_limit * 0.3:
+						error_set.add(i)
+						continue
+					if abs(accel_right) > cliff_limit and abs(accel_left) < cliff_limit * 0.3:
+						error_set.add(i)
+						continue
 
 			# ── B. 锚点趋势偏离 ──
 			la = None; ra = None
@@ -1137,6 +1176,18 @@ class RaceVideoToLogApp:
 			candidates.extend(c for c in confusion_cands if c not in candidates)
 
 			if not candidates:
+				continue
+
+			# 若重 OCR 无法产生与原值不同的候选，且插值候选偏差 > 10 km/h，
+			# 直接使用插值（信任物理模型优于 OCR）
+			raw_val = rows[i][2]
+			reocr_unique = self._re_ocr_frame(raw_frames[i][1], ocr, max_speed_kmh)
+			if len(reocr_unique) <= 1 and interp_cand is not None and abs(interp_cand - raw_val) > 10.0:
+				if abs(raw_val - interp_cand) > 0.5:
+					rows[i][2] = interp_cand
+					if rows[i][3] == 0:
+						rows[i][3] = 1
+					fixed += 1
 				continue
 
 			best_val = None
@@ -1286,43 +1337,38 @@ class RaceVideoToLogApp:
 		return neighbor_score * 0.4 + anchor_score * 0.35 + smoothness_score * 0.25
 
 	def _fill_unrecoverable(self, rows, anchors, error_set, times, max_speed_kmh, max_accel_mps2):
-		"""阶段 5：对无法通过重 OCR 修复的帧，直接计算物理合理值。"""
+		"""阶段 5：对无法通过重 OCR 修复的帧，从左到右传播可信值。"""
 		n = len(rows)
-		for i in error_set:
-			if i in anchors:
-				continue
-			la = None; ra = None
+		sorted_errors = sorted(i for i in error_set if i not in anchors)
+		for i in sorted_errors:
+			la = None
 			for j in range(i - 1, -1, -1):
 				if j in anchors or j not in error_set:
 					if 0 <= rows[j][2] <= max_speed_kmh:
 						la = j; break
+			if la is None:
+				continue
+			lv = rows[la][2]; lt = rows[la][0]
+			ra = None
 			for j in range(i + 1, n):
-				if j in anchors or j not in error_set:
+				if j in anchors:
 					if 0 <= rows[j][2] <= max_speed_kmh:
 						ra = j; break
-			if la is not None and ra is not None:
-				lv = rows[la][2]; rv = rows[ra][2]
-				lt = rows[la][0]; rt = rows[ra][0]
+			if ra is not None:
+				rv = rows[ra][2]; rt = rows[ra][0]
 				total_dt = max(rt - lt, 0.001)
 				frac = (times[i] - lt) / total_dt
 				val = lv + (rv - lv) * frac
-			elif la is not None:
-				val = rows[la][2]
-			elif ra is not None:
-				val = rows[ra][2]
 			else:
-				continue
-
-			# 加速度裁剪
-			if la is not None:
-				dt = max(times[i] - rows[la][0], 0.001)
-				max_dv = max_accel_mps2 * dt * 3.6
-				val = max(rows[la][2] - max_dv, min(rows[la][2] + max_dv, val))
-
+				val = lv
+			dt = max(times[i] - lt, 0.001)
+			max_dv = max_accel_mps2 * dt * 3.6
+			val = max(lv - max_dv, min(lv + max_dv, val))
 			val = max(0.0, min(max_speed_kmh, val))
 			rows[i][2] = val
 			if rows[i][3] == 0:
 				rows[i][3] = 1
+
 
 	def _apply_final_smooth(self, rows, anchors, max_speed_kmh, max_accel_mps2):
 		"""阶段 5 末尾：轻量 Savitzky-Golay 平滑。只触动非锚点帧且变化 < 3 km/h。"""
