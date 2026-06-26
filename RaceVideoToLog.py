@@ -1483,12 +1483,22 @@ class RaceVideoToLogApp:
 			for i in range(n_obs):
 				if rows[i][3] == 3:
 					rows[i][3] = 0
+		# 自动锚点补充：在人工锚点之外自动选择可靠帧作为额外锚点
 		self.root.after(0, self._update_progress,
-			"正在以人工基准为锚点进行物理约束纠错...", 85.0)
+			"正在自动识别补充锚点...", 80.0)
+		auto_anchors = auto_select_anchors(observations, max_speed_kmh)
+		manual_anchors = {i for i in range(n_obs) if rows[i][3] >= 2}
+		merged_anchors = manual_anchors | (auto_anchors - manual_anchors)
+		for i in auto_anchors:
+			if i not in manual_anchors and rows[i][3] == 0:
+				rows[i][3] = 2
+		print(f'[Baseline] Anchors: {len(manual_anchors)} manual + {len(auto_anchors - manual_anchors)} auto = {len(merged_anchors)} total', flush=True)
+		self.root.after(0, self._update_progress,
+			"正在以混合锚点进行物理约束纠错...", 85.0)
 		self._check_cancel()
-		self._log(f"Correction B: {n_obs} rows, anchors={sum(1 for i in range(n_obs) if rows[i][3] >= 2)}")
+		self._log(f"Correction B: {n_obs} rows, anchors={len(merged_anchors)} ({len(manual_anchors)} manual + {len(auto_anchors - manual_anchors)} auto)")
 		print(f'[Baseline] Annotation done, running correction B...', flush=True); rows = self._correct_with_anchors(rows, observations, raw_frames, ocr, max_speed_kmh, max_accel_mps2,
-			{i for i in range(n_obs) if rows[i][3] >= 2})
+			merged_anchors)
 		print(f'[Baseline] Correction B done, integrating distance...', flush=True); dist = 0.0; prev_t, prev_v = None, None
 		for r in rows:
 			v = r[2] / 3.6
