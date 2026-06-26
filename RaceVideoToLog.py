@@ -1664,9 +1664,6 @@ def main() -> None:
 	parser.add_argument("--analysis-out", type=str)
 	parser.add_argument("--frame-start", type=int, metavar="N")
 	parser.add_argument("--frame-end", type=int, metavar="N")
-	parser.add_argument("--baseline-freq", type=int, default=0, metavar="N",
-		help="人工基准抽样频率 1/N (1=全部人工)")
-	parser.add_argument("--multi-box", action="store_true")
 	args = parser.parse_args()
 
 	if args.video:
