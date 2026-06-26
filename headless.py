@@ -116,16 +116,9 @@ def run_headless(args: argparse.Namespace) -> None:
 		else:
 			rows_data.append([obs.timestamp, 0.0, obs.raw_speed_kmh, 0])
 
-	# Correction B（与 GUI 共享同一实现）
-	from RaceVideoToLog import RaceVideoToLogApp
-	class _Corrector:
-		_log = lambda s, m: None
-	for _name in ['_correct_with_anchors', '_detect_errors', '_fix_errors',
-	              '_re_ocr_frame', '_interp_candidate', '_score_candidate',
-	              '_fill_unrecoverable']:
-		setattr(_Corrector, _name, getattr(RaceVideoToLogApp, _name))
-	_corrector = _Corrector()
-	rows_data = _corrector._correct_with_anchors(
+	# Correction（与 GUI 共享同一实现）
+	from correction import correct_with_anchors
+	rows_data = correct_with_anchors(
 		rows_data, observations, raw_frames, ocr,
 		args.max_speed, args.max_accel, anchor_indices)
 

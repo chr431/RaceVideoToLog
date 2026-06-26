@@ -85,7 +85,7 @@ GUI 提供两种纠错模式，用户必须选择其一。
 #### 自动锚点纠错（推荐）
 
 ```
-OCR → auto_select_anchors → Correction B 5 阶段 → CSV
+OCR → auto_select_anchors → Correction 5 阶段 → CSV
 ```
 
 实测准确率：97.3% exact, 98.9% within 1 km/h, max error 9 km/h。
@@ -93,12 +93,12 @@ OCR → auto_select_anchors → Correction B 5 阶段 → CSV
 #### 人工基准标注
 
 ```
-OCR → 人工标注采样帧 → 自动锚点补充 → 混合锚点 Correction B → CSV
+OCR → 人工标注采样帧 → 自动锚点补充 → 混合锚点 Correction → CSV
 ```
 
 用户每 N 帧手动标注一次（N 可配置），标注完成后自动补充可靠帧作为额外锚点，人工锚点值不会被覆盖。
 
-#### Correction B — 5 阶段流水线
+#### Correction — 5 阶段流水线
 
 **阶段 1 — 错误检测**（6 种检测器并行）：
 
@@ -132,7 +132,7 @@ OCR → 人工标注采样帧 → 自动锚点补充 → 混合锚点 Correction
 
 ### 4. CLI 模式纠错
 
-CLI 使用 `correct_speed_series_v2`（物理约束纠错）而非 Correction B：
+CLI 使用 `correct_speed_series_v2`（物理约束纠错）而非 Correction：
 1. 自适应可达性扫描（窗口覆盖 ≈0.5 秒）
 2. 尖峰/显示保持/加速区检测
 3. 可疑段 DP 修正
@@ -160,10 +160,11 @@ timestamp,distance,speed_kmh,flag
 
 ```
 RaceVideoToLog/
-├── RaceVideoToLog.py    # GUI 应用 + CLI 入口 + Correction B
+├── RaceVideoToLog.py    # GUI 应用 + CLI 入口
+├── correction.py         # 物理约束纠错流水线（GUI/CLI 共用）
+├── ocr_engine.py         # OCR 引擎、预处理、锚点选择、后端管理
 ├── analysis.py           # 数据分析模块（GUI tab + CLI 分析导出）
 ├── headless.py           # 无头 CLI OCR 流水线
-├── ocr_engine.py         # OCR 引擎、纠错算法、辅助函数
 ├── RaceVideoToLog.spec   # PyInstaller 打包配置
 └── README.md
 ```
