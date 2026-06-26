@@ -60,7 +60,7 @@ class RaceVideoToLogApp:
 		self.pad_var = tk.StringVar(value="0")
 		self.num_workers_var = tk.StringVar(value="4")
 		self.backend_var = tk.StringVar(value="auto")
-		self._ocr_model_var = tk.StringVar(value="v5 首选(推荐)")  # OCR 模型版本
+		self._ocr_model_var = tk.StringVar(value="v5_mobile")  # OCR 模型版本
 
 		# 时间轴范围
 		self._frame_start_var = tk.StringVar(value="")
@@ -174,9 +174,7 @@ class RaceVideoToLogApp:
 		self.backend_combo.bind("<<ComboboxSelected>>", self._on_backend_changed)
 
 		ttk.Label(perf_box, text="模型").grid(row=0, column=5, sticky="w", padx=(12,0))
-		_MODELS = {"v3": "v3 备选", "v5_mobile": "v5 首选(推荐)"}
-		self._model_combo = ttk.Combobox(perf_box, textvariable=self._ocr_model_var, values=[_MODELS[k] for k in ["v3","v5_mobile"]], width=11, state="readonly")
-		self._model_combo.grid(row=0, column=6, sticky="ew", padx=(6, 2))
+		ttk.Label(perf_box, text="v5_mobile", foreground="#555555").grid(row=0, column=6, sticky="ew", padx=(6, 2))
 
 		ttk.Label(perf_box, text="OCR 高度 (px)").grid(row=1, column=0, sticky="w", pady=(8,0))
 		ttk.Entry(perf_box, textvariable=self.target_height_var, width=8).grid(row=1, column=1, sticky="ew", padx=(6, 14), pady=(8,0))
@@ -506,12 +504,11 @@ class RaceVideoToLogApp:
 		selected_label = self.backend_var.get()
 		selected_key = BACKEND_LABELS_REV.get(selected_label, "auto")
 		actual = _select_backend(selected_key)
-		MODEL_REV = {"v3 备选": "v3", "v5 首选(推荐)": "v5_mobile"}
-		model_key = MODEL_REV.get(self._ocr_model_var.get(), "v5_mobile")
+		model_key = "v5_mobile"  # 当前唯一模型
 		print(f"[OCR] 后端: {actual}, 模型: {model_key}", flush=True)
 		kwargs = _get_model_kwargs(model_key)
-		if kwargs is None and model_key != "v3":
-			print(f"[OCR] 警告: {model_key} 模型文件不存在，回退到默认 v3")
+		if kwargs is None:
+			print(f"[OCR] 警告: v5_mobile 模型文件不存在")
 		self._check_cancel()
 		return RapidOCR(**(kwargs or {}))
 
@@ -1665,7 +1662,7 @@ def main() -> None:
 	parser.add_argument("--pad", type=int, default=0)
 	parser.add_argument("--workers", type=int, default=4)
 	parser.add_argument("--backend", choices=["auto","cuda","cpu"], default="auto")
-	parser.add_argument("--ocr-model", choices=["v3","v5_mobile"], default="v5_mobile")
+	parser.add_argument("--ocr-model", choices=["v5_mobile"], default="v5_mobile")
 	parser.add_argument("-o", "--output", type=str)
 	parser.add_argument("--analysis", nargs=2, metavar=("CSV1","CSV2"))
 	parser.add_argument("--analysis-out", type=str)
