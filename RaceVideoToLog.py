@@ -60,7 +60,6 @@ class RaceVideoToLogApp:
 		self.pad_var = tk.StringVar(value="0")
 		self.num_workers_var = tk.StringVar(value="4")
 		self.backend_var = tk.StringVar(value="auto")
-		self._ocr_model_var = tk.StringVar(value="v5_mobile")  # OCR 模型版本
 
 		# 时间轴范围
 		self._frame_start_var = tk.StringVar(value="")
@@ -173,8 +172,6 @@ class RaceVideoToLogApp:
 		self.backend_combo.grid(row=0, column=4, sticky="ew", padx=(6, 2))
 		self.backend_combo.bind("<<ComboboxSelected>>", self._on_backend_changed)
 
-		ttk.Label(perf_box, text="模型").grid(row=0, column=5, sticky="w", padx=(12,0))
-		ttk.Label(perf_box, text="v5_mobile", foreground="#555555").grid(row=0, column=6, sticky="ew", padx=(6, 2))
 
 		ttk.Label(perf_box, text="OCR 高度 (px)").grid(row=1, column=0, sticky="w", pady=(8,0))
 		ttk.Entry(perf_box, textvariable=self.target_height_var, width=8).grid(row=1, column=1, sticky="ew", padx=(6, 14), pady=(8,0))
@@ -504,9 +501,8 @@ class RaceVideoToLogApp:
 		selected_label = self.backend_var.get()
 		selected_key = BACKEND_LABELS_REV.get(selected_label, "auto")
 		actual = _select_backend(selected_key)
-		model_key = "v5_mobile"  # 当前唯一模型
-		print(f"[OCR] 后端: {actual}, 模型: {model_key}", flush=True)
-		kwargs = _get_model_kwargs(model_key)
+		print(f"[OCR] 后端: {actual}", flush=True)
+		kwargs = _get_model_kwargs("v5_mobile")
 		if kwargs is None:
 			print(f"[OCR] 警告: v5_mobile 模型文件不存在")
 		self._check_cancel()
@@ -1422,7 +1418,7 @@ class RaceVideoToLogApp:
 			fh.write(f"# RaceVideoToLog\n")
 			fh.write(f"# video_hash={vhash}, video={self.video_path.name}\n")
 			fh.write(f"# roi={region[0]},{region[1]},{region[2]},{region[3]}, format={self.speed_format_var.get()}\n")
-			fh.write(f"# max_speed={max_speed_kmh}, max_accel={max_accel_mps2}, div={frame_div}, target_h={target_h}, pad={pad_px}, backend={ocr_engine._gpu_backend}, model={self._ocr_model_var.get()}, workers={num_workers}, frame_start={self._frame_start_var.get() or ''}, frame_end={self._frame_end_var.get() or ''}, auto_anchor=1\n")
+			fh.write(f"# max_speed={max_speed_kmh}, max_accel={max_accel_mps2}, div={frame_div}, target_h={target_h}, pad={pad_px}, backend={ocr_engine._gpu_backend}, model=v5_mobile, workers={num_workers}, frame_start={self._frame_start_var.get() or ''}, frame_end={self._frame_end_var.get() or ''}, auto_anchor=1\n")
 			w = csv.writer(fh)
 			for r in rows:
 				w.writerow([f"{r[0]:.2f}", f"{r[1]:.2f}", f"{r[2]:.2f}", str(r[3])])
@@ -1514,7 +1510,7 @@ class RaceVideoToLogApp:
 			fh.write(f"# RaceVideoToLog\n")
 			fh.write(f"# video_hash={vhash}, video={self.video_path.name}\n")
 			fh.write(f"# roi={region[0]},{region[1]},{region[2]},{region[3]}, format={self.speed_format_var.get()}\n")
-			fh.write(f"# max_speed={max_speed_kmh}, max_accel={max_accel_mps2}, div={frame_div}, target_h={target_h}, pad={pad_px}, backend={ocr_engine._gpu_backend}, model={self._ocr_model_var.get()}, workers={num_workers}, frame_start={self._frame_start_var.get() or ''}, frame_end={self._frame_end_var.get() or ''}, baseline_freq={baseline_freq}\n")
+			fh.write(f"# max_speed={max_speed_kmh}, max_accel={max_accel_mps2}, div={frame_div}, target_h={target_h}, pad={pad_px}, backend={ocr_engine._gpu_backend}, model=v5_mobile, workers={num_workers}, frame_start={self._frame_start_var.get() or ''}, frame_end={self._frame_end_var.get() or ''}, baseline_freq={baseline_freq}\n")
 			w = csv.writer(fh)
 			for r in rows:
 				w.writerow([f"{r[0]:.2f}", f"{r[1]:.2f}", f"{r[2]:.2f}", str(r[3])])

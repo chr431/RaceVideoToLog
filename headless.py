@@ -32,8 +32,8 @@ def run_headless(args: argparse.Namespace) -> None:
 	backend_actual = _select_backend(args.backend)
 	print(f"OCR 后端: {backend_actual}, 模型: {args.ocr_model}")
 	model_kwargs = _get_model_kwargs(args.ocr_model)
-	if model_kwargs is None and args.ocr_model != "v3":
-		print(f"警告: {args.ocr_model} 模型文件不存在，回退到默认 v3")
+	if model_kwargs is None:
+		print(f"警告: {args.ocr_model} 模型文件不存在")
 	ocr = RapidOCR(**(model_kwargs or {}))
 
 	# 读取视频信息
@@ -230,9 +230,6 @@ def _retry_suspect_frames(
 		best_speed, best_text, best_diff = _ocr_retry(
 			ocr, proc3, expected, best_speed, best_text, best_diff, args)
 
-		# 变体4: 互补引擎 — v3 模型（不同网络权重，错误模式互补）
-		best_speed, best_text, best_diff = _ocr_retry_v3(
-			crop, expected, best_speed, best_text, best_diff, args)
 
 		# 变体5: 互补引擎 — 反向二值化（黑底白字→白底黑字）
 		th_inv = cv2.bitwise_not(th2) if th2.shape == gray.shape else cv2.bitwise_not(
@@ -269,50 +266,5 @@ def _ocr_retry(ocr, proc, expected, best_speed, best_text, best_diff, args):
 		if diff < best_diff:
 			return spd, rt, diff
 	return best_speed, best_text, best_diff
-
-
-def _ocr_retry_v3(crop, expected, best_speed, best_text, best_diff, args):
-	"""互补引擎重试：用 RapidOCR v3 模型（与 v5_mobile 不同网络权重，错误模式互补）。
-
-	v3 和 v5_mobile 使用不同的检测/识别网络，错误模式互补：
-	v3 极端错误少但中等偏差多，v5m 反之。
-	"""
-	try:
-		v3_ocr = _get_v3_ocr()
-		if v3_ocr is not None:
-			gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-			clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-			gray = clahe.apply(gray)
-			_, gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-			h2, w2 = gray.shape[:2]
-			th = max(8.0, float(args.target_h))
-			sc = th / h2 if h2 > 0 else 1.0
-			gray = cv2.resize(gray, (max(1, int(w2 * sc)), int(th)))
-			proc = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-			ocr_result, _ = v3_ocr(proc)
-			sv, rt = extract_speed_value(ocr_result)
-			if sv is not None and rt is not None:
-				spd = sv * SOURCE_TO_KMH[args.format]
-				diff = abs(spd - expected)
-				if diff < best_diff:
-					return spd, rt, diff
-	except Exception:
-		pass
-	return best_speed, best_text, best_diff
-
-
-_v3_ocr_cache = None
-
-
-def _get_v3_ocr():
-	"""懒加载 v3 模型 OCR 引擎（全局单例）。"""
-	global _v3_ocr_cache
-	if _v3_ocr_cache is None:
-		try:
-			from rapidocr_onnxruntime import RapidOCR
-			_v3_ocr_cache = RapidOCR()  # 默认 v3
-		except Exception:
-			_v3_ocr_cache = False  # 标记失败，不再重试
-	return _v3_ocr_cache if _v3_ocr_cache is not False else None
 if __name__ == "__main__":
 	main()
