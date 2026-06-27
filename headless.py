@@ -52,6 +52,7 @@ def run_headless(args: argparse.Namespace) -> None:
 
 	raw_frames: list[tuple[float, np.ndarray]] = []
 	fi = 0
+	_decoded = 0
 	while fi < total_video_frames:
 		if fi >= _end_limit:
 			break
@@ -71,10 +72,15 @@ def run_headless(args: argparse.Namespace) -> None:
 		ts = fi / fps if fps > 0 else float(cap.get(cv2.CAP_PROP_POS_MSEC)) / 1000.0
 		crop = frame[y1:y2 + 1, x1:x2 + 1].copy()
 		raw_frames.append((ts, crop))
+		_decoded += 1
+		if _decoded % 100 == 0:
+			print(f"\r  解码视频: {_decoded} 帧...", end="", flush=True)
 		fi += 1
 	cap.release()
 
 	total = len(raw_frames)
+	if _decoded >= 100:
+		print(f"\r  解码视频: {total} 帧完成" + " " * 10)
 	print(f"采样帧: {total}")
 	if total == 0:
 		print("错误: 未读取到帧")
@@ -122,11 +128,14 @@ def run_headless(args: argparse.Namespace) -> None:
 		else:
 			rows_data.append([obs.timestamp, 0.0, obs.raw_speed_kmh, 0])
 
-	# Correction（与 GUI 共享同一实现）
+	# Correction（与 GUI 共享同一实现, 添加 CLI 进度回调）
 	from correction import correct_with_anchors
+	def _cli_progress(msg: str, _pct: float) -> None:
+		print(f"  {msg}", flush=True)
 	rows_data = correct_with_anchors(
 		rows_data, observations, raw_frames, ocr,
-		args.max_speed, args.max_accel, anchor_indices)
+		args.max_speed, args.max_accel, anchor_indices,
+		progress_fn=_cli_progress)
 
 	# 积分距离
 	dist = 0.0; prev_t, prev_v = None, None
