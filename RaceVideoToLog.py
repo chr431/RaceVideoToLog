@@ -502,9 +502,9 @@ class RaceVideoToLogApp:
 		selected_key = BACKEND_LABELS_REV.get(selected_label, "auto")
 		actual = _select_backend(selected_key)
 		print(f"[OCR] 后端: {actual}", flush=True)
-		kwargs = _get_model_kwargs("v5_mobile")
+		kwargs = _get_model_kwargs("v6_small")
 		if kwargs is None:
-			print(f"[OCR] 警告: v5_mobile 模型文件不存在")
+			print(f"[OCR] 警告: v6_small 模型文件不存在")
 		self._check_cancel()
 		return RapidOCR(**(kwargs or {}))
 
@@ -1023,7 +1023,7 @@ class RaceVideoToLogApp:
 			fh.write(f"# RaceVideoToLog\n")
 			fh.write(f"# video_hash={vhash}, video={self.video_path.name}\n")
 			fh.write(f"# roi={region[0]},{region[1]},{region[2]},{region[3]}, format={self.speed_format_var.get()}\n")
-			fh.write(f"# max_speed={max_speed_kmh}, max_accel={max_accel_mps2}, div={frame_div}, target_h={target_h}, pad={pad_px}, backend={ocr_engine._gpu_backend}, model=v5_mobile, workers={num_workers}, frame_start={self._frame_start_var.get() or ''}, frame_end={self._frame_end_var.get() or ''}, auto_anchor=1\n")
+			fh.write(f"# max_speed={max_speed_kmh}, max_accel={max_accel_mps2}, div={frame_div}, target_h={target_h}, pad={pad_px}, backend={ocr_engine._gpu_backend}, model=v6_small, workers={num_workers}, frame_start={self._frame_start_var.get() or ''}, frame_end={self._frame_end_var.get() or ''}, auto_anchor=1\n")
 			w = csv.writer(fh)
 			for r in rows:
 				w.writerow([f"{r[0]:.2f}", f"{r[1]:.2f}", f"{r[2]:.2f}", str(r[3])])
@@ -1115,7 +1115,7 @@ class RaceVideoToLogApp:
 			fh.write(f"# RaceVideoToLog\n")
 			fh.write(f"# video_hash={vhash}, video={self.video_path.name}\n")
 			fh.write(f"# roi={region[0]},{region[1]},{region[2]},{region[3]}, format={self.speed_format_var.get()}\n")
-			fh.write(f"# max_speed={max_speed_kmh}, max_accel={max_accel_mps2}, div={frame_div}, target_h={target_h}, pad={pad_px}, backend={ocr_engine._gpu_backend}, model=v5_mobile, workers={num_workers}, frame_start={self._frame_start_var.get() or ''}, frame_end={self._frame_end_var.get() or ''}, baseline_freq={baseline_freq}\n")
+			fh.write(f"# max_speed={max_speed_kmh}, max_accel={max_accel_mps2}, div={frame_div}, target_h={target_h}, pad={pad_px}, backend={ocr_engine._gpu_backend}, model=v6_small, workers={num_workers}, frame_start={self._frame_start_var.get() or ''}, frame_end={self._frame_end_var.get() or ''}, baseline_freq={baseline_freq}\n")
 			w = csv.writer(fh)
 			for r in rows:
 				w.writerow([f"{r[0]:.2f}", f"{r[1]:.2f}", f"{r[2]:.2f}", str(r[3])])
@@ -1263,7 +1263,7 @@ def main() -> None:
 	parser.add_argument("--pad", type=int, default=0)
 	parser.add_argument("--workers", type=int, default=4)
 	parser.add_argument("--backend", choices=["auto","cuda","cpu"], default="auto")
-	parser.add_argument("--ocr-model", choices=["v5_mobile"], default="v5_mobile")
+	parser.add_argument("--ocr-model", choices=["v6_small"], default="v6_small")
 	parser.add_argument("-o", "--output", type=str)
 	parser.add_argument("--analysis", nargs=2, metavar=("CSV1","CSV2"))
 	parser.add_argument("--analysis-out", type=str)

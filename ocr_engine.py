@@ -563,8 +563,8 @@ def _get_model_kwargs(variant: str, models_dir: str | None = None) -> dict | Non
 	if models_dir is None:
 		models_dir = str(Path(rr.__file__).parent / "models")
 	cfg = {
-		"det_model_path": f"{models_dir}/ch_PP-OCRv5_mobile_det_infer.onnx",
-		"rec_model_path": f"{models_dir}/ch_PP-OCRv5_mobile_rec_infer.onnx",
+		"det_model_path": f"{models_dir}/PP-OCRv6_det_small.onnx",
+		"rec_model_path": f"{models_dir}/PP-OCRv6_rec_small.onnx",
 		"text_score": 0.6, "use_angle_cls": False, "rec_batch_num": 12,
 	}
 	for key in ("det_model_path", "rec_model_path"):

@@ -38,7 +38,12 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 # v5_server 模型 (已从 UI 移除，省 165MB)
 # DirectML provider (仅 CUDA 需要)
 _EXCLUDE_FILES = {
+    # v5 models (replaced by v6_small)
+    'ch_PP-OCRv5_mobile_det_infer.onnx', 'ch_PP-OCRv5_mobile_rec_infer.onnx',
     'ch_PP-OCRv5_det_server_infer.onnx', 'ch_PP-OCRv5_rec_server_infer.onnx',
+    # v6 extras (only small needed)
+    'PP-OCRv6_det_tiny.onnx', 'PP-OCRv6_rec_tiny.onnx',
+    'PP-OCRv6_det_medium.onnx', 'PP-OCRv6_rec_medium.onnx',
     'DirectML.dll',
 }
 datas = [(s, d) for s, d in datas if os.path.basename(s) not in _EXCLUDE_FILES]
@@ -52,7 +57,12 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 # v5_server 模型 (已从 UI 移除，省 165MB)
 # DirectML provider (仅 CUDA 需要)
 _EXCLUDE_FILES = {
+    # v5 models (replaced by v6_small)
+    'ch_PP-OCRv5_mobile_det_infer.onnx', 'ch_PP-OCRv5_mobile_rec_infer.onnx',
     'ch_PP-OCRv5_det_server_infer.onnx', 'ch_PP-OCRv5_rec_server_infer.onnx',
+    # v6 extras (only small needed)
+    'PP-OCRv6_det_tiny.onnx', 'PP-OCRv6_rec_tiny.onnx',
+    'PP-OCRv6_det_medium.onnx', 'PP-OCRv6_rec_medium.onnx',
     'DirectML.dll',
 }
 datas = [(s, d) for s, d in datas if os.path.basename(s) not in _EXCLUDE_FILES]
