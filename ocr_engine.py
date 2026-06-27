@@ -596,7 +596,7 @@ def compute_video_hash(video_path: str | Path, chunk_size: int = 1_048_576) -> s
 
 
 
-def auto_select_anchors(observations: list["SpeedObservation"], max_speed_kmh: float = 400.0, window: int = 0, max_dev: float = 4.0) -> set[int]:
+def auto_select_anchors(observations: list["SpeedObservation"], max_speed_kmh: float = 400.0, window: int = 0, max_dev: float = 4.0, max_accel_mps2: float = 50.0) -> set[int]:
 	"""Select reliable OCR frames as Correction B anchors.
 
 	Uses local median filter: for each frame, compute median in an adaptive
@@ -608,11 +608,11 @@ def auto_select_anchors(observations: list["SpeedObservation"], max_speed_kmh: f
 	Returns set of trusted frame indices."""
 	n = len(observations)
 	raw_vals = [o.raw_speed_kmh for o in observations]
-	anchors = set()
+	anchors: set[int] = set()
+	times = [o.timestamp for o in observations]
 
 	# Adaptive window: cover ~0.3s regardless of sampling rate
 	if window <= 0:
-		times = [o.timestamp for o in observations]
 		typical_dt = (times[-1] - times[0]) / max(n - 1, 1) if n > 1 else 0.017
 		window = max(5, int(0.3 / max(typical_dt, 0.001)) | 1)  # odd, min 5
 	half = window // 2
@@ -673,7 +673,48 @@ def auto_select_anchors(observations: list["SpeedObservation"], max_speed_kmh: f
 		if keep:
 			anchors_filtered.add(i)
 
-	return anchors_filtered
+	# ═══ Acceleration validation: anchors must be physically reachable ═══
+	# When OCR misreads the same value across consecutive frames (e.g. "200"→"20"),
+	# the neighbor check above can be fooled (errors agree with each other).
+	# Skip same-cluster anchors (within 2 km/h) to find a "real" neighbor,
+	# then check if implied acceleration exceeds 2× max_accel.
+	# Remove anchor if unreachable from EITHER side (not just both).
+	max_dv_per_sec = max_accel_mps2 * 3.6 * 2.0  # km/h per second (2x safety margin)
+	anchors_validated: set[int] = set()
+	for i in anchors_filtered:
+		v = raw_vals[i]
+		left_fail = False
+		right_fail = False
+
+		# Find nearest anchor on left with a meaningfully different value
+		for j in range(i - 1, -1, -1):
+			if j in anchors_filtered and raw_vals[j] > 0:
+				if abs(raw_vals[j] - v) > 2.0:  # skip same-cluster errors
+					dt = times[i] - times[j]
+					if abs(v - raw_vals[j]) / max(dt, 0.001) > max_dv_per_sec:
+						left_fail = True
+					break
+				# else: same cluster (OCR repeated error), keep looking
+		else:
+			left_fail = False  # no different-valued anchor found → OK
+
+		# Find nearest anchor on right with a meaningfully different value
+		for j in range(i + 1, n):
+			if j in anchors_filtered and raw_vals[j] > 0:
+				if abs(raw_vals[j] - v) > 2.0:  # skip same-cluster errors
+					dt = times[j] - times[i]
+					if abs(raw_vals[j] - v) / max(dt, 0.001) > max_dv_per_sec:
+						right_fail = True
+					break
+				# else: same cluster (OCR repeated error), keep looking
+		else:
+			right_fail = False  # no different-valued anchor found → OK
+
+		# Remove anchor if physically unreachable from either side
+		if not (left_fail or right_fail):
+			anchors_validated.add(i)
+
+	return anchors_validated
 
 
 

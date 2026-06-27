@@ -105,7 +105,7 @@ def run_headless(args: argparse.Namespace) -> None:
 
 	# ── 自动锚点 + Correction B（与 GUI 自动锚点模式共用后端）──
 	print(f"识别: {len(observations)} 条, 正在自动选择锚点...")
-	anchor_indices = auto_select_anchors(observations, args.max_speed)
+	anchor_indices = auto_select_anchors(observations, args.max_speed, max_accel_mps2=args.max_accel)
 	print(f"  锚点: {len(anchor_indices)} 帧 ({100*len(anchor_indices)/len(observations):.1f}%)")
 
 	# 构建 rows

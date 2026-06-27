@@ -838,7 +838,7 @@ class RaceVideoToLogApp:
 
 		# Auto-select anchors
 		self.root.after(0, self._update_progress, "正在自动识别可靠锚点...", 40.0)
-		anchor_indices = auto_select_anchors(observations, max_speed_kmh)
+		anchor_indices = auto_select_anchors(observations, max_speed_kmh, max_accel_mps2=max_accel_mps2)
 		print(f'[AutoAnchor] Selected {len(anchor_indices)} anchors ({100*len(anchor_indices)/n_obs:.1f}% of frames)', flush=True)
 		if len(anchor_indices) < 3:
 			raise RuntimeError("自动锚点选择失败：未找到足够的可靠帧。")
@@ -940,7 +940,7 @@ class RaceVideoToLogApp:
 		# 自动锚点补充：在人工锚点之外自动选择可靠帧作为额外锚点
 		self.root.after(0, self._update_progress,
 			"正在自动识别补充锚点...", 80.0)
-		auto_anchors = auto_select_anchors(observations, max_speed_kmh)
+		auto_anchors = auto_select_anchors(observations, max_speed_kmh, max_accel_mps2=max_accel_mps2)
 		manual_anchors = {i for i in range(n_obs) if rows[i][3] >= 2}
 		merged_anchors = manual_anchors | (auto_anchors - manual_anchors)
 		for i in auto_anchors:
