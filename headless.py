@@ -44,26 +44,32 @@ def run_headless(args: argparse.Namespace) -> None:
 	duration = (int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0) / fps) if fps > 0 else 0.0
 	print(f"分辨率: {width}x{height}, 帧率: {fps:.2f}, 时长: {format_duration(duration)}")
 
-	# 读取帧
+	# 读取帧（grab/retrieve 模式：跳过不需要的帧时不解码, div>1 时大幅加速）
 	x1, y1, x2, y2 = clamp_region(*region, width, height)
 	frame_step = max(1, args.div)
+	total_video_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+	_end_limit = args.frame_end if args.frame_end is not None else total_video_frames
 
 	raw_frames: list[tuple[float, np.ndarray]] = []
 	fi = 0
-	while True:
-		ok, frame = cap.read()
-		if not ok or frame is None:
-			break
-		if args.frame_end is not None and fi >= args.frame_end:
+	while fi < total_video_frames:
+		if fi >= _end_limit:
 			break
 		if args.frame_start is not None and fi < args.frame_start:
+			cap.grab()  # 跳过: 只抓取不解码
 			fi += 1
 			continue
 		if fi % frame_step != 0:
+			cap.grab()  # 跳过: 只抓取不解码 (div>1 时大幅加速)
 			fi += 1
 			continue
+		if not cap.grab():  # 抓取原始帧
+			break
+		ok, frame = cap.retrieve()  # 仅对需要的帧解码
+		if not ok or frame is None:
+			break
 		ts = fi / fps if fps > 0 else float(cap.get(cv2.CAP_PROP_POS_MSEC)) / 1000.0
-		crop = frame[y1:y2 + 1, x1:x2 + 1].copy()  # .copy() 断开对整帧的引用
+		crop = frame[y1:y2 + 1, x1:x2 + 1].copy()
 		raw_frames.append((ts, crop))
 		fi += 1
 	cap.release()

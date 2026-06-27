@@ -727,11 +727,12 @@ class RaceVideoToLogApp:
 
 		num_workers = max(1, min(num_workers, 32))
 
-		self.root.after(0, self._update_progress, "正在初始化 OCR 引擎...", 0.0)
+		self.root.after(0, self._update_progress, "加载 OCR 引擎...", 2.0)
 		self._check_cancel()
-		self.root.update_idletasks()  # 确保进度消息显示
+		self.root.update_idletasks()
 		ocr = self.get_ocr_engine()
-		self.root.update_idletasks()  # 引擎就绪后刷新
+		self.root.after(0, self._update_progress, "OCR 引擎就绪, 解码视频帧...", 5.0)
+		self.root.update_idletasks()
 
 		capture = cv2.VideoCapture(str(self.video_path))
 		if not capture.isOpened():
@@ -739,6 +740,7 @@ class RaceVideoToLogApp:
 
 		x1, y1, x2, y2 = region
 		frame_step = max(1, frame_div)
+		total_video_frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
 
 		raw_frames: list[tuple[float, np.ndarray]] = []
 		frame_index = 0
@@ -746,21 +748,32 @@ class RaceVideoToLogApp:
 		# 解析时间轴范围
 		f_start = _parse_int_or_none(self._frame_start_var.get())
 		f_end = _parse_int_or_none(self._frame_end_var.get())
+		_end_limit = f_end if f_end is not None else total_video_frames
 
-		while True:
-			ok, frame = capture.read()
-			if not ok or frame is None:
-				break
-			if f_end is not None and frame_index >= f_end:
+		while frame_index < total_video_frames:
+			if frame_index >= _end_limit:
 				break
 			if f_start is not None and frame_index < f_start:
+				capture.grab()  # 跳过: 只抓取不解码
 				frame_index += 1
 				continue
 			if frame_index % frame_step != 0:
+				capture.grab()  # 跳过: 只抓取不解码 (div>1 时大幅加速)
 				frame_index += 1
 				continue
-			if frame_index % (frame_step * 100) == 0:
+
+			if not capture.grab():  # 抓取原始帧
+				break
+			ok, frame = capture.retrieve()  # 仅对需要的帧解码
+			if not ok or frame is None:
+				break
+
+			if frame_index % max(1, frame_step * 200) == 0:
 				self._check_cancel()
+				pct = 5.0 + 15.0 * (frame_index / max(_end_limit, 1))
+				self.root.after(0, self._update_progress,
+					f"解码视频: {frame_index}/{_end_limit} 帧", pct)
+
 			timestamp = frame_index / self.metadata.fps if self.metadata.fps > 0 else float(capture.get(cv2.CAP_PROP_POS_MSEC)) / 1000.0
 			crop = frame[y1 : y2 + 1, x1 : x2 + 1].copy()
 			if crop.size == 0:
@@ -814,10 +827,17 @@ class RaceVideoToLogApp:
 
 
 	def _correct_with_anchors(self, rows: list, observations: list, raw_frames: list, ocr: "RapidOCR", max_speed_kmh: float, max_accel_mps2: float, anchor_indices: set) -> list:
-		"""Correction pipeline. Delegates to correction.correct_with_anchors."""
+		"""Correction pipeline. Delegates to correction.correct_with_anchors
+		with a progress callback that updates the GUI status bar."""
 		from correction import correct_with_anchors
+		def _prog(msg: str, pct: float) -> None:
+			# Map 0-100% within correction to 60-90% of overall progress
+			overall = 60.0 + pct * 0.30
+			self.root.after(0, self._update_progress,
+				f"物理纠错: {msg}", overall)
 		return correct_with_anchors(rows, observations, raw_frames, ocr,
-			max_speed_kmh, max_accel_mps2, anchor_indices, log_fn=self._log)
+			max_speed_kmh, max_accel_mps2, anchor_indices,
+			log_fn=self._log, progress_fn=_prog)
 
 
 	def _run_auto_anchor_mode(self, raw_frames, total_frames, output_path, region,

@@ -13,12 +13,14 @@ _reocr_cache: dict[int, set[float]] = {}
 
 def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR",
                          max_speed_kmh: float, max_accel_mps2: float, anchor_indices: set,
-                         log_fn: "Callable | None" = None) -> list:
+                         log_fn: "Callable | None" = None,
+                         progress_fn: "Callable | None" = None) -> list:
 	"""5 阶段物理约束纠错流水线。
 
 	以 anchor_indices 中帧的速度为硬约束（固定不变），
 	对其余帧进行错误检测、重OCR、最优选择和级联填充。
 
+	progress_fn(msg, pct_0_to_100) — 用于更新 GUI 进度条
 	Returns: 修改后的 rows（原地修改）
 	"""
 	if len(anchor_indices) < 2:
@@ -30,12 +32,18 @@ def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: 
 
 	if log_fn:
 		log_fn(f"Correction: {n} rows, {len(anchors)} anchors")
+	if progress_fn:
+		progress_fn(f"错误检测 ({n} 帧)...", 5.0)
 
 	# ── 阶段 1：错误检测 ──
 	error_set = _detect_errors(rows, anchors, times, max_speed_kmh, max_accel_mps2)
 	if log_fn:
 		log_fn(f"  Stage 1: detected {len(error_set)} errors")
+	if progress_fn:
+		progress_fn(f"检测到 {len(error_set)} 处错误, 重OCR修复...", 20.0)
 	if not error_set:
+		if progress_fn:
+			progress_fn("纠错完成 (无错误)", 100.0)
 		return rows
 
 	# ── 阶段 2+3：重 OCR + 最优选择（首轮）──
@@ -43,6 +51,8 @@ def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: 
 	                    anchors, times, max_speed_kmh, max_accel_mps2)
 	if log_fn:
 		log_fn(f"  Stage 2+3: fixed {fixed} frames in round 1")
+	if progress_fn:
+		progress_fn(f"首轮修复 {fixed} 帧, 多轮迭代...", 40.0)
 
 	# ── 阶段 4：多轮迭代 ──
 	max_rounds = 3
@@ -54,6 +64,8 @@ def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: 
 		                    anchors, times, max_speed_kmh, max_accel_mps2)
 		if log_fn:
 			log_fn(f"  Stage 4 round {rnd}: {len(error_set)} errors, fixed {fixed}")
+		if progress_fn:
+			progress_fn(f"第 {rnd} 轮: {len(error_set)} 错误, 修复 {fixed} 帧", 40.0 + 20.0 * (rnd - 1) / max_rounds)
 
 	# ── 阶段 5：迭代填充直到收敛（处理级联效应）──
 	fill_pass = 0
@@ -64,8 +76,12 @@ def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: 
 		_fill_unrecoverable(rows, anchors, error_set, times, max_speed_kmh, max_accel_mps2)
 		if log_fn:
 			log_fn(f"  Stage 5 pass {fill_pass+1}: filled {len(error_set)} unrecoverable frames")
+		if progress_fn:
+			progress_fn(f"级联填充 {fill_pass+1}: {len(error_set)} 帧", 65.0 + 25.0 * (fill_pass + 1) / 10)
 		fill_pass += 1
 
+	if progress_fn:
+		progress_fn("纠错完成", 95.0)
 	return rows
 
 
