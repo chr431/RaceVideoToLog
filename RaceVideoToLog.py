@@ -14,13 +14,10 @@ import csv
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
-from queue import Queue
 import threading
 import cv2
 import numpy as np
 from PIL import Image, ImageTk
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 import ocr_engine
 from ocr_engine import *
@@ -76,8 +73,6 @@ class RaceVideoToLogApp:
 		self._preview_scale = 1.0
 		self._preview_offset_x = 0.0
 		self._preview_offset_y = 0.0
-		self._last_canvas_w = 0
-		self._last_canvas_h = 0
 
 		self._drag_start_x: int | None = None
 		self._drag_start_y: int | None = None
@@ -312,22 +307,8 @@ class RaceVideoToLogApp:
 		self._drag_start_x = None
 		self._drag_start_y = None
 
-	def _get_preview_frame(self) -> np.ndarray | None:
-		"""根据滑动条位置读取对应视频帧。"""
-		if self.video_path is None or self.metadata is None:
-			return None
-		pos = int(self._preview_slider.get())
-		fi = int(pos)
-		cap = cv2.VideoCapture(str(self.video_path))
-		cap.set(cv2.CAP_PROP_POS_FRAMES, fi)
-		ok, frame = cap.read()
-		cap.release()
-		return frame if ok else None
-
-	def _on_preview_slider(self, *args) -> None:
-		"""滑动条变化回调（由刷新按钮触发预览，此处不做操作以保持拖拽流畅）。"""
-		pass
-
+	
+	
 	def schedule_preview_refresh(self) -> None:
 		if self.preview_after_id is not None:
 			self.root.after_cancel(self.preview_after_id)
@@ -363,8 +344,6 @@ class RaceVideoToLogApp:
 		self.first_frame_bgr = frame
 		frame_rgb = cv2.cvtColor(self.first_frame_bgr, cv2.COLOR_BGR2RGB)
 		self.first_frame_pil = Image.fromarray(frame_rgb)
-		self._last_canvas_w = 0
-		self._last_canvas_h = 0
 
 		self.file_var.set(str(path))
 		self.duration_var.set(format_duration(duration_sec))
@@ -455,8 +434,8 @@ class RaceVideoToLogApp:
 		display_width = max(1, int(image.width * scale))
 		display_height = max(1, int(image.height * scale))
 
-		self._last_canvas_w = canvas_width
-		self._last_canvas_h = canvas_height
+
+
 		self._preview_scale = scale
 		self._preview_offset_x = (canvas_width - display_width) / 2.0
 		self._preview_offset_y = (canvas_height - display_height) / 2.0
@@ -586,20 +565,6 @@ class RaceVideoToLogApp:
 				self.root.after(0, self._update_progress,
 					f"[{ocr_engine._gpu_backend}] 正在处理... {len(observations)} 条 ({pct:.1f}%)", pct)
 		return observations
-
-	def _ocr_pipeline(
-		self,
-		raw_frames: list[tuple[float, np.ndarray]],
-		ocr: RapidOCR,
-		target_h: float,
-		pad_px: float,
-		total_frames: int,
-		num_workers: int,
-		max_speed_kmh: float = 400,
-	) -> list[SpeedObservation]:
-		queue_size = num_workers * 2
-		q: Queue = Queue(maxsize=queue_size)
-		errors: list[Exception] = []
 
 		def producer() -> None:
 			try:
@@ -790,30 +755,6 @@ class RaceVideoToLogApp:
 	def _update_progress(self, msg: str, pct: float) -> None:
 		self.status_var.set(msg)
 		self.progress_var.set(pct)
-
-	def _ocr_cuda_parallel(
-		self,
-		raw_frames: list[tuple[float, np.ndarray]],
-		target_h: float,
-		pad_px: float,
-		total_frames: int,
-		num_workers: int,
-		max_speed_kmh: float = 400,
-	) -> list[SpeedObservation]:
-		"""并行推理：单引擎 + 多线程预处理，OCR 调用由 onnxruntime 内部并行。"""
-		from concurrent.futures import ThreadPoolExecutor, as_completed
-		engines = self.get_ocr_engines(1)
-		engine = engines[0]
-		self._check_cancel()
-
-		with ThreadPoolExecutor(max_workers=num_workers) as pool:
-			preprocessed = list(pool.map(
-				lambda item: (item[0], self.preprocess_crop(item[1], target_h, pad_px)),
-				raw_frames,
-			))
-		self._check_cancel()
-
-		observations: list[SpeedObservation | None] = [None] * len(raw_frames)
 
 		def _ocr_one(idx: int, ts: float, proc: np.ndarray, crop_bgr: np.ndarray) -> tuple[int, SpeedObservation | None]:
 			ocr_result, _ = engine(proc)

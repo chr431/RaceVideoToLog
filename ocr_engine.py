@@ -4,31 +4,19 @@ SpeedObservation, preprocessing, correction algorithms,
 model configuration, and supporting utilities.
 """
 from __future__ import annotations
-import csv
 import math
 import os
 import re
-import sys
 from dataclasses import dataclass
 from pathlib import Path
-from queue import Queue
-from tkinter import filedialog, messagebox, ttk
-import tkinter as tk
-import threading
 
 import cv2
 import numpy as np
-from PIL import Image, ImageTk
 
-try:
-	import matplotlib
-	matplotlib.use("TkAgg")
-	matplotlib.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
-	matplotlib.rcParams["axes.unicode_minus"] = False
-	from matplotlib.figure import Figure
-	from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-except ImportError:
-	pass
+import matplotlib
+matplotlib.use("TkAgg")
+matplotlib.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
+matplotlib.rcParams["axes.unicode_minus"] = False
 
 # ── 导出列表：包含 _ 前缀的私有符号供 RaceVideoToLog.py / headless.py 使用 ──
 __all__ = [
