@@ -18,8 +18,12 @@ import csv
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from matplotlib.axes import Axes
 
 from ocr_engine import _savgol_filter_np
 
@@ -68,7 +72,7 @@ def parse_csv(path: str | Path) -> tuple[list[float], list[float], list[float], 
 	return times, dists, speeds, flags
 
 
-def smooth_data(xv, yv, strength: int) -> tuple[np.ndarray, np.ndarray]:
+def smooth_data(xv: "np.ndarray | list[float]", yv: "np.ndarray | list[float]", strength: int) -> tuple[np.ndarray, np.ndarray]:
 	"""Savitzky-Golay 滤波（纯 numpy 实现）：多项式滑动窗口拟合，保留峰谷形状。
 
 	Args:
@@ -89,7 +93,7 @@ def smooth_data(xv, yv, strength: int) -> tuple[np.ndarray, np.ndarray]:
 	return np.array(xv, dtype=float), sy
 
 
-def plot_segmented(ax, x, y, flags, normal_color: str, show_red: bool,
+def plot_segmented(ax: "Axes", x: "np.ndarray", y: "np.ndarray", flags: "list[int]", normal_color: str, show_red: bool,
                    smooth_strength: int) -> None:
 	"""平滑 + 纠错段着色。
 
@@ -228,10 +232,10 @@ class AnalysisTab:
 		smooth_entry.grid(row=1, column=2, sticky="e", padx=(0, 4))
 
 		# 滑块 ↔ 输入框双向同步
-		def _slider_to_entry(*_):
+		def _slider_to_entry(*_: object) -> None:
 			self._smooth_entry_var.set(str(self._smooth_strength.get()))
 
-		def _entry_to_slider(*_):
+		def _entry_to_slider(*_: object) -> None:
 			try:
 				v = int(self._smooth_entry_var.get())
 				self._smooth_strength.set(max(0, min(100, v)))
@@ -242,7 +246,7 @@ class AnalysisTab:
 		self._smooth_entry_var.trace_add("write", _entry_to_slider)
 
 		# 切换到数据分析 tab 时隐藏底部进度条/状态
-		def _on_tab_change(event):
+		def _on_tab_change(event: object) -> None:
 			cur = self._notebook.index(self._notebook.select())
 			if cur == 1:  # 数据分析 tab
 				self.status_var.set("")
@@ -389,7 +393,7 @@ class AnalysisTab:
 			va="top", fontsize=9, color="#333333",
 			bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
 
-		def _on_select(xmin, xmax):
+		def _on_select(xmin: float, xmax: float) -> None:
 			if xmin > xmax:
 				xmin, xmax = xmax, xmin
 			results = []
@@ -443,7 +447,7 @@ class AnalysisTab:
 		# ── 滚轮缩放 + 右键拖动平移 ──
 		_press_xy = [None, None]
 
-		def _on_scroll(event):
+		def _on_scroll(event: object) -> None:
 			scale = 0.85 if event.button == "up" else 1.15
 			xlim = ax.get_xlim()
 			ylim = ax.get_ylim()
@@ -453,11 +457,11 @@ class AnalysisTab:
 			ax.set_ylim(ymid - (ymid - ylim[0]) * scale, ymid + (ylim[1] - ymid) * scale)
 			self._analysis_canvas.draw_idle()
 
-		def _on_press(event):
+		def _on_press(event: object) -> None:
 			if event.button == 3:
 				_press_xy[0], _press_xy[1] = event.xdata, event.ydata
 
-		def _on_motion(event):
+		def _on_motion(event: object) -> None:
 			if event.button == 3 and _press_xy[0] is not None and event.xdata is not None:
 				dx = _press_xy[0] - event.xdata
 				dy = _press_xy[1] - event.ydata

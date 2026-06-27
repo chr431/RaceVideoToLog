@@ -338,7 +338,7 @@ def normalize_ocr_text(text: str) -> str:
 	return text.translate(translation)
 
 
-def extract_speed_value(ocr_result) -> tuple[float | None, str | None]:
+def extract_speed_value(ocr_result: list | None) -> tuple[float | None, str | None]:
 	if not ocr_result:
 		return None, None
 
@@ -368,7 +368,7 @@ def extract_speed_value(ocr_result) -> tuple[float | None, str | None]:
 
 
 def ocr_digital_fallback(
-	ocr, crop_bgr, max_speed_kmh=400
+	ocr: "RapidOCR", crop_bgr: "np.ndarray", max_speed_kmh: float = 400
 ) -> tuple[float | None, str | None]:
 	"""数字仪表 OCR 后备链：CLAHE+OTSU → 常规检测 → 无检测模式。
 
@@ -427,7 +427,7 @@ def clamp_region(x1: int, y1: int, x2: int, y2: int, width: int, height: int) ->
 	return x1, y1, x2, y2
 
 
-def _savgol_filter_np(y, window_length, polyorder):
+def _savgol_filter_np(y: "np.ndarray", window_length: int, polyorder: int) -> "np.ndarray":
 	"""纯 numpy Savitzky-Golay 滤波，等价于 scipy.signal.savgol_filter。"""
 	if window_length % 2 == 0 or window_length < 1:
 		raise ValueError("window_length must be odd")
@@ -596,7 +596,7 @@ def compute_video_hash(video_path: str | Path, chunk_size: int = 1_048_576) -> s
 
 
 
-def auto_select_anchors(observations, max_speed_kmh=400.0, window=0, max_dev=4.0):
+def auto_select_anchors(observations: list["SpeedObservation"], max_speed_kmh: float = 400.0, window: int = 0, max_dev: float = 4.0) -> set[int]:
 	"""Select reliable OCR frames as Correction B anchors.
 
 	Uses local median filter: for each frame, compute median in an adaptive

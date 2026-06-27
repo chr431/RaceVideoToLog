@@ -1,11 +1,11 @@
 """CLI / headless mode for RaceVideoToLog."""
 from __future__ import annotations
-import argparse, csv, math, os, re, sys
+import argparse, csv, sys
 from pathlib import Path
 import cv2, numpy as np
 from rapidocr_onnxruntime import RapidOCR
-from ocr_engine import *
-from ocr_engine import _reset_backend, _select_backend, _get_model_kwargs, _savgol_filter_np, ocr_digital_fallback, compute_video_hash
+from ocr_engine import *  # noqa: F403, F405  # pyright: ignore[reportWildcardImportFromLibrary]
+from ocr_engine import _reset_backend, _select_backend, _get_model_kwargs, ocr_digital_fallback, compute_video_hash
 
 def run_headless(args: argparse.Namespace) -> None:
 	"""命令行无头模式：不启动 GUI，直接分析并输出 CSV。"""
@@ -147,20 +147,20 @@ def run_headless(args: argparse.Namespace) -> None:
 	print(f"共 {len(rows_data)} 条, 纠错 {_corrected} 条 (准确率 {100 - _corrected/len(rows_data)*100:.1f}%)")
 
 
-def _preprocess_headless(crop, target_h, pad):
+def _preprocess_headless(crop: "np.ndarray", target_h: float, pad: float) -> "np.ndarray":
 	"""无头模式预处理：灰度化 + 缩放。"""
 	gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
 	return _finish_preprocess(gray, target_h, pad)
 
 
-def _preprocess_headless_fallback(crop, target_h, pad):
+def _preprocess_headless_fallback(crop: "np.ndarray", target_h: float, pad: float) -> "np.ndarray":
 	"""无头模式备选预处理：OTSU 二值化。"""
 	gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
 	_, gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 	return _finish_preprocess(gray, target_h, pad)
 
 
-def _finish_preprocess(gray, target_h, pad):
+def _finish_preprocess(gray: "np.ndarray", target_h: float, pad: float) -> "np.ndarray":
 	"""统一的缩放+填充+转BGR。"""
 	h, w = gray.shape[:2]
 	th = max(8.0, float(target_h))

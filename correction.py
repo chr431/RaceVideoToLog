@@ -8,12 +8,12 @@ import cv2
 from ocr_engine import extract_speed_value, build_speed_candidates, ocr_digital_fallback
 
 # 重 OCR 缓存（避免同一帧重复处理）
-_reocr_cache: dict[int, set] = {}
+_reocr_cache: dict[int, set[float]] = {}
 
 
-def correct_with_anchors(rows, observations, raw_frames, ocr,
-                         max_speed_kmh, max_accel_mps2, anchor_indices,
-                         log_fn=None):
+def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR",
+                         max_speed_kmh: float, max_accel_mps2: float, anchor_indices: set,
+                         log_fn: "Callable | None" = None) -> list:
 	"""5 阶段物理约束纠错流水线。
 
 	以 anchor_indices 中帧的速度为硬约束（固定不变），
@@ -69,7 +69,7 @@ def correct_with_anchors(rows, observations, raw_frames, ocr,
 	return rows
 
 
-def _detect_errors(rows, anchors, times, max_speed_kmh, max_accel_mps2):
+def _detect_errors(rows: list, anchors: set, times: list, max_speed_kmh: float, max_accel_mps2: float) -> set:
 	"""阶段 1：错误检测。6 种检测器并行标记异常帧。
 
 	A. 邻帧跳变 — 与前后邻帧的加速度超限
@@ -207,8 +207,8 @@ def _detect_errors(rows, anchors, times, max_speed_kmh, max_accel_mps2):
 	return error_set
 
 
-def _fix_errors(rows, observations, raw_frames, ocr, error_set,
-                anchors, times, max_speed_kmh, max_accel_mps2):
+def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR", error_set: set,
+                anchors: set, times: list, max_speed_kmh: float, max_accel_mps2: float) -> int:
 	"""阶段 2+3：对每个 error 帧重 OCR 获取备选，选最优值填入。"""
 	fixed = 0
 	for i in error_set:
@@ -255,7 +255,7 @@ def _fix_errors(rows, observations, raw_frames, ocr, error_set,
 	return fixed
 
 
-def _re_ocr_frame(crop_bgr, ocr, max_speed_kmh):
+def _re_ocr_frame(crop_bgr: "np.ndarray", ocr: "RapidOCR", max_speed_kmh: float) -> set:
 	"""阶段 2：对单帧尝试 4 种预处理变体重 OCR，有缓存。"""
 	global _reocr_cache
 	cache_key = hash(crop_bgr.tobytes()) if crop_bgr is not None and crop_bgr.size > 0 else None
@@ -270,7 +270,7 @@ def _re_ocr_frame(crop_bgr, ocr, max_speed_kmh):
 	if h <= 0 or w <= 0:
 		return candidates
 
-	def _do_ocr(img_bgr):
+	def _do_ocr(img_bgr: "np.ndarray") -> None:
 		res, _ = ocr(img_bgr)
 		sv, rt = extract_speed_value(res)
 		if sv is not None and sv <= max_speed_kmh:
@@ -306,7 +306,7 @@ def _re_ocr_frame(crop_bgr, ocr, max_speed_kmh):
 	return candidates
 
 
-def _interp_candidate(i, rows, anchors, times, max_speed_kmh):
+def _interp_candidate(i: int, rows: list, anchors: set, times: list, max_speed_kmh: float) -> float | None:
 	"""计算帧 i 在左右锚点间的线性插值估计。"""
 	n = len(rows)
 	la = None; ra = None
@@ -327,7 +327,7 @@ def _interp_candidate(i, rows, anchors, times, max_speed_kmh):
 	return None
 
 
-def _score_candidate(val, i, rows, anchors, error_set, times, max_speed_kmh, max_accel_mps2):
+def _score_candidate(val: float, i: int, rows: list, anchors: set, error_set: set, times: list, max_speed_kmh: float, max_accel_mps2: float) -> float:
 	"""阶段 3：对候选值评分。
 
 	score = neighbor_score * 0.4 + anchor_score * 0.35 + smoothness_score * 0.25
@@ -384,7 +384,7 @@ def _score_candidate(val, i, rows, anchors, error_set, times, max_speed_kmh, max
 	return neighbor_score * 0.4 + anchor_score * 0.35 + smoothness_score * 0.25
 
 
-def _fill_unrecoverable(rows, anchors, error_set, times, max_speed_kmh, max_accel_mps2):
+def _fill_unrecoverable(rows: list, anchors: set, error_set: set, times: list, max_speed_kmh: float, max_accel_mps2: float) -> None:
 	"""阶段 5：对无法通过重 OCR 修复的帧，从左到右传播可信值。"""
 	n = len(rows)
 	sorted_errors = sorted(i for i in error_set if i not in anchors)
