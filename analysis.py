@@ -140,7 +140,7 @@ def plot_segmented(ax: "Axes", x: "np.ndarray", y: "np.ndarray", flags: "list[in
 		else:
 			i += 1
 	if rx:
-		ax.plot(rx, ry, color=red, linewidth=1.2)
+		ax.plot(rx, ry, color=red, linewidth=2.0)
 
 	# 绿色段（flag>=2 人工纠错）
 	gx, gy = [], []
@@ -227,7 +227,7 @@ class AnalysisTab:
 		ttk.Radiobutton(ctrl, text="v-x", variable=self._chart_mode, value="v-x").grid(row=1, column=4, sticky="w")
 		ttk.Radiobutton(ctrl, text="Δt-x", variable=self._chart_mode, value="dt-x").grid(row=1, column=5, sticky="w", padx=(6, 0))
 		ttk.Button(ctrl, text="自动调整", command=self._auto_fit).grid(row=1, column=6, sticky="e", padx=(6, 0))
-		ttk.Checkbutton(ctrl, text="标记纠错点", variable=self._show_corrected).grid(row=1, column=0, sticky="w", padx=(0, 6))
+		ttk.Checkbutton(ctrl, text="显示诊断信息", variable=self._show_corrected).grid(row=1, column=0, sticky="w", padx=(0, 6))
 		ttk.Label(ctrl, text="平滑").grid(row=1, column=1, sticky="e", padx=(0, 2))
 		ttk.Scale(ctrl, from_=0, to=100, variable=self._smooth_strength,
 			orient="horizontal", length=80).grid(row=1, column=2, sticky="w")
