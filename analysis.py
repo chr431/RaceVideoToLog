@@ -14,12 +14,15 @@
 """
 from __future__ import annotations
 
-import csv
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from matplotlib.axes import Axes
 
 from ocr_engine import _savgol_filter_np
 
@@ -51,7 +54,7 @@ def parse_csv(path: str | Path) -> tuple[list[float], list[float], list[float], 
 					flags.append(int(parts[3]) if len(parts) > 3 else 0)
 				except ValueError:
 					continue
-	# 裁剪起始零速帧
+	# 裁剪起始零速帧，并将时间轴和距离轴归零
 	start = 0
 	for i, s in enumerate(speeds):
 		if s > 0:
@@ -60,15 +63,19 @@ def parse_csv(path: str | Path) -> tuple[list[float], list[float], list[float], 
 	if start > 0:
 		times = times[start:]
 		speeds = speeds[start:]
-		base_dist = dists[start]
-		dists = [d - base_dist for d in dists[start:]]
+		dists = dists[start:]
 		flags = flags[start:]
+	# 始终归零时间轴和距离轴（不受 --frame-start 参数影响）
+	if times:
 		base_time = times[0]
 		times = [t - base_time for t in times]
+	if dists:
+		base_dist = dists[0]
+		dists = [d - base_dist for d in dists]
 	return times, dists, speeds, flags
 
 
-def smooth_data(xv, yv, strength: int) -> tuple[np.ndarray, np.ndarray]:
+def smooth_data(xv: "np.ndarray | list[float]", yv: "np.ndarray | list[float]", strength: int) -> tuple[np.ndarray, np.ndarray]:
 	"""Savitzky-Golay 滤波（纯 numpy 实现）：多项式滑动窗口拟合，保留峰谷形状。
 
 	Args:
@@ -89,7 +96,7 @@ def smooth_data(xv, yv, strength: int) -> tuple[np.ndarray, np.ndarray]:
 	return np.array(xv, dtype=float), sy
 
 
-def plot_segmented(ax, x, y, flags, normal_color: str, show_red: bool,
+def plot_segmented(ax: "Axes", x: "np.ndarray | list[float]", y: "np.ndarray | list[float]", flags: "list[int]", normal_color: str, show_red: bool,
                    smooth_strength: int) -> None:
 	"""平滑 + 纠错段着色。
 
@@ -109,8 +116,9 @@ def plot_segmented(ax, x, y, flags, normal_color: str, show_red: bool,
 
 	n_orig = len(flags)
 	n_smooth = len(x)
-	_x = x.tolist() if hasattr(x, 'tolist') else list(x)
-	_y = y.tolist() if hasattr(y, 'tolist') else list(y)
+	x_arr = np.asarray(x); y_arr = np.asarray(y)
+	_x = x_arr.tolist()
+	_y = y_arr.tolist()
 
 	# 红色段（flag=1 自动纠错）
 	rx, ry = [], []
@@ -133,7 +141,7 @@ def plot_segmented(ax, x, y, flags, normal_color: str, show_red: bool,
 		else:
 			i += 1
 	if rx:
-		ax.plot(rx, ry, color=red, linewidth=1.2)
+		ax.plot(rx, ry, color=red, linewidth=2.0)
 
 	# 绿色段（flag>=2 人工纠错）
 	gx, gy = [], []
@@ -220,7 +228,7 @@ class AnalysisTab:
 		ttk.Radiobutton(ctrl, text="v-x", variable=self._chart_mode, value="v-x").grid(row=1, column=4, sticky="w")
 		ttk.Radiobutton(ctrl, text="Δt-x", variable=self._chart_mode, value="dt-x").grid(row=1, column=5, sticky="w", padx=(6, 0))
 		ttk.Button(ctrl, text="自动调整", command=self._auto_fit).grid(row=1, column=6, sticky="e", padx=(6, 0))
-		ttk.Checkbutton(ctrl, text="标记纠错点", variable=self._show_corrected).grid(row=1, column=0, sticky="w", padx=(0, 6))
+		ttk.Checkbutton(ctrl, text="显示诊断信息", variable=self._show_corrected).grid(row=1, column=0, sticky="w", padx=(0, 6))
 		ttk.Label(ctrl, text="平滑").grid(row=1, column=1, sticky="e", padx=(0, 2))
 		ttk.Scale(ctrl, from_=0, to=100, variable=self._smooth_strength,
 			orient="horizontal", length=80).grid(row=1, column=2, sticky="w")
@@ -228,10 +236,10 @@ class AnalysisTab:
 		smooth_entry.grid(row=1, column=2, sticky="e", padx=(0, 4))
 
 		# 滑块 ↔ 输入框双向同步
-		def _slider_to_entry(*_):
+		def _slider_to_entry(*_: object) -> None:
 			self._smooth_entry_var.set(str(self._smooth_strength.get()))
 
-		def _entry_to_slider(*_):
+		def _entry_to_slider(*_: object) -> None:
 			try:
 				v = int(self._smooth_entry_var.get())
 				self._smooth_strength.set(max(0, min(100, v)))
@@ -242,7 +250,7 @@ class AnalysisTab:
 		self._smooth_entry_var.trace_add("write", _entry_to_slider)
 
 		# 切换到数据分析 tab 时隐藏底部进度条/状态
-		def _on_tab_change(event):
+		def _on_tab_change(event: object) -> None:
 			cur = self._notebook.index(self._notebook.select())
 			if cur == 1:  # 数据分析 tab
 				self.status_var.set("")
@@ -283,6 +291,9 @@ class AnalysisTab:
 		from matplotlib.widgets import SpanSelector
 
 		fig = self._analysis_figure
+		canvas = self._analysis_canvas
+		if fig is None or canvas is None:
+			return
 
 		# 保存当前视图范围
 		if fig.axes and self._last_rendered_mode and self._last_rendered_mode != "dt-x":
@@ -305,6 +316,7 @@ class AnalysisTab:
 		all_flags: list[list[int]] = [[], [], []]
 		is_vt = (mode == "v-t")
 		is_dtx = (mode == "dt-x")
+		name1 = name2 = label = ""  # 消除 possibly-unbound 警告
 
 		if is_dtx:
 			if not self._analysis_csvs[0] or not self._analysis_csvs[1]:
@@ -318,9 +330,9 @@ class AnalysisTab:
 			all_y_data[0] = dt.tolist()
 			x_data = dists1
 			y_data = dt.tolist()
-			name1 = Path(self._analysis_csvs[0]).stem
-			name2 = Path(self._analysis_csvs[1]).stem
-			label = f"{name1} - {name2}"
+			name1: str = Path(self._analysis_csvs[0]).stem
+			name2: str = Path(self._analysis_csvs[1]).stem
+			label: str = f"{name1} - {name2}"
 			if smooth_str > 0:
 				sx, sy = smooth_data(x_data, y_data, smooth_str)
 				ax.plot(sx, sy, color=colors[0], linewidth=0.8)
@@ -389,7 +401,7 @@ class AnalysisTab:
 			va="top", fontsize=9, color="#333333",
 			bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
 
-		def _on_select(xmin, xmax):
+		def _on_select(xmin: float, xmax: float) -> None:
 			if xmin > xmax:
 				xmin, xmax = xmax, xmin
 			results = []
@@ -397,7 +409,7 @@ class AnalysisTab:
 				xd = all_x_data[i]
 				if not xd:
 					continue
-				name = Path(self._analysis_csvs[i]).stem if self._analysis_csvs[i] else ""
+				name = Path(self._analysis_csvs[i] or "").stem  # type: ignore[arg-type]
 				total = 0.0
 				if is_dtx:
 					y_start = y_end = None
@@ -437,35 +449,38 @@ class AnalysisTab:
 		self._span_selector = SpanSelector(ax, _on_select, "horizontal",
 			props=dict(facecolor="#2196F3", alpha=0.15),
 			interactive=True, drag_from_anywhere=True,
-			button=1)
+			button=1)  # type: ignore[arg-type]
 		delta_text.set_text(f"← 拖拽选择范围查看{delta_label_text}")
 
 		# ── 滚轮缩放 + 右键拖动平移 ──
 		_press_xy = [None, None]
 
-		def _on_scroll(event):
-			scale = 0.85 if event.button == "up" else 1.15
+		def _on_scroll(event: object) -> None:
+			scale = 0.85 if getattr(event, 'button', '') == "up" else 1.15
 			xlim = ax.get_xlim()
 			ylim = ax.get_ylim()
 			xmid = (xlim[0] + xlim[1]) / 2
 			ymid = (ylim[0] + ylim[1]) / 2
 			ax.set_xlim(xmid - (xmid - xlim[0]) * scale, xmid + (xlim[1] - xmid) * scale)
 			ax.set_ylim(ymid - (ymid - ylim[0]) * scale, ymid + (ylim[1] - ymid) * scale)
-			self._analysis_canvas.draw_idle()
+			canvas.draw_idle()
 
-		def _on_press(event):
-			if event.button == 3:
-				_press_xy[0], _press_xy[1] = event.xdata, event.ydata
+		def _on_press(event: object) -> None:
+			if getattr(event, 'button', 0) == 3:
+				_press_xy[0], _press_xy[1] = getattr(event, 'xdata', None), getattr(event, 'ydata', None)
 
-		def _on_motion(event):
-			if event.button == 3 and _press_xy[0] is not None and event.xdata is not None:
-				dx = _press_xy[0] - event.xdata
-				dy = _press_xy[1] - event.ydata
+		def _on_motion(event: object) -> None:
+			btn = getattr(event, 'button', 0)
+			xd = getattr(event, 'xdata', None)
+			yd = getattr(event, 'ydata', None)
+			if btn == 3 and _press_xy[0] is not None and xd is not None:
+				dx = _press_xy[0] - xd
+				dy = (_press_xy[1] or 0) - (yd or 0)
 				xlim = ax.get_xlim()
 				ylim = ax.get_ylim()
 				ax.set_xlim(xlim[0] + dx, xlim[1] + dx)
 				ax.set_ylim(ylim[0] + dy, ylim[1] + dy)
-				self._analysis_canvas.draw_idle()
+				canvas.draw_idle()
 
 		fig.canvas.mpl_connect("scroll_event", _on_scroll)
 		fig.canvas.mpl_connect("button_press_event", _on_press)
@@ -479,12 +494,13 @@ class AnalysisTab:
 				ax.set_xlim(saved[0])
 				ax.set_ylim(saved[1])
 
-		self._analysis_canvas.draw()
+		canvas.draw()
 		self._last_rendered_mode = mode
 
 	def _auto_fit(self) -> None:
 		fig = self._analysis_figure
-		if not fig.axes:
+		canvas = self._analysis_canvas
+		if fig is None or canvas is None or not fig.axes:
 			return
 		mode = self._chart_mode.get()
 		self._saved_limits.pop(mode, None)
@@ -492,10 +508,11 @@ class AnalysisTab:
 		ax.autoscale(enable=True, axis="both")
 		ax.relim()
 		ax.autoscale_view()
-		self._analysis_canvas.draw_idle()
+		canvas.draw_idle()
 
 	def _export_png(self) -> None:
-		if self._analysis_figure is None or not self._analysis_figure.axes:
+		fig = self._analysis_figure
+		if fig is None or not fig.axes:
 			messagebox.showwarning("无数据", "请先渲染曲线。")
 			return
 		path = filedialog.asksaveasfilename(
@@ -504,7 +521,7 @@ class AnalysisTab:
 			filetypes=[("PNG 图片", "*.png")],
 		)
 		if path:
-			self._analysis_figure.savefig(path, dpi=150, bbox_inches="tight")
+			fig.savefig(path, dpi=150, bbox_inches="tight")
 			messagebox.showinfo("导出完成", f"已保存: {path}")
 
 

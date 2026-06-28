@@ -1,11 +1,11 @@
 """CLI / headless mode for RaceVideoToLog."""
 from __future__ import annotations
-import argparse, csv, math, os, re, sys
+import argparse, csv, sys
 from pathlib import Path
 import cv2, numpy as np
 from rapidocr_onnxruntime import RapidOCR
-from ocr_engine import *
-from ocr_engine import _reset_backend, _select_backend, _get_model_kwargs, _savgol_filter_np, ocr_digital_fallback, compute_video_hash
+from ocr_engine import *  # noqa: F403, F405  # pyright: ignore[reportWildcardImportFromLibrary]
+from ocr_engine import _reset_backend, _select_backend, _get_model_kwargs, ocr_digital_fallback, compute_video_hash
 
 def run_headless(args: argparse.Namespace) -> None:
 	"""命令行无头模式：不启动 GUI，直接分析并输出 CSV。"""
@@ -44,31 +44,43 @@ def run_headless(args: argparse.Namespace) -> None:
 	duration = (int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0) / fps) if fps > 0 else 0.0
 	print(f"分辨率: {width}x{height}, 帧率: {fps:.2f}, 时长: {format_duration(duration)}")
 
-	# 读取帧
+	# 读取帧（grab/retrieve 模式：跳过不需要的帧时不解码, div>1 时大幅加速）
 	x1, y1, x2, y2 = clamp_region(*region, width, height)
 	frame_step = max(1, args.div)
+	total_video_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+	_end_limit = args.frame_end if args.frame_end is not None else total_video_frames
 
 	raw_frames: list[tuple[float, np.ndarray]] = []
 	fi = 0
-	while True:
-		ok, frame = cap.read()
-		if not ok or frame is None:
-			break
-		if args.frame_end is not None and fi >= args.frame_end:
+	_decoded = 0
+	while fi < total_video_frames:
+		if fi >= _end_limit:
 			break
 		if args.frame_start is not None and fi < args.frame_start:
+			cap.grab()  # 跳过: 只抓取不解码
 			fi += 1
 			continue
 		if fi % frame_step != 0:
+			cap.grab()  # 跳过: 只抓取不解码 (div>1 时大幅加速)
 			fi += 1
 			continue
+		if not cap.grab():  # 抓取原始帧
+			break
+		ok, frame = cap.retrieve()  # 仅对需要的帧解码
+		if not ok or frame is None:
+			break
 		ts = fi / fps if fps > 0 else float(cap.get(cv2.CAP_PROP_POS_MSEC)) / 1000.0
-		crop = frame[y1:y2 + 1, x1:x2 + 1].copy()  # .copy() 断开对整帧的引用
+		crop = frame[y1:y2 + 1, x1:x2 + 1].copy()
 		raw_frames.append((ts, crop))
+		_decoded += 1
+		if _decoded % 100 == 0:
+			print(f"\r  解码视频: {_decoded} 帧...", end="", flush=True)
 		fi += 1
 	cap.release()
 
 	total = len(raw_frames)
+	if _decoded >= 100:
+		print(f"\r  解码视频: {total} 帧完成" + " " * 10)
 	print(f"采样帧: {total}")
 	if total == 0:
 		print("错误: 未读取到帧")
@@ -105,7 +117,7 @@ def run_headless(args: argparse.Namespace) -> None:
 
 	# ── 自动锚点 + Correction B（与 GUI 自动锚点模式共用后端）──
 	print(f"识别: {len(observations)} 条, 正在自动选择锚点...")
-	anchor_indices = auto_select_anchors(observations, args.max_speed)
+	anchor_indices = auto_select_anchors(observations, args.max_speed, max_accel_mps2=args.max_accel)
 	print(f"  锚点: {len(anchor_indices)} 帧 ({100*len(anchor_indices)/len(observations):.1f}%)")
 
 	# 构建 rows
@@ -116,11 +128,19 @@ def run_headless(args: argparse.Namespace) -> None:
 		else:
 			rows_data.append([obs.timestamp, 0.0, obs.raw_speed_kmh, 0])
 
-	# Correction（与 GUI 共享同一实现）
+	# Correction（与 GUI 共享同一实现, 添加 CLI 进度回调）
 	from correction import correct_with_anchors
+	_cli_progress_called = [False]
+	def _cli_progress(done: int, total: int) -> None:
+		_cli_progress_called[0] = True
+		if done % max(1, total // 10) == 0 or done == total:
+			print(f"\r  纠错: {done}/{total} 帧", end="", flush=True)
 	rows_data = correct_with_anchors(
 		rows_data, observations, raw_frames, ocr,
-		args.max_speed, args.max_accel, anchor_indices)
+		args.max_speed, args.max_accel, anchor_indices,
+		progress_fn=_cli_progress)
+	if _cli_progress_called[0]:
+		print(f"\r  纠错: 完成" + " " * 10)
 
 	# 积分距离
 	dist = 0.0; prev_t, prev_v = None, None
@@ -147,20 +167,20 @@ def run_headless(args: argparse.Namespace) -> None:
 	print(f"共 {len(rows_data)} 条, 纠错 {_corrected} 条 (准确率 {100 - _corrected/len(rows_data)*100:.1f}%)")
 
 
-def _preprocess_headless(crop, target_h, pad):
+def _preprocess_headless(crop: "np.ndarray", target_h: float, pad: float) -> "np.ndarray":
 	"""无头模式预处理：灰度化 + 缩放。"""
 	gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
 	return _finish_preprocess(gray, target_h, pad)
 
 
-def _preprocess_headless_fallback(crop, target_h, pad):
+def _preprocess_headless_fallback(crop: "np.ndarray", target_h: float, pad: float) -> "np.ndarray":
 	"""无头模式备选预处理：OTSU 二值化。"""
 	gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
 	_, gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 	return _finish_preprocess(gray, target_h, pad)
 
 
-def _finish_preprocess(gray, target_h, pad):
+def _finish_preprocess(gray: "np.ndarray", target_h: float, pad: float) -> "np.ndarray":
 	"""统一的缩放+填充+转BGR。"""
 	h, w = gray.shape[:2]
 	th = max(8.0, float(target_h))

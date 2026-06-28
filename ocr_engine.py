@@ -4,37 +4,25 @@ SpeedObservation, preprocessing, correction algorithms,
 model configuration, and supporting utilities.
 """
 from __future__ import annotations
-import csv
 import math
 import os
 import re
-import sys
 from dataclasses import dataclass
 from pathlib import Path
-from queue import Queue
-from tkinter import filedialog, messagebox, ttk
-import tkinter as tk
-import threading
 
 import cv2
 import numpy as np
-from PIL import Image, ImageTk
 
-try:
-	import matplotlib
-	matplotlib.use("TkAgg")
-	matplotlib.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
-	matplotlib.rcParams["axes.unicode_minus"] = False
-	from matplotlib.figure import Figure
-	from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-except ImportError:
-	pass
+import matplotlib
+matplotlib.use("TkAgg")
+matplotlib.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
+matplotlib.rcParams["axes.unicode_minus"] = False
 
 # ── 导出列表：包含 _ 前缀的私有符号供 RaceVideoToLog.py / headless.py 使用 ──
 __all__ = [
 	"SpeedObservation", "VideoMetadata", "RapidOCR",
 	"extract_speed_value", "convert_speed_to_kmh", "clamp_region",
-	"correct_speed_series", "correct_speed_series_v2", "build_speed_candidates",
+	"build_speed_candidates",
 	"normalize_ocr_text", "format_duration", "codec_from_fourcc",
 	"safe_int", "safe_float", "SOURCE_TO_KMH", "OCR_NUMBER_RE",
 	"ocr_digital_fallback", "compute_video_hash", "auto_select_anchors",
@@ -350,7 +338,7 @@ def normalize_ocr_text(text: str) -> str:
 	return text.translate(translation)
 
 
-def extract_speed_value(ocr_result) -> tuple[float | None, str | None]:
+def extract_speed_value(ocr_result: list | None) -> tuple[float | None, str | None]:
 	if not ocr_result:
 		return None, None
 
@@ -380,7 +368,7 @@ def extract_speed_value(ocr_result) -> tuple[float | None, str | None]:
 
 
 def ocr_digital_fallback(
-	ocr, crop_bgr, max_speed_kmh=400
+	ocr: "RapidOCR", crop_bgr: "np.ndarray", max_speed_kmh: float = 400
 ) -> tuple[float | None, str | None]:
 	"""数字仪表 OCR 后备链：CLAHE+OTSU → 常规检测 → 无检测模式。
 
@@ -439,7 +427,7 @@ def clamp_region(x1: int, y1: int, x2: int, y2: int, width: int, height: int) ->
 	return x1, y1, x2, y2
 
 
-def _savgol_filter_np(y, window_length, polyorder):
+def _savgol_filter_np(y: "np.ndarray", window_length: int, polyorder: int) -> "np.ndarray":
 	"""纯 numpy Savitzky-Golay 滤波，等价于 scipy.signal.savgol_filter。"""
 	if window_length % 2 == 0 or window_length < 1:
 		raise ValueError("window_length must be odd")
@@ -563,8 +551,8 @@ def _get_model_kwargs(variant: str, models_dir: str | None = None) -> dict | Non
 	if models_dir is None:
 		models_dir = str(Path(rr.__file__).parent / "models")
 	cfg = {
-		"det_model_path": f"{models_dir}/ch_PP-OCRv5_mobile_det_infer.onnx",
-		"rec_model_path": f"{models_dir}/ch_PP-OCRv5_mobile_rec_infer.onnx",
+		"det_model_path": f"{models_dir}/PP-OCRv6_det_small.onnx",
+		"rec_model_path": f"{models_dir}/PP-OCRv6_rec_small.onnx",
 		"text_score": 0.6, "use_angle_cls": False, "rec_batch_num": 12,
 	}
 	for key in ("det_model_path", "rec_model_path"):
@@ -608,7 +596,7 @@ def compute_video_hash(video_path: str | Path, chunk_size: int = 1_048_576) -> s
 
 
 
-def auto_select_anchors(observations, max_speed_kmh=400.0, window=0, max_dev=4.0):
+def auto_select_anchors(observations: list["SpeedObservation"], max_speed_kmh: float = 400.0, window: int = 0, max_dev: float = 4.0, max_accel_mps2: float = 50.0) -> set[int]:
 	"""Select reliable OCR frames as Correction B anchors.
 
 	Uses local median filter: for each frame, compute median in an adaptive
@@ -620,11 +608,11 @@ def auto_select_anchors(observations, max_speed_kmh=400.0, window=0, max_dev=4.0
 	Returns set of trusted frame indices."""
 	n = len(observations)
 	raw_vals = [o.raw_speed_kmh for o in observations]
-	anchors = set()
+	anchors: set[int] = set()
+	times = [o.timestamp for o in observations]
 
 	# Adaptive window: cover ~0.3s regardless of sampling rate
 	if window <= 0:
-		times = [o.timestamp for o in observations]
 		typical_dt = (times[-1] - times[0]) / max(n - 1, 1) if n > 1 else 0.017
 		window = max(5, int(0.3 / max(typical_dt, 0.001)) | 1)  # odd, min 5
 	half = window // 2
@@ -685,805 +673,49 @@ def auto_select_anchors(observations, max_speed_kmh=400.0, window=0, max_dev=4.0
 		if keep:
 			anchors_filtered.add(i)
 
-	return anchors_filtered
+	# ═══ Acceleration validation: anchors must be physically reachable ═══
+	# When OCR misreads the same value across consecutive frames (e.g. "200"→"20"),
+	# the neighbor check above can be fooled (errors agree with each other).
+	# Skip same-cluster anchors (within 2 km/h) to find a "real" neighbor,
+	# then check if implied acceleration exceeds 2× max_accel.
+	# Remove anchor if unreachable from EITHER side (not just both).
+	max_dv_per_sec = max_accel_mps2 * 3.6 * 2.0  # km/h per second (2x safety margin)
+	anchors_validated: set[int] = set()
+	for i in anchors_filtered:
+		v = raw_vals[i]
+		left_fail = False
+		right_fail = False
 
-def correct_speed_series(
-	samples: list[SpeedObservation],
-	max_speed_kmh: float,
-	max_accel_mps2: float,
-) -> list[float]:
-	"""物理约束纠错: 仅纠正物理上不可能的帧。
-
-	策略（保守）：
-	1. 扫描找出物理上不一致的帧（与前后邻帧的加速度超限）
-	2. 将连续不一致帧分组为"可疑段"
-	3. 对每个可疑段运行 DP，段两端的可信帧作为锚点固定
-	4. 非可疑帧保持原始 OCR 值不变
-	"""
-	if not samples:
-		return []
-
-	if max_speed_kmh <= 0 or max_accel_mps2 <= 0:
-		return [sample.raw_speed_kmh for sample in samples]
-
-	n = len(samples)
-	if n < 2:
-		return [s.raw_speed_kmh for s in samples]
-
-	# ── Step 1: 多帧可达性扫描 ──
-	# 从首帧出发，若存在任意可信前驱帧使得加速度在限制内，则本帧可达
-	# 从尾帧出发同理。只有双向都不可达的帧才标记可疑。
-	raw_vals = [s.raw_speed_kmh for s in samples]
-	times = [s.timestamp for s in samples]
-
-	can_reach_fwd = [False] * n
-	can_reach_bwd = [False] * n
-	can_reach_fwd[0] = True
-	can_reach_bwd[-1] = True
-
-	# 前向多帧可达（最多 10 帧，中间帧必须一致）
-	REACH_WINDOW = 10
-	for i in range(1, n):
-		if raw_vals[i] > max_speed_kmh:
-			continue
-		for j in range(i - 1, max(-1, i - REACH_WINDOW - 1), -1):
-			if can_reach_fwd[j]:
-				dt = times[i] - times[j]
-				if dt <= 0:
-					continue
-				max_dv = max_accel_mps2 * dt * 3.6
-				# 显示更新：当前帧与下一帧同值 → 放宽容限
-				if i + 1 < n and raw_vals[i] == raw_vals[i + 1]:
-					max_dv = max_dv * 2 + 10.0
-				if j < i - 1:
-					# 跳帧查找：中间帧必须能从 j 到达
-					mid_ok = True
-					for k in range(j + 1, i):
-						if raw_vals[k] > max_speed_kmh:
-							continue
-						# 中间帧也必须能从 j 到达（或显示更新）
-						dt_k = times[k] - times[j]
-						if dt_k > 0:
-							mid_max = max_accel_mps2 * dt_k * 3.6
-							if k + 1 < n and raw_vals[k] == raw_vals[k + 1]:
-								mid_max = mid_max * 2 + 10.0
-							if abs(raw_vals[k] - raw_vals[j]) > mid_max:
-								mid_ok = False
-								break
-					if not mid_ok:
-						continue
-				if abs(raw_vals[i] - raw_vals[j]) <= max_dv:
-					can_reach_fwd[i] = True
+		# Find nearest anchor on left with a meaningfully different value
+		for j in range(i - 1, -1, -1):
+			if j in anchors_filtered and raw_vals[j] > 0:
+				if abs(raw_vals[j] - v) > 2.0:  # skip same-cluster errors
+					dt = times[i] - times[j]
+					if abs(v - raw_vals[j]) / max(dt, 0.001) > max_dv_per_sec:
+						left_fail = True
 					break
-
-	# 后向多帧可达（最多 10 帧，中间帧必须一致）
-	for i in range(n - 2, -1, -1):
-		if raw_vals[i] > max_speed_kmh:
-			continue
-		for j in range(i + 1, min(n, i + REACH_WINDOW + 1)):
-			if can_reach_bwd[j]:
-				dt = times[j] - times[i]
-				if dt <= 0:
-					continue
-				max_dv = max_accel_mps2 * dt * 3.6
-				# 显示更新检测
-				if i + 1 < n and raw_vals[i] == raw_vals[i + 1]:
-					max_dv = max_dv * 2 + 10.0
-				if j > i + 1:
-					mid_ok = True
-					for k in range(i + 1, j):
-						if raw_vals[k] > max_speed_kmh:
-							continue
-						dt_k = times[j] - times[k]
-						if dt_k > 0:
-							mid_max = max_accel_mps2 * dt_k * 3.6
-							if k + 1 < n and raw_vals[k] == raw_vals[k + 1]:
-								mid_max = mid_max * 2 + 10.0
-							if abs(raw_vals[j] - raw_vals[k]) > mid_max:
-								mid_ok = False
-								break
-					if not mid_ok:
-						continue
-				if abs(raw_vals[j] - raw_vals[i]) <= max_dv:
-					can_reach_bwd[i] = True
-					break
-
-	# 双向都不可达 → 可疑。但显示稳定帧（与邻居同值）永不标记。
-	suspect = [False] * n
-	for i in range(n):
-		reach_fail = not can_reach_fwd[i] and not can_reach_bwd[i]
-		if not reach_fail:
-			continue
-		stable = (i > 0 and raw_vals[i] == raw_vals[i - 1]) or (i + 1 < n and raw_vals[i] == raw_vals[i + 1])
-		if not stable:
-			suspect[i] = True
-
-	# ── 紧邻跳变检测：即使双向可达，若紧邻跳变超限且跳变源为孤立帧 → 标记 ──
-	for i in range(1, n):
-		dt = times[i] - times[i - 1]
-		if dt <= 0:
-			continue
-		max_dv = max_accel_mps2 * dt * 3.6
-		dv = abs(raw_vals[i] - raw_vals[i - 1])
-		if dv <= max_dv:
-			continue
-		# 跳变超限。判断哪一侧是孤立帧（与邻居不一致）
-		i_left_isolated = (i - 2 >= 0 and raw_vals[i - 1] != raw_vals[i - 2])
-		i_right_isolated = (i + 1 < n and raw_vals[i] != raw_vals[i + 1])
-		if i_left_isolated and not i_right_isolated:
-			suspect[i - 1] = True
-		elif i_right_isolated and not i_left_isolated:
-			suspect[i] = True
-
-	# ── Step 2: 分组连续可疑帧，扩展边界 ──
-	# 每个段的边界向外扩展 1 帧作为 DP 锚点
-	segments: list[tuple[int, int]] = []  # (start, end) inclusive in original indices
-	i = 0
-	while i < n:
-		if suspect[i]:
-			j = i
-			while j < n and suspect[j]:
-				j += 1
-			# 扩展边界：左边界向外 1 帧（若存在且非可疑）
-			seg_start = max(0, i - 1)
-			seg_end = min(n - 1, j)  # j 是第一个非可疑帧，包含它作为锚点
-			if j < n and not suspect[j]:
-				seg_end = j  # 把右侧第一个可信帧纳入锚点
-			segments.append((seg_start, seg_end))
-			i = j + 1
+				# else: same cluster (OCR repeated error), keep looking
 		else:
-			i += 1
+			left_fail = False  # no different-valued anchor found → OK
 
-	if not segments:
-		return [sample.raw_speed_kmh for sample in samples]
-
-	# ── Step 3: 对每个可疑段运行 DP ──
-	result = [sample.raw_speed_kmh for sample in samples]
-
-	for seg_start, seg_end in segments:
-		# 为段内每帧生成候选
-		seg_candidates: list[list[float]] = []
-		for idx in range(seg_start, seg_end + 1):
-			sample = samples[idx]
-			cands = build_speed_candidates(sample.raw_text, max_speed_kmh)
-			if sample.raw_speed_kmh <= max_speed_kmh:
-				cands.append(float(sample.raw_speed_kmh))
-			if not cands:
-				cands = [min(max(sample.raw_speed_kmh, 0.0), max_speed_kmh)]
-			seg_candidates.append(sorted(set(cands)))
-
-		seg_n = seg_end - seg_start + 1
-
-		# 第一帧：若为锚点（非可疑），只保留其原始值
-		if not suspect[seg_start] and seg_candidates[0]:
-			raw_val = float(samples[seg_start].raw_speed_kmh)
-			if raw_val in seg_candidates[0]:
-				seg_candidates[0] = [raw_val]
-			else:
-				seg_candidates[0] = [raw_val]
-
-		# 最后一帧：若为锚点（非可疑），只保留其原始值
-		if not suspect[seg_end] and seg_candidates[-1]:
-			raw_val = float(samples[seg_end].raw_speed_kmh)
-			if raw_val in seg_candidates[-1]:
-				seg_candidates[-1] = [raw_val]
-			else:
-				seg_candidates[-1] = [raw_val]
-
-		# ── 插值候选：基于锚点的线性插值 + 邻近可信帧引导 ──
-		anchor_left = seg_candidates[0][0]
-		anchor_right = seg_candidates[-1][0]
-		seg_duration = times[seg_end] - times[seg_start]
-
-		# 找段外最近的可信帧（非可疑）作为额外锚点参考
-		ref_before = None
-		for k in range(seg_start - 1, -1, -1):
-			if not suspect[k] and raw_vals[k] <= max_speed_kmh:
-				ref_before = raw_vals[k]
-				break
-		ref_after = None
-		for k in range(seg_end + 1, n):
-			if not suspect[k] and raw_vals[k] <= max_speed_kmh:
-				ref_after = raw_vals[k]
-				break
-
-		for idx in range(seg_start, seg_end + 1):
-			if idx == seg_start or idx == seg_end:
-				continue
-			local_i = idx - seg_start
-			# 线性插值候选
-			if seg_duration > 0:
-				frac = (times[idx] - times[seg_start]) / seg_duration
-				interp_val = anchor_left + (anchor_right - anchor_left) * frac
-				lo = max(0.0, interp_val - 15.0)
-				hi = min(max_speed_kmh, interp_val + 15.0)
-				for v in range(int(lo), int(hi) + 1, 2):
-					if v <= max_speed_kmh:
-						seg_candidates[local_i].append(float(v))
-			# 邻近可信帧候选（段外的可信邻居值）
-			for ref_val in (ref_before, ref_after):
-				if ref_val is not None:
-					lo = max(0.0, ref_val - 10.0)
-					hi = min(max_speed_kmh, ref_val + 10.0)
-					for v in range(int(lo), int(hi) + 1, 2):
-						if v <= max_speed_kmh:
-							seg_candidates[local_i].append(float(v))
-			# 去重排序
-			seg_candidates[local_i] = sorted(set(seg_candidates[local_i]))
-		# DP 初始化
-		states: list[tuple[float, float, int | None]] = []
-		first_cands = seg_candidates[0]
-		for c in first_cands:
-			cost = 0.0 if not suspect[seg_start] else abs(c - samples[seg_start].raw_speed_kmh)
-			states.append((cost, c, None))
-
-		bp: list[list[int]] = [[] for _ in range(seg_n)]
-		bp[0] = [-1] * len(first_cands)
-
-		for t in range(1, seg_n):
-			abs_idx = seg_start + t
-			cur_cands = seg_candidates[t]
-			prev_cands = seg_candidates[t - 1]
-			dt = max(samples[abs_idx].timestamp - samples[abs_idx - 1].timestamp, 1e-6)
-			max_dv = max_accel_mps2 * dt * 3.6
-
-			cur_states: list[tuple[float, float, int]] = []
-			cur_bp: list[int] = []
-
-			for ci, cv in enumerate(cur_cands):
-				best_cost = float("inf")
-				best_pi = 0
-				for pi, pv in enumerate(prev_cands):
-					delta = abs(cv - pv)
-					if delta > max_dv:
-						continue
-					# OCR 贴近代价：仅可疑帧有代价
-					ocr_cost = 0.0
-					if suspect[abs_idx]:
-						ocr_cost = abs(cv - samples[abs_idx].raw_speed_kmh)
-					cost = states[pi][0] + delta * 0.3 + ocr_cost
-					if cost < best_cost:
-						best_cost = cost
-						best_pi = pi
-				if best_cost == float("inf"):
-					for pi, pv in enumerate(prev_cands):
-						delta = abs(cv - pv)
-						cost = states[pi][0] + delta * 5.0
-						if cost < best_cost:
-							best_cost = cost
-							best_pi = pi
-				cur_states.append((best_cost, cv, best_pi))
-				cur_bp.append(best_pi)
-
-			states = [(c, v, p) for c, v, p in cur_states]
-			bp[t] = cur_bp
-
-		# 回溯
-		best_final = min(range(len(states)), key=lambda idx: states[idx][0])
-		seg_result = [0.0] * seg_n
-		seg_result[-1] = states[best_final][1]
-		trace = best_final
-		for t in range(seg_n - 1, 0, -1):
-			trace = bp[t][trace]
-			seg_result[t - 1] = seg_candidates[t - 1][trace]
-
-		# 写回结果（跳过锚点帧，用 DP 结果）
-		for t in range(seg_n):
-			abs_idx = seg_start + t
-			if suspect[abs_idx]:
-				result[abs_idx] = seg_result[t]
-
-	# ── 后处理：中值离群值检测 ──
-	# DP 可能因候选不足而无法修正某些帧。用滑动中值检测残差。
-	POST_WINDOW = 5
-	POST_THRESH = 30.0  # km/h，超过此偏差视为离群
-	for i in range(n):
-		lo = max(0, i - POST_WINDOW)
-		hi = min(n, i + POST_WINDOW + 1)
-		neighbors = [result[j] for j in range(lo, hi) if j != i]
-		if len(neighbors) >= 3:
-			neighbors.sort()
-			median = neighbors[len(neighbors) // 2]
-			if abs(result[i] - median) > POST_THRESH:
-				# 离群：用最近可信邻居线性插值替换
-				# 找前后最近的非离群帧
-				left_idx = i - 1
-				while left_idx >= 0:
-					nb = [result[j] for j in range(max(0, left_idx - POST_WINDOW), min(n, left_idx + POST_WINDOW + 1)) if j != left_idx]
-					if len(nb) >= 3:
-						nb.sort()
-						if abs(result[left_idx] - nb[len(nb)//2]) <= POST_THRESH:
-							break
-					left_idx -= 1
-				right_idx = i + 1
-				while right_idx < n:
-					nb = [result[j] for j in range(max(0, right_idx - POST_WINDOW), min(n, right_idx + POST_WINDOW + 1)) if j != right_idx]
-					if len(nb) >= 3:
-						nb.sort()
-						if abs(result[right_idx] - nb[len(nb)//2]) <= POST_THRESH:
-							break
-					right_idx += 1
-				if left_idx >= 0 and right_idx < n:
-					# 线性插值
-					frac = (times[i] - times[left_idx]) / max(times[right_idx] - times[left_idx], 1e-6)
-					result[i] = result[left_idx] + (result[right_idx] - result[left_idx]) * frac
-				elif left_idx >= 0:
-					result[i] = result[left_idx]
-				elif right_idx < n:
-					result[i] = result[right_idx]
-				# 否则保持原值
-
-	return result
-
-
-def correct_speed_series_v2(
-	samples: list[SpeedObservation],
-	max_speed_kmh: float,
-	max_accel_mps2: float,
-	fps: float = 0.0,
-	div: int = 1,
-) -> list[float]:
-	"""Improved physical-constraint correction (v2).
-
-	Key improvements over v1:
-	1. Adaptive reachability window — scales with effective sampling rate (fps/div)
-	2. Time-based display update detection — uses dt, not frame count
-	3. Auto-detection of boost zones — locally raises acceleration tolerance
-	4. Adaptive outlier threshold — scales with max_accel × dt
-	5. Wider temporal context for candidate generation
-
-	Args:
-		samples: OCR speed observations
-		max_speed_kmh: Maximum plausible speed
-		max_accel_mps2: Maximum plausible acceleration (m/s²) in NORMAL zones
-		fps: Video frame rate (for adaptive window sizing)
-		div: Frame sampling divisor
-	"""
-	if not samples:
-		return []
-
-	if max_speed_kmh <= 0 or max_accel_mps2 <= 0:
-		return [s.raw_speed_kmh for s in samples]
-
-	n = len(samples)
-	if n < 2:
-		return [s.raw_speed_kmh for s in samples]
-
-	raw_vals = [s.raw_speed_kmh for s in samples]
-	times = [s.timestamp for s in samples]
-
-	# ── Adaptive parameters based on effective sampling rate ──
-	effective_fps = fps / max(div, 1) if fps > 0 else 1.0
-	typical_dt = 1.0 / max(effective_fps, 0.1)
-
-	# Reachability window: cover ~0.5s in both directions
-	reach_window = max(3, int(0.5 / max(typical_dt, 0.01)))
-	reach_window = min(reach_window, 15)
-
-	# Display update detection
-	display_hold_dt = 0.15
-
-	# Post-processing outlier threshold
-	post_thresh = max(15.0, max_accel_mps2 * typical_dt * 3.6 * 5)
-
-	# ── Detect boost zones: regions where acceleration consistently exceeds nominal ──
-	# In boost zones, we use 2× the nominal max_accel for correction
-	boost_multiplier = _detect_boost_zones(raw_vals, times, max_accel_mps2, typical_dt)
-
-	# ── Step 0: Spike detection — catch isolated single-frame OCR errors ──
-	# These can slip through the reachability scan because the wide window
-	# may still connect through the spike. We detect them by checking
-	# neighbor consistency: a spike differs from both neighbors by more
-	# than physics allows, while the neighbors are consistent with each other.
-	spike_suspect = [False] * n
-	for i in range(2, n - 2):
-		if raw_vals[i] < 0 or raw_vals[i] > max_speed_kmh:
-			continue
-		left_v = raw_vals[i - 1] if raw_vals[i - 1] >= 0 else raw_vals[i - 2] if i >= 2 and raw_vals[i - 2] >= 0 else None
-		right_v = raw_vals[i + 1] if raw_vals[i + 1] >= 0 else raw_vals[i + 2] if i + 2 < n and raw_vals[i + 2] >= 0 else None
-		if left_v is None or right_v is None:
-			continue
-		# Check if neighbors are consistent with each other
-		dt_left = max(times[i] - times[i - 1], 0.001)
-		dt_right = max(times[i + 1] - times[i], 0.001)
-		dt_cross = dt_left + dt_right
-		dv_cross = abs(right_v - left_v)
-		max_dv_cross = max_accel_mps2 * dt_cross * 3.6 * 2.0  # generous cross tolerance
-		if dv_cross > max_dv_cross:
-			continue  # neighbors themselves are inconsistent; broader issue
-		# Neighbors are consistent — check if this frame is an outlier
-		dv_left = abs(raw_vals[i] - left_v)
-		dv_right = abs(raw_vals[i] - right_v)
-		max_dv_left = max_accel_mps2 * dt_left * 3.6 * 1.5
-		max_dv_right = max_accel_mps2 * dt_right * 3.6 * 1.5
-		if dv_left > max_dv_left and dv_right > max_dv_right:
-			spike_suspect[i] = True
-
-	# ── Step 1: Multi-frame reachability scan ──
-	can_reach_fwd = [False] * n
-	can_reach_bwd = [False] * n
-	can_reach_fwd[0] = True
-	can_reach_bwd[-1] = True
-
-	# Forward
-	for i in range(1, n):
-		if raw_vals[i] > max_speed_kmh:
-			continue
-		for j in range(i - 1, max(-1, i - reach_window - 1), -1):
-			if can_reach_fwd[j]:
-				dt = times[i] - times[j]
-				if dt <= 0:
-					continue
-				max_dv = max_accel_mps2 * dt * 3.6 * boost_multiplier[i]
-				# Display update boost: if current frame is part of a display hold
-				if _is_display_hold(raw_vals, i, n, dt, display_hold_dt, times):
-					max_dv = max_dv * 1.5 + 5.0
-				# Mid-frame consistency check
-				if j < i - 1:
-					mid_ok = True
-					for k in range(j + 1, i):
-						if raw_vals[k] > max_speed_kmh:
-							continue
-						dt_k = times[k] - times[j]
-						if dt_k > 0:
-							mid_max = max_accel_mps2 * dt_k * 3.6 * boost_multiplier[k]
-							if _is_display_hold(raw_vals, k, n, dt_k, display_hold_dt, times):
-								mid_max = mid_max * 1.5 + 5.0
-							if abs(raw_vals[k] - raw_vals[j]) > mid_max:
-								mid_ok = False
-								break
-					if not mid_ok:
-						continue
-				if abs(raw_vals[i] - raw_vals[j]) <= max_dv:
-					can_reach_fwd[i] = True
+		# Find nearest anchor on right with a meaningfully different value
+		for j in range(i + 1, n):
+			if j in anchors_filtered and raw_vals[j] > 0:
+				if abs(raw_vals[j] - v) > 2.0:  # skip same-cluster errors
+					dt = times[j] - times[i]
+					if abs(raw_vals[j] - v) / max(dt, 0.001) > max_dv_per_sec:
+						right_fail = True
 					break
-
-	# Backward
-	for i in range(n - 2, -1, -1):
-		if raw_vals[i] > max_speed_kmh:
-			continue
-		for j in range(i + 1, min(n, i + reach_window + 1)):
-			if can_reach_bwd[j]:
-				dt = times[j] - times[i]
-				if dt <= 0:
-					continue
-				max_dv = max_accel_mps2 * dt * 3.6 * boost_multiplier[i]
-				if _is_display_hold(raw_vals, i, n, dt, display_hold_dt, times):
-					max_dv = max_dv * 1.5 + 5.0
-				if j > i + 1:
-					mid_ok = True
-					for k in range(i + 1, j):
-						if raw_vals[k] > max_speed_kmh:
-							continue
-						dt_k = times[j] - times[k]
-						if dt_k > 0:
-							mid_max = max_accel_mps2 * dt_k * 3.6 * boost_multiplier[k]
-							if _is_display_hold(raw_vals, k, n, dt_k, display_hold_dt, times):
-								mid_max = mid_max * 1.5 + 5.0
-							if abs(raw_vals[j] - raw_vals[k]) > mid_max:
-								mid_ok = False
-								break
-					if not mid_ok:
-						continue
-				if abs(raw_vals[j] - raw_vals[i]) <= max_dv:
-					can_reach_bwd[i] = True
-					break
-
-	# Mark suspect frames (combine reachability failures + spike detection)
-	suspect = [False] * n
-	for i in range(n):
-		# Spike-detected frames are always suspect
-		if spike_suspect[i]:
-			suspect[i] = True
-			continue
-		reach_fail = not can_reach_fwd[i] and not can_reach_bwd[i]
-		if not reach_fail:
-			continue
-		# Display-stable frames are protected (unless spike-detected)
-		stable = _is_display_hold(raw_vals, i, n, typical_dt, display_hold_dt, times)
-		if not stable:
-			suspect[i] = True
-
-	# ── Adjacent jump detection ──
-	for i in range(1, n):
-		dt = times[i] - times[i - 1]
-		if dt <= 0:
-			continue
-		max_dv = max_accel_mps2 * dt * 3.6 * max(boost_multiplier[i], boost_multiplier[i-1])
-		dv = abs(raw_vals[i] - raw_vals[i - 1])
-		if dv <= max_dv:
-			continue
-		# Detect which side is the isolated error
-		i_left_isolated = (i - 2 >= 0 and raw_vals[i - 1] != raw_vals[i - 2]
-							and not _is_display_hold(raw_vals, i-1, n, dt, display_hold_dt, times))
-		i_right_isolated = (i + 1 < n and raw_vals[i] != raw_vals[i + 1]
-							and not _is_display_hold(raw_vals, i, n, dt, display_hold_dt, times))
-		if i_left_isolated and not i_right_isolated:
-			suspect[i - 1] = True
-		elif i_right_isolated and not i_left_isolated:
-			suspect[i] = True
-
-	# ── Step 2: Segment grouping ──
-	segments: list[tuple[int, int]] = []
-	i = 0
-	while i < n:
-		if suspect[i]:
-			j = i
-			while j < n and suspect[j]:
-				j += 1
-			seg_start = max(0, i - 1)
-			seg_end = min(n - 1, j)
-			if j < n and not suspect[j]:
-				seg_end = j
-			segments.append((seg_start, seg_end))
-			i = j + 1
+				# else: same cluster (OCR repeated error), keep looking
 		else:
-			i += 1
+			right_fail = False  # no different-valued anchor found → OK
 
-	if not segments:
-		return [s.raw_speed_kmh for s in samples]
+		# Remove anchor if physically unreachable from either side
+		if not (left_fail or right_fail):
+			anchors_validated.add(i)
 
-	# ── Step 3: DP correction per segment ──
-	result = [s.raw_speed_kmh for s in samples]
+	return anchors_validated
 
-	for seg_start, seg_end in segments:
-		seg_n = seg_end - seg_start + 1
-		seg_candidates: list[list[float]] = []
-		for idx in range(seg_start, seg_end + 1):
-			sample = samples[idx]
-			cands = build_speed_candidates(sample.raw_text, max_speed_kmh)
-			if sample.raw_speed_kmh <= max_speed_kmh and sample.raw_speed_kmh > 0:
-				cands.append(float(sample.raw_speed_kmh))
-			# For OCR-failure frames (raw <= 0) inside suspect segments,
-			# build candidates from interpolation between segment anchors
-			if sample.raw_speed_kmh <= 0 and seg_n > 2:
-				local_i = idx - seg_start
-				frac = local_i / max(seg_n - 1, 1)
-				# Use segment boundary raw values as interpolation anchors
-				left_v = samples[seg_start].raw_speed_kmh
-				right_v = samples[seg_end].raw_speed_kmh
-				if left_v > 0 and right_v > 0:
-					interp_v = left_v + (right_v - left_v) * frac
-				elif left_v > 0:
-					interp_v = left_v
-				elif right_v > 0:
-					interp_v = right_v
-				else:
-					interp_v = max_speed_kmh / 2  # fallback
-				for dv in range(-25, 26, 2):
-					v = interp_v + dv
-					if 0 <= v <= max_speed_kmh:
-						cands.append(float(v))
-			if not cands:
-				cands = [min(max(sample.raw_speed_kmh, 0.0), max_speed_kmh)]
-			seg_candidates.append(sorted(set(cands)))
-
-		seg_n = seg_end - seg_start + 1
-
-		# Anchor frames: lock to raw values
-		if not suspect[seg_start] and seg_candidates[0]:
-			seg_candidates[0] = [float(samples[seg_start].raw_speed_kmh)]
-		if not suspect[seg_end] and seg_candidates[-1]:
-			seg_candidates[-1] = [float(samples[seg_end].raw_speed_kmh)]
-
-		# ── Extended interpolation candidates ──
-		anchor_left = seg_candidates[0][0]
-		anchor_right = seg_candidates[-1][0]
-		seg_duration = times[seg_end] - times[seg_start]
-
-		# Wider context: look ±2s for reference values
-		ref_before = None
-		for k in range(seg_start - 1, -1, -1):
-			if not suspect[k] and raw_vals[k] <= max_speed_kmh:
-				if times[seg_start] - times[k] < 2.0:
-					ref_before = raw_vals[k]
-				break
-		ref_after = None
-		for k in range(seg_end + 1, n):
-			if not suspect[k] and raw_vals[k] <= max_speed_kmh:
-				if times[k] - times[seg_end] < 2.0:
-					ref_after = raw_vals[k]
-				break
-
-		for idx in range(seg_start, seg_end + 1):
-			if idx == seg_start or idx == seg_end:
-				continue
-			local_i = idx - seg_start
-
-			# Linear interpolation ± adaptive range
-			if seg_duration > 0:
-				frac = (times[idx] - times[seg_start]) / seg_duration
-				interp_val = anchor_left + (anchor_right - anchor_left) * frac
-				# Adaptive range: wider for larger segments
-				interp_range = min(30.0, 10.0 + seg_duration * max_accel_mps2 * 3.6)
-				lo = max(0.0, interp_val - interp_range)
-				hi = min(max_speed_kmh, interp_val + interp_range)
-				step = max(1, int(interp_range / 10))
-				for v in range(int(lo), int(hi) + 1, step):
-					if v <= max_speed_kmh:
-						seg_candidates[local_i].append(float(v))
-
-			# Context reference candidates
-			for ref_val in (ref_before, ref_after):
-				if ref_val is not None:
-					lo = max(0.0, ref_val - 10.0)
-					hi = min(max_speed_kmh, ref_val + 10.0)
-					for v in range(int(lo), int(hi) + 1, 2):
-						if v <= max_speed_kmh:
-							seg_candidates[local_i].append(float(v))
-
-			seg_candidates[local_i] = sorted(set(seg_candidates[local_i]))
-
-		# DP
-		states: list[tuple[float, float, int | None]] = []
-		first_cands = seg_candidates[0]
-		for c in first_cands:
-			cost = 0.0 if not suspect[seg_start] else abs(c - samples[seg_start].raw_speed_kmh)
-			states.append((cost, c, None))
-
-		bp: list[list[int]] = [[] for _ in range(seg_n)]
-		bp[0] = [-1] * len(first_cands)
-
-		for t in range(1, seg_n):
-			abs_idx = seg_start + t
-			cur_cands = seg_candidates[t]
-			prev_cands = seg_candidates[t - 1]
-			dt = max(samples[abs_idx].timestamp - samples[abs_idx - 1].timestamp, 1e-6)
-			max_dv = max_accel_mps2 * dt * 3.6 * boost_multiplier[abs_idx]
-
-			cur_states: list[tuple[float, float, int]] = []
-			cur_bp: list[int] = []
-
-			for ci, cv in enumerate(cur_cands):
-				best_cost = float("inf")
-				best_pi = 0
-				for pi, pv in enumerate(prev_cands):
-					delta = abs(cv - pv)
-					if delta > max_dv:
-						continue
-					ocr_cost = 0.0
-					if suspect[abs_idx]:
-						ocr_cost = abs(cv - samples[abs_idx].raw_speed_kmh)
-					# Reduced smoothness penalty for boost zones
-					smoothness_weight = 0.2 if boost_multiplier[abs_idx] > 1.5 else 0.3
-					cost = states[pi][0] + delta * smoothness_weight + ocr_cost
-					if cost < best_cost:
-						best_cost = cost
-						best_pi = pi
-				if best_cost == float("inf"):
-					for pi, pv in enumerate(prev_cands):
-						delta = abs(cv - pv)
-						cost = states[pi][0] + delta * 5.0
-						if cost < best_cost:
-							best_cost = cost
-							best_pi = pi
-				cur_states.append((best_cost, cv, best_pi))
-				cur_bp.append(best_pi)
-
-			states = [(c, v, p) for c, v, p in cur_states]
-			bp[t] = cur_bp
-
-		# Traceback
-		best_final = min(range(len(states)), key=lambda idx: states[idx][0])
-		seg_result = [0.0] * seg_n
-		seg_result[-1] = states[best_final][1]
-		trace = best_final
-		for t in range(seg_n - 1, 0, -1):
-			trace = bp[t][trace]
-			seg_result[t - 1] = seg_candidates[t - 1][trace]
-
-		for t in range(seg_n):
-			abs_idx = seg_start + t
-			if suspect[abs_idx]:
-				result[abs_idx] = seg_result[t]
-
-	# ── Step 4: Post-processing median outlier detection ──
-	# Adaptive window: cover ~0.5s
-	post_window = max(3, int(0.5 / max(typical_dt, 0.01)))
-	for i in range(n):
-		lo = max(0, i - post_window)
-		hi = min(n, i + post_window + 1)
-		neighbors = [result[j] for j in range(lo, hi) if j != i]
-		if len(neighbors) >= 3:
-			neighbors.sort()
-			median = neighbors[len(neighbors) // 2]
-			if abs(result[i] - median) > post_thresh:
-				# Find nearest clean neighbors
-				left_idx = i - 1
-				while left_idx >= 0:
-					nb = [result[j] for j in range(max(0, left_idx - post_window),
-							min(n, left_idx + post_window + 1)) if j != left_idx]
-					if len(nb) >= 3:
-						nb.sort()
-						if abs(result[left_idx] - nb[len(nb)//2]) <= post_thresh:
-							break
-					left_idx -= 1
-				right_idx = i + 1
-				while right_idx < n:
-					nb = [result[j] for j in range(max(0, right_idx - post_window),
-							min(n, right_idx + post_window + 1)) if j != right_idx]
-					if len(nb) >= 3:
-						nb.sort()
-						if abs(result[right_idx] - nb[len(nb)//2]) <= post_thresh:
-							break
-					right_idx += 1
-				if left_idx >= 0 and right_idx < n:
-					frac = (times[i] - times[left_idx]) / max(times[right_idx] - times[left_idx], 1e-6)
-					result[i] = result[left_idx] + (result[right_idx] - result[left_idx]) * frac
-				elif left_idx >= 0:
-					result[i] = result[left_idx]
-				elif right_idx < n:
-					result[i] = result[right_idx]
-
-	return result
-
-
-def _is_display_hold(
-	raw_vals: list[float],
-	i: int,
-	n: int,
-	dt: float,
-	hold_dt: float,
-	times: list[float] | None = None,
-) -> bool:
-	"""Check if frame i is part of a display hold (game HUD refresh).
-
-	A display hold occurs when consecutive frames show the same value
-	because the game's speedometer updates slower than the video frame rate.
-
-	Uses TIME-BASED detection: if dt < hold_dt and neighbor has same value,
-	it's likely a display hold rather than genuine constant speed.
-	"""
-	if dt > hold_dt:
-		return False
-	if i > 0 and raw_vals[i] == raw_vals[i - 1]:
-		return True
-	if i + 1 < n and raw_vals[i] == raw_vals[i + 1]:
-		return True
-	return False
-
-
-def _detect_boost_zones(
-	raw_vals: list[float],
-	times: list[float],
-	max_accel_mps2: float,
-	typical_dt: float,
-) -> list[float]:
-	"""Detect acceleration boost zones and return per-frame multiplier.
-
-	Boost zones are regions where raw OCR values show sustained high
-	acceleration. In these zones, the DP correction uses higher tolerance
-	to avoid over-constraining legitimate rapid speed changes.
-
-	Returns list of multipliers (1.0 = normal, up to 3.0 = heavy boost).
-	"""
-	n = len(raw_vals)
-	multipliers = [1.0] * n
-	if n < 5:
-		return multipliers
-
-	# Compute raw acceleration between consecutive frames (km/h per second)
-	raw_accel = [0.0] * n
-	for i in range(1, n):
-		dt = times[i] - times[i - 1]
-		if dt > 0:
-			raw_accel[i] = abs(raw_vals[i] - raw_vals[i - 1]) / (dt * 3.6)
-
-	nom_thresh = max_accel_mps2 * 3.6  # nominal max accel in km/h/s
-	window = max(3, int(0.5 / max(typical_dt, 0.01)))
-
-	for i in range(n):
-		lo = max(0, i - window)
-		hi = min(n, i + window + 1)
-		high_count = sum(1 for j in range(lo, hi)
-						if raw_accel[j] > nom_thresh * 1.3)
-		total = hi - lo
-		if total > 0 and high_count / total > 0.3:
-			local_max = max(raw_accel[lo:hi])
-			ratio = min(3.0, max(1.0, local_max / max(nom_thresh, 0.1)))
-			multipliers[i] = ratio
-
-	return multipliers
 
 
 class _CancelExport(Exception):

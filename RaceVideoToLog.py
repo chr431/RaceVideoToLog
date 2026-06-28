@@ -14,16 +14,13 @@ import csv
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
-from queue import Queue
 import threading
 import cv2
 import numpy as np
 from PIL import Image, ImageTk
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 import ocr_engine
-from ocr_engine import *
+from ocr_engine import *  # noqa: F403, F405  # pyright: ignore[reportWildcardImportFromLibrary]
 from analysis import AnalysisTab
 
 class RaceVideoToLogApp:
@@ -38,6 +35,9 @@ class RaceVideoToLogApp:
 		self.first_frame_bgr: np.ndarray | None = None
 		self.preview_photo: ImageTk.PhotoImage | None = None
 		self.preview_after_id: str | None = None
+		self._preview_cap: cv2.VideoCapture | None = None  # 持久化的预览用 VideoCapture
+		self._preview_frame_no: int = 0  # 当前预览帧号
+		self._preview_throttle_id: str | None = None  # 拖动节流
 		self.ocr_engine: RapidOCR | None = None
 		self.ocr_engines: list[RapidOCR] = []
 
@@ -76,8 +76,6 @@ class RaceVideoToLogApp:
 		self._preview_scale = 1.0
 		self._preview_offset_x = 0.0
 		self._preview_offset_y = 0.0
-		self._last_canvas_w = 0
-		self._last_canvas_h = 0
 
 		self._drag_start_x: int | None = None
 		self._drag_start_y: int | None = None
@@ -218,15 +216,21 @@ class RaceVideoToLogApp:
 		self.preview_canvas.bind("<B1-Motion>", self._on_drag_motion)
 		self.preview_canvas.bind("<ButtonRelease-1>", self._on_drag_end)
 		self.preview_canvas.bind("<ButtonPress-3>", lambda e: None)  # 右键保留
+		# 方向键精确帧导航
+		self.root.bind("<Left>", lambda e: self._step_preview_frame(-1))
+		self.root.bind("<Right>", lambda e: self._step_preview_frame(1))
+		self.root.bind("<Up>", lambda e: self._step_preview_frame(10))
+		self.root.bind("<Down>", lambda e: self._step_preview_frame(-10))
 
-		# 视频帧位置滑动条 + 刷新按钮
+		# 视频帧位置滑动条 + 帧号标签
 		slider_row = ttk.Frame(preview_box)
 		slider_row.grid(row=1, column=0, sticky="ew", pady=(6, 0))
 		slider_row.columnconfigure(0, weight=1)
 		self._preview_slider = ttk.Scale(slider_row, from_=0, to=1, variable=self._preview_frame_pos,
-			orient="horizontal")
+			orient="horizontal", command=self._on_slider_drag)
 		self._preview_slider.grid(row=0, column=0, sticky="ew")
-		ttk.Button(slider_row, text="刷新预览", command=self.refresh_preview).grid(row=0, column=1, padx=(8, 0))
+		self._preview_frame_label = ttk.Label(slider_row, text="#0", width=8, anchor="e")
+		self._preview_frame_label.grid(row=0, column=1, padx=(6, 2))
 
 		# 预览画布右键：重置视图
 		# Row 1: 底部状态栏（OCR 处理 tab 使用，数据分析 tab 隐藏）
@@ -312,26 +316,57 @@ class RaceVideoToLogApp:
 		self._drag_start_x = None
 		self._drag_start_y = None
 
-	def _get_preview_frame(self) -> np.ndarray | None:
-		"""根据滑动条位置读取对应视频帧。"""
-		if self.video_path is None or self.metadata is None:
-			return None
-		pos = int(self._preview_slider.get())
-		fi = int(pos)
-		cap = cv2.VideoCapture(str(self.video_path))
-		cap.set(cv2.CAP_PROP_POS_FRAMES, fi)
-		ok, frame = cap.read()
-		cap.release()
-		return frame if ok else None
-
-	def _on_preview_slider(self, *args) -> None:
-		"""滑动条变化回调（由刷新按钮触发预览，此处不做操作以保持拖拽流畅）。"""
-		pass
-
+	
+	
 	def schedule_preview_refresh(self) -> None:
 		if self.preview_after_id is not None:
 			self.root.after_cancel(self.preview_after_id)
 		self.preview_after_id = self.root.after(200, self.refresh_preview)
+
+	def _step_preview_frame(self, delta: int) -> None:
+		"""以 delta 帧为单位移动预览位置。"""
+		if not self.metadata:
+			return
+		pos = int(self._preview_slider.get())
+		new_pos = max(0, min(self.metadata.frame_count - 1, pos + delta))
+		self._preview_slider.set(new_pos)
+		self._preview_frame_pos.set(new_pos)
+		self._throttle_preview()
+
+	def _on_slider_drag(self, _value: str) -> None:
+		"""滑块拖动时实时更新预览（节流）。"""
+		self._throttle_preview()
+
+	def _throttle_preview(self) -> None:
+		"""节流预览刷新：30ms 内只触发一次。"""
+		if self._preview_throttle_id is not None:
+			self.root.after_cancel(self._preview_throttle_id)
+		self._preview_throttle_id = self.root.after(30, self._do_refresh_preview)
+
+	def _do_refresh_preview(self) -> None:
+		"""实际执行预览帧刷新（由节流器调用）。"""
+		self._preview_throttle_id = None
+		self.refresh_preview()
+
+	def _seek_preview_frame(self, target: int) -> bool:
+		"""高效定位 VideoCapture 到目标帧。小跳用 grab()，大跳用 set()。
+		返回 True 表示成功。"""
+		cap = self._preview_cap
+		if cap is None:
+			return False
+		current = self._preview_frame_no
+		diff = target - current
+		# 小范围前跳：连续 grab() 比 seek 更快（避免关键帧搜索）
+		if 0 < diff <= 30:
+			for _ in range(diff):
+				if not cap.grab():
+					return False
+			self._preview_frame_no = target
+			return True
+		# 其他情况：使用 set() 定位
+		cap.set(cv2.CAP_PROP_POS_FRAMES, target)
+		self._preview_frame_no = target
+		return True
 
 	def load_video(self, path: Path) -> None:
 		capture = cv2.VideoCapture(str(path))
@@ -346,9 +381,15 @@ class RaceVideoToLogApp:
 		duration_sec = (frame_count / fps) if fps > 0 else 0.0
 
 		ok, frame = capture.read()
-		capture.release()
 		if not ok or frame is None:
+			capture.release()
 			raise RuntimeError("无法读取视频第一帧。")
+
+		# 保持 capture 打开用于高效预览（关闭旧的如果有）
+		if self._preview_cap is not None:
+			self._preview_cap.release()
+		self._preview_cap = capture
+		self._preview_frame_no = 0
 
 		self.video_path = path
 		self.metadata = VideoMetadata(
@@ -363,8 +404,6 @@ class RaceVideoToLogApp:
 		self.first_frame_bgr = frame
 		frame_rgb = cv2.cvtColor(self.first_frame_bgr, cv2.COLOR_BGR2RGB)
 		self.first_frame_pil = Image.fromarray(frame_rgb)
-		self._last_canvas_w = 0
-		self._last_canvas_h = 0
 
 		self.file_var.set(str(path))
 		self.duration_var.set(format_duration(duration_sec))
@@ -403,6 +442,7 @@ class RaceVideoToLogApp:
 		y2 = safe_int(self.right_y_var.get())
 		if None in (x1, y1, x2, y2):
 			return None
+		assert x1 is not None and y1 is not None and x2 is not None and y2 is not None
 		return clamp_region(x1, y1, x2, y2, self.metadata.width, self.metadata.height)
 
 	def refresh_preview(self) -> None:
@@ -411,23 +451,27 @@ class RaceVideoToLogApp:
 			self.preview_canvas.delete("all")
 			return
 
-		# 从滑动条直接读取位置
 		pos = int(self._preview_slider.get())
-		if pos > 0 and self.video_path is not None:
-			cap = cv2.VideoCapture(str(self.video_path))
-			cap.set(cv2.CAP_PROP_POS_FRAMES, pos)
-			ok, frame = cap.read()
-			cap.release()
-			if ok and frame is not None:
-				frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-				self._draw_preview_image(Image.fromarray(frame_rgb))
-				self.status_var.set(f"预览帧 #{pos}")
-			else:
-				self._draw_preview_image(self.first_frame_pil)
-				self.status_var.set(f"无法读取帧 #{pos}")
+		cap = self._preview_cap
+
+		if pos > 0 and cap is not None and self.video_path is not None:
+			if self._seek_preview_frame(pos):
+				ok, frame = cap.retrieve()
+				if ok and frame is not None:
+					frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+					self._draw_preview_image(Image.fromarray(frame_rgb))
+					total = self.metadata.frame_count if self.metadata else 0
+					self.status_var.set(f"预览帧 #{pos}/{total}")
+					self._preview_frame_label.configure(text=f"#{pos}")
+					self._update_roi_rect()
+					return
+			# 定位/解码失败，回退到首帧
+			self._draw_preview_image(self.first_frame_pil)
+			self.status_var.set(f"无法读取帧 #{pos}")
 		else:
 			self._draw_preview_image(self.first_frame_pil)
 			self.status_var.set("预览帧 #0（首帧）")
+			self._preview_frame_label.configure(text="#0")
 		self._update_roi_rect()
 
 	def _update_roi_rect(self) -> None:
@@ -440,8 +484,8 @@ class RaceVideoToLogApp:
 			cx2 = x2 * self._preview_scale + self._preview_offset_x
 			cy2 = y2 * self._preview_scale + self._preview_offset_y
 			self.preview_canvas.create_rectangle(
-				cx1, cy1, cx2, cy2, 
-				outline="#ff5050", width=max(2, int(self._preview_scale * 2)), tag="roi_rect"
+				cx1, cy1, cx2, cy2,
+				outline="#ff5050", width=max(2.0, self._preview_scale * 2), tags="roi_rect"
 			)
 
 	def _draw_preview_image(self, image: Image.Image) -> None:
@@ -455,8 +499,8 @@ class RaceVideoToLogApp:
 		display_width = max(1, int(image.width * scale))
 		display_height = max(1, int(image.height * scale))
 
-		self._last_canvas_w = canvas_width
-		self._last_canvas_h = canvas_height
+
+
 		self._preview_scale = scale
 		self._preview_offset_x = (canvas_width - display_width) / 2.0
 		self._preview_offset_y = (canvas_height - display_height) / 2.0
@@ -502,9 +546,9 @@ class RaceVideoToLogApp:
 		selected_key = BACKEND_LABELS_REV.get(selected_label, "auto")
 		actual = _select_backend(selected_key)
 		print(f"[OCR] 后端: {actual}", flush=True)
-		kwargs = _get_model_kwargs("v5_mobile")
+		kwargs = _get_model_kwargs("v6_small")
 		if kwargs is None:
-			print(f"[OCR] 警告: v5_mobile 模型文件不存在")
+			print(f"[OCR] 警告: v6_small 模型文件不存在")
 		self._check_cancel()
 		return RapidOCR(**(kwargs or {}))
 
@@ -586,71 +630,8 @@ class RaceVideoToLogApp:
 				self.root.after(0, self._update_progress,
 					f"[{ocr_engine._gpu_backend}] 正在处理... {len(observations)} 条 ({pct:.1f}%)", pct)
 		return observations
-
-	def _ocr_pipeline(
-		self,
-		raw_frames: list[tuple[float, np.ndarray]],
-		ocr: RapidOCR,
-		target_h: float,
-		pad_px: float,
-		total_frames: int,
-		num_workers: int,
-		max_speed_kmh: float = 400,
-	) -> list[SpeedObservation]:
-		queue_size = num_workers * 2
-		q: Queue = Queue(maxsize=queue_size)
-		errors: list[Exception] = []
-
-		def producer() -> None:
-			try:
-				for timestamp, crop in raw_frames:
-					proc = self.preprocess_crop(crop, target_h, pad_px)
-					q.put((timestamp, proc, crop))
-				q.put(None)
-			except Exception as exc:
-				errors.append(exc)
-				q.put(None)
-
-		t = threading.Thread(target=producer, daemon=True)
-		t.start()
-
-		observations: list[SpeedObservation] = []
-		done = 0
-		while True:
-			item = q.get()
-			if item is None:
-				break
-			timestamp, proc_img, crop = item
-			ocr_result, _ = ocr(proc_img)
-			speed_value, raw_text = extract_speed_value(ocr_result)
-			if speed_value is None:
-				proc_fb = self._preprocess_fallback(crop, target_h, pad_px)
-				ocr_result, _ = ocr(proc_fb)
-				speed_value, raw_text = extract_speed_value(ocr_result)
-			if speed_value is None:
-				# 数字仪表后备链：use_det=False → EasyOCR
-				speed_value, raw_text = ocr_digital_fallback(ocr, crop, max_speed_kmh)
-			# 始终为每一帧生成 observation
-			if speed_value is not None and raw_text is not None:
-				observations.append(SpeedObservation(
-					timestamp=timestamp,
-					raw_speed_kmh=convert_speed_to_kmh(speed_value, self.speed_format_var.get()),
-					raw_text=raw_text,
-				))
-			else:
-				observations.append(SpeedObservation(
-					timestamp=timestamp, raw_speed_kmh=-1.0, raw_text=""))
-			done += 1
-			if done % 10 == 0:
-				pct = (done / total_frames * 90.0) + 5.0
-				self.root.after(0, self._update_progress,
-					f"[{ocr_engine._gpu_backend}] 正在处理... {len(observations)} 条 ({pct:.1f}%)", pct)
-		t.join()
-		if errors:
-			raise errors[0]
-		return observations
-
 	def export_csv(self) -> None:
+
 		if getattr(self, "is_exporting", False):
 			return
 		if self.video_path is None or self.metadata is None or self.first_frame_bgr is None:
@@ -719,7 +700,7 @@ class RaceVideoToLogApp:
 		self.ocr_engines.clear()
 		for engine in engines_to_free:
 			try: del engine
-			except: pass
+			except Exception: pass
 		import gc; gc.collect()
 
 	def _log(self, msg: str) -> None:
@@ -746,15 +727,19 @@ class RaceVideoToLogApp:
 		self._release_ocr_engines()
 		self.status_var.set("已取消。")
 
-	def _finish_export_state(self) -> None:
+	def _finish_export_state(self, mode: str = "") -> None:
 		"""重置导出状态（不弹窗，用于已自行处理结果输出的流程）。"""
-		print("[Baseline] _finish_export_state called", flush=True)
 		self.is_exporting = False
 		self._cancel_flag = False
 		self.export_btn.config(state="normal")
 		self.cancel_btn.config(state="disabled")
 		self.progress_var.set(100.0)
-		self.status_var.set("人工基准完成 — 结果已保存。")
+		if mode == "auto":
+			self.status_var.set("自动锚点完成 — 结果已保存。")
+		elif mode == "baseline":
+			self.status_var.set("人工基准完成 — 结果已保存。")
+		else:
+			self.status_var.set("导出完成。")
 
 	def _on_export_error(self, err: str) -> None:
 		self.is_exporting = False
@@ -766,92 +751,9 @@ class RaceVideoToLogApp:
 		messagebox.showerror("导出失败", err)
 		self.status_var.set("导出失败。")
 
-	def _on_export_success(self, output_path: Path, rows_len: int, elapsed: float,
-		total_frames: int, accuracy: float, backend: str) -> None:
-
-		self.is_exporting = False
-		self._cancel_flag = False
-		self.export_btn.config(state="normal")
-		self.cancel_btn.config(state="disabled")
-		self._release_ocr_engines()
-		self.status_var.set(f"导出完成：{output_path}")
-		self.progress_var.set(100.0)
-		fps_val = total_frames / elapsed if elapsed > 0 else 0.0
-		msg = (
-			f"已导出 {rows_len} 条记录。\n"
-			f"引擎: {backend}  |  "
-			f"用时: {elapsed:.1f}s  |  "
-			f"速度: {fps_val:.1f} fps  |  "
-			f"准确率: {accuracy:.1f}%\n\n"
-			f"{output_path}"
-		)
-		messagebox.showinfo("导出完成", msg)
-
 	def _update_progress(self, msg: str, pct: float) -> None:
 		self.status_var.set(msg)
 		self.progress_var.set(pct)
-
-	def _ocr_cuda_parallel(
-		self,
-		raw_frames: list[tuple[float, np.ndarray]],
-		target_h: float,
-		pad_px: float,
-		total_frames: int,
-		num_workers: int,
-		max_speed_kmh: float = 400,
-	) -> list[SpeedObservation]:
-		"""并行推理：单引擎 + 多线程预处理，OCR 调用由 onnxruntime 内部并行。"""
-		from concurrent.futures import ThreadPoolExecutor, as_completed
-		engines = self.get_ocr_engines(1)
-		engine = engines[0]
-		self._check_cancel()
-
-		with ThreadPoolExecutor(max_workers=num_workers) as pool:
-			preprocessed = list(pool.map(
-				lambda item: (item[0], self.preprocess_crop(item[1], target_h, pad_px)),
-				raw_frames,
-			))
-		self._check_cancel()
-
-		observations: list[SpeedObservation | None] = [None] * len(raw_frames)
-
-		def _ocr_one(idx: int, ts: float, proc: np.ndarray, crop_bgr: np.ndarray) -> tuple[int, SpeedObservation | None]:
-			ocr_result, _ = engine(proc)
-			sv, rt = extract_speed_value(ocr_result)
-			if sv is None:
-				# 备选预处理：CLAHE 增强对比度
-				proc_fb = self._preprocess_fallback(crop_bgr, target_h, pad_px)
-				ocr_result, _ = engine(proc_fb)
-				sv, rt = extract_speed_value(ocr_result)
-			if sv is None:
-				# 数字仪表后备链：use_det=False → EasyOCR
-				sv, rt = ocr_digital_fallback(engine, crop_bgr, max_speed_kmh)
-			if sv is not None and rt is not None:
-				return idx, SpeedObservation(
-					timestamp=ts,
-					raw_speed_kmh=convert_speed_to_kmh(sv, self.speed_format_var.get()),
-					raw_text=rt,
-				)
-			return idx, SpeedObservation(timestamp=ts, raw_speed_kmh=-1.0, raw_text="")
-
-		pool = ThreadPoolExecutor(max_workers=num_workers)
-		try:
-			futures = [pool.submit(_ocr_one, i, ts, proc, raw_frames[i][1]) for i, (ts, proc) in enumerate(preprocessed)]
-			done = 0
-			for f in as_completed(futures):
-				if done % 10 == 0:
-					self._check_cancel()
-				idx, obs = f.result()
-				observations[idx] = obs
-				done += 1
-				if done % 10 == 0:
-					pct = (done / total_frames * 90.0) + 5.0
-					self.root.after(0, self._update_progress,
-						f"[{ocr_engine._gpu_backend}×{num_workers}] 正在处理... {done}/{total_frames} ({pct:.1f}%)", pct)
-		finally:
-			pool.shutdown(wait=False, cancel_futures=True)
-
-		return observations  # 所有帧均已填充（失败帧用 -1.0 标记）
 
 	def _run_export(
 		self,
@@ -872,11 +774,12 @@ class RaceVideoToLogApp:
 
 		num_workers = max(1, min(num_workers, 32))
 
-		self.root.after(0, self._update_progress, "正在初始化 OCR 引擎...", 0.0)
+		self.root.after(0, self._update_progress, "加载 OCR 引擎...", 2.0)
 		self._check_cancel()
-		self.root.update_idletasks()  # 确保进度消息显示
+		self.root.update_idletasks()
 		ocr = self.get_ocr_engine()
-		self.root.update_idletasks()  # 引擎就绪后刷新
+		self.root.after(0, self._update_progress, "OCR 引擎就绪, 解码视频帧...", 5.0)
+		self.root.update_idletasks()
 
 		capture = cv2.VideoCapture(str(self.video_path))
 		if not capture.isOpened():
@@ -884,6 +787,7 @@ class RaceVideoToLogApp:
 
 		x1, y1, x2, y2 = region
 		frame_step = max(1, frame_div)
+		total_video_frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
 
 		raw_frames: list[tuple[float, np.ndarray]] = []
 		frame_index = 0
@@ -891,21 +795,32 @@ class RaceVideoToLogApp:
 		# 解析时间轴范围
 		f_start = _parse_int_or_none(self._frame_start_var.get())
 		f_end = _parse_int_or_none(self._frame_end_var.get())
+		_end_limit = f_end if f_end is not None else total_video_frames
 
-		while True:
-			ok, frame = capture.read()
-			if not ok or frame is None:
-				break
-			if f_end is not None and frame_index >= f_end:
+		while frame_index < total_video_frames:
+			if frame_index >= _end_limit:
 				break
 			if f_start is not None and frame_index < f_start:
+				capture.grab()  # 跳过: 只抓取不解码
 				frame_index += 1
 				continue
 			if frame_index % frame_step != 0:
+				capture.grab()  # 跳过: 只抓取不解码 (div>1 时大幅加速)
 				frame_index += 1
 				continue
-			if frame_index % (frame_step * 100) == 0:
+
+			if not capture.grab():  # 抓取原始帧
+				break
+			ok, frame = capture.retrieve()  # 仅对需要的帧解码
+			if not ok or frame is None:
+				break
+
+			if frame_index % max(1, frame_step * 200) == 0:
 				self._check_cancel()
+				pct = 5.0 + 15.0 * (frame_index / max(_end_limit, 1))
+				self.root.after(0, self._update_progress,
+					f"解码视频: {frame_index}/{_end_limit} 帧", pct)
+
 			timestamp = frame_index / self.metadata.fps if self.metadata.fps > 0 else float(capture.get(cv2.CAP_PROP_POS_MSEC)) / 1000.0
 			crop = frame[y1 : y2 + 1, x1 : x2 + 1].copy()
 			if crop.size == 0:
@@ -933,9 +848,9 @@ class RaceVideoToLogApp:
 				traceback.print_exc()
 				self.root.after(0, lambda: messagebox.showerror(
 					"自动锚点错误", traceback.format_exc()))
-				self.root.after(0, self._finish_export_state)
+				self.root.after(0, lambda: self._finish_export_state("auto"))
 			else:
-				self.root.after(0, self._finish_export_state)
+				self.root.after(0, lambda: self._finish_export_state("auto"))
 		elif mode == "baseline":
 			try:
 				self._run_baseline_mode(raw_frames, total_frames, output_path, region,
@@ -948,9 +863,9 @@ class RaceVideoToLogApp:
 				traceback.print_exc()
 				self.root.after(0, lambda: messagebox.showerror(
 					"人工基准错误", traceback.format_exc()))
-				self.root.after(0, self._finish_export_state)
+				self.root.after(0, lambda: self._finish_export_state("baseline"))
 			else:
-				self.root.after(0, self._finish_export_state)
+				self.root.after(0, lambda: self._finish_export_state("baseline"))
 		else:
 			messagebox.showwarning("未选择模式", "请选择纠错模式（自动锚点或人工基准）。")
 			raise _CancelExport()
@@ -958,11 +873,25 @@ class RaceVideoToLogApp:
 
 
 
-	def _correct_with_anchors(self, rows, observations, raw_frames, ocr, max_speed_kmh, max_accel_mps2, anchor_indices):
-		"""Correction pipeline. Delegates to correction.correct_with_anchors."""
+	def _correct_with_anchors(self, rows: list, observations: list, raw_frames: list, ocr: "RapidOCR", max_speed_kmh: float, max_accel_mps2: float, anchor_indices: set) -> list:
+		"""Correction pipeline. Delegates to correction.correct_with_anchors
+		with a per-frame progress callback for precise x/y updates."""
 		from correction import correct_with_anchors
+		# Accumulate total across all correction stages so progress bar
+		# advances monotonically 60→90% instead of resetting each round.
+		_acc = [0, 0]  # [done_so_far, total_so_far]
+		_initial_total: list[int] = [0]
+		def _prog(done: int, total: int) -> None:
+			if _initial_total[0] == 0:
+				_initial_total[0] = total  # first round sets baseline
+			_acc[0] = _initial_total[0] + done - total if total > 0 else _acc[0] + done
+			pct = min(1.0, _acc[0] / max(_initial_total[0], 1))
+			overall = 60.0 + pct * 30.0
+			self.root.after(0, self._update_progress,
+				f"物理纠错: {_acc[0]} 帧已处理", overall)
 		return correct_with_anchors(rows, observations, raw_frames, ocr,
-			max_speed_kmh, max_accel_mps2, anchor_indices, log_fn=self._log)
+			max_speed_kmh, max_accel_mps2, anchor_indices,
+			log_fn=self._log, progress_fn=_prog)
 
 
 	def _run_auto_anchor_mode(self, raw_frames, total_frames, output_path, region,
@@ -983,7 +912,7 @@ class RaceVideoToLogApp:
 
 		# Auto-select anchors
 		self.root.after(0, self._update_progress, "正在自动识别可靠锚点...", 40.0)
-		anchor_indices = auto_select_anchors(observations, max_speed_kmh)
+		anchor_indices = auto_select_anchors(observations, max_speed_kmh, max_accel_mps2=max_accel_mps2)
 		print(f'[AutoAnchor] Selected {len(anchor_indices)} anchors ({100*len(anchor_indices)/n_obs:.1f}% of frames)', flush=True)
 		if len(anchor_indices) < 3:
 			raise RuntimeError("自动锚点选择失败：未找到足够的可靠帧。")
@@ -996,8 +925,7 @@ class RaceVideoToLogApp:
 			else:
 				rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh, 0])
 
-		# Run Correction B
-		self.root.after(0, self._update_progress, "正在以自动锚点进行物理约束纠错...", 60.0)
+		# Run Correction B (progress updated via per-frame callback)
 		self._check_cancel()
 		print(f'[AutoAnchor] Running Correction B...', flush=True)
 		rows = self._correct_with_anchors(rows, observations, raw_frames, ocr, max_speed_kmh, max_accel_mps2, anchor_indices)
@@ -1018,12 +946,13 @@ class RaceVideoToLogApp:
 		_accuracy = (1 - _corrected_count / len(rows)) * 100 if rows else 100.0
 
 		# Write CSV
+		assert self.video_path is not None
 		vhash = compute_video_hash(self.video_path)
 		with output_path.open("w", newline="", encoding="utf-8-sig") as fh:
 			fh.write(f"# RaceVideoToLog\n")
 			fh.write(f"# video_hash={vhash}, video={self.video_path.name}\n")
 			fh.write(f"# roi={region[0]},{region[1]},{region[2]},{region[3]}, format={self.speed_format_var.get()}\n")
-			fh.write(f"# max_speed={max_speed_kmh}, max_accel={max_accel_mps2}, div={frame_div}, target_h={target_h}, pad={pad_px}, backend={ocr_engine._gpu_backend}, model=v5_mobile, workers={num_workers}, frame_start={self._frame_start_var.get() or ''}, frame_end={self._frame_end_var.get() or ''}, auto_anchor=1\n")
+			fh.write(f"# max_speed={max_speed_kmh}, max_accel={max_accel_mps2}, div={frame_div}, target_h={target_h}, pad={pad_px}, backend={ocr_engine._gpu_backend}, model=v6_small, workers={num_workers}, frame_start={self._frame_start_var.get() or ''}, frame_end={self._frame_end_var.get() or ''}, auto_anchor=1\n")
 			w = csv.writer(fh)
 			for r in rows:
 				w.writerow([f"{r[0]:.2f}", f"{r[1]:.2f}", f"{r[2]:.2f}", str(r[3])])
@@ -1065,7 +994,7 @@ class RaceVideoToLogApp:
 			import threading as _th
 			_ann_done = _th.Event()
 			_ann_error = []
-			def _do_annotation():
+			def _do_annotation() -> None:
 				try:
 					self._run_baseline_annotation(
 						observations, raw_frames, rows, max_speed_kmh, max_accel_mps2)
@@ -1084,15 +1013,13 @@ class RaceVideoToLogApp:
 		# 自动锚点补充：在人工锚点之外自动选择可靠帧作为额外锚点
 		self.root.after(0, self._update_progress,
 			"正在自动识别补充锚点...", 80.0)
-		auto_anchors = auto_select_anchors(observations, max_speed_kmh)
+		auto_anchors = auto_select_anchors(observations, max_speed_kmh, max_accel_mps2=max_accel_mps2)
 		manual_anchors = {i for i in range(n_obs) if rows[i][3] >= 2}
 		merged_anchors = manual_anchors | (auto_anchors - manual_anchors)
 		for i in auto_anchors:
 			if i not in manual_anchors and rows[i][3] == 0:
 				rows[i][3] = 2
 		print(f'[Baseline] Anchors: {len(manual_anchors)} manual + {len(auto_anchors - manual_anchors)} auto = {len(merged_anchors)} total', flush=True)
-		self.root.after(0, self._update_progress,
-			"正在以混合锚点进行物理约束纠错...", 85.0)
 		self._check_cancel()
 		self._log(f"Correction B: {n_obs} rows, anchors={len(merged_anchors)} ({len(manual_anchors)} manual + {len(auto_anchors - manual_anchors)} auto)")
 		print(f'[Baseline] Annotation done, running correction B...', flush=True); rows = self._correct_with_anchors(rows, observations, raw_frames, ocr, max_speed_kmh, max_accel_mps2,
@@ -1109,20 +1036,21 @@ class RaceVideoToLogApp:
 		_corrected_count = sum(1 for r in rows if r[3] >= 1)
 		_accuracy = (1 - _corrected_count / len(rows)) * 100 if rows else 100.0
 		# 写出 CSV（含参数头）
+		assert self.video_path is not None
 		vhash = compute_video_hash(self.video_path)
 		print(f"[Baseline] Hash computed, opening CSV...", flush=True)
 		with output_path.open("w", newline="", encoding="utf-8-sig") as fh:
 			fh.write(f"# RaceVideoToLog\n")
 			fh.write(f"# video_hash={vhash}, video={self.video_path.name}\n")
 			fh.write(f"# roi={region[0]},{region[1]},{region[2]},{region[3]}, format={self.speed_format_var.get()}\n")
-			fh.write(f"# max_speed={max_speed_kmh}, max_accel={max_accel_mps2}, div={frame_div}, target_h={target_h}, pad={pad_px}, backend={ocr_engine._gpu_backend}, model=v5_mobile, workers={num_workers}, frame_start={self._frame_start_var.get() or ''}, frame_end={self._frame_end_var.get() or ''}, baseline_freq={baseline_freq}\n")
+			fh.write(f"# max_speed={max_speed_kmh}, max_accel={max_accel_mps2}, div={frame_div}, target_h={target_h}, pad={pad_px}, backend={ocr_engine._gpu_backend}, model=v6_small, workers={num_workers}, frame_start={self._frame_start_var.get() or ''}, frame_end={self._frame_end_var.get() or ''}, baseline_freq={baseline_freq}\n")
 			w = csv.writer(fh)
 			for r in rows:
 				w.writerow([f"{r[0]:.2f}", f"{r[1]:.2f}", f"{r[2]:.2f}", str(r[3])])
 
 		print(f"[Baseline] CSV written: {output_path}", flush=True)
 
-	def _run_baseline_annotation(self, observations, raw_frames, rows, max_speed_kmh, max_accel_mps2):
+	def _run_baseline_annotation(self, observations: list, raw_frames: list, rows: list, max_speed_kmh: float, max_accel_mps2: float) -> None:
 		"""人工基准标注窗口。用户逐帧检查并输入正确速度值。"""
 		trust = _estimate_raw_trust(observations)
 		total_labeled = 0
@@ -1161,12 +1089,12 @@ class RaceVideoToLogApp:
 		btn_frame.grid(row=4, column=0, columnspan=2, pady=(12, 8))
 
 		# ── 状态 ──
-		current_flagged: list = []
+		current_flagged: list[tuple[int, float, SpeedObservation]] = []
 		idx_iter = iter([])
-		current = [None]
+		current: list[tuple[int, SpeedObservation, float] | None] = [None]
 		done_flag = [False]
 
-		def _rebuild_flagged():
+		def _rebuild_flagged() -> bool:
 			nonlocal idx_iter, current_flagged
 			current_flagged = [(i, trust[i], observations[i]) for i, r in enumerate(rows) if r[3] == 1]
 			if not current_flagged:
@@ -1174,13 +1102,13 @@ class RaceVideoToLogApp:
 			idx_iter = iter(current_flagged)
 			return True
 
-		def _refresh_window():
+		def _refresh_window() -> None:
 			nonlocal total_labeled
 			total_labeled = sum(1 for r in rows if r[3] >= 2)
 			remaining = sum(1 for r in rows if r[3] == 1)
 			bottom_var.set(f"已标注 {total_labeled} 帧  |  剩余 {remaining} 帧  |  跳过=留空并确认")
 
-		def _show_next():
+		def _show_next() -> None:
 			try:
 				ri, score, obs = next(idx_iter)
 			except StopIteration:
@@ -1200,11 +1128,11 @@ class RaceVideoToLogApp:
 			disp_rgb = cv2.cvtColor(disp, cv2.COLOR_BGR2RGB)
 			img = ImageTk.PhotoImage(Image.fromarray(disp_rgb))
 			img_label.configure(image=img)
-			img_label.image = img
+			setattr(img_label, 'image', img)  # keep reference to prevent GC
 			_refresh_window()
 
 		# ── 按钮 ──
-		def _confirm():
+		def _confirm() -> None:
 			if current[0] is None or done_flag[0]:
 				return
 			ri, obs, _ = current[0]
@@ -1218,14 +1146,14 @@ class RaceVideoToLogApp:
 				rows[ri][3] = 0
 			_show_next()
 
-		def _skip():
+		def _skip() -> None:
 			if current[0] is None or done_flag[0]:
 				return
 			ri, obs, _ = current[0]
 			rows[ri][3] = 0
 			_show_next()
 
-		def _close():
+		def _close() -> None:
 			done_flag[0] = True
 			win.destroy()
 
@@ -1246,12 +1174,25 @@ class RaceVideoToLogApp:
 		else:
 			win.destroy()
 
+	def _release_preview_cap(self) -> None:
+		"""释放预览用的 VideoCapture。"""
+		if self._preview_cap is not None:
+			self._preview_cap.release()
+			self._preview_cap = None
+		self._preview_frame_no = 0
+
 	def run(self) -> None:
+		self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 		self.root.mainloop()
+
+	def _on_close(self) -> None:
+		"""关闭窗口时清理资源。"""
+		self._release_preview_cap()
+		self.root.destroy()
 
 
 def main() -> None:
-	import argparse, sys
+	import argparse
 	parser = argparse.ArgumentParser(description="RaceVideoToLog - 视频速度提取工具")
 	parser.add_argument("video", nargs="?", help="视频文件路径")
 	parser.add_argument("--roi", nargs=4, type=int, metavar=("X1","Y1","X2","Y2"), help="识别范围")
@@ -1263,7 +1204,7 @@ def main() -> None:
 	parser.add_argument("--pad", type=int, default=0)
 	parser.add_argument("--workers", type=int, default=4)
 	parser.add_argument("--backend", choices=["auto","cuda","cpu"], default="auto")
-	parser.add_argument("--ocr-model", choices=["v5_mobile"], default="v5_mobile")
+	parser.add_argument("--ocr-model", choices=["v6_small"], default="v6_small")
 	parser.add_argument("-o", "--output", type=str)
 	parser.add_argument("--analysis", nargs=2, metavar=("CSV1","CSV2"))
 	parser.add_argument("--analysis-out", type=str)
@@ -1278,9 +1219,6 @@ def main() -> None:
 		from analysis import run_analysis_headless
 		run_analysis_headless(args)
 	else:
-		if sys.platform == "win32":
-			import ctypes
-			ctypes.windll.user32.ShowWindow(ctypes.windll.kernel32.GetConsoleWindow(), 0)
 		app = RaceVideoToLogApp()
 		app.run()
 

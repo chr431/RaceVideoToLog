@@ -24,6 +24,8 @@ hiddenimports = [
     # numpy 2.x PyInstaller 兼容性修复
     'numpy._core._multiarray_umath', 'numpy._core.multiarray',
     'numpy._core.umath', 'numpy._core._methods',
+    # rapidocr 内部依赖
+    'yaml',
 ]
 
 # rapidocr_onnxruntime（OCR 引擎）
@@ -38,7 +40,12 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 # v5_server 模型 (已从 UI 移除，省 165MB)
 # DirectML provider (仅 CUDA 需要)
 _EXCLUDE_FILES = {
+    # v5 models (replaced by v6_small)
+    'ch_PP-OCRv5_mobile_det_infer.onnx', 'ch_PP-OCRv5_mobile_rec_infer.onnx',
     'ch_PP-OCRv5_det_server_infer.onnx', 'ch_PP-OCRv5_rec_server_infer.onnx',
+    # v6 extras (only small needed)
+    'PP-OCRv6_det_tiny.onnx', 'PP-OCRv6_rec_tiny.onnx',
+    'PP-OCRv6_det_medium.onnx', 'PP-OCRv6_rec_medium.onnx',
     'DirectML.dll',
 }
 datas = [(s, d) for s, d in datas if os.path.basename(s) not in _EXCLUDE_FILES]
@@ -52,7 +59,12 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 # v5_server 模型 (已从 UI 移除，省 165MB)
 # DirectML provider (仅 CUDA 需要)
 _EXCLUDE_FILES = {
+    # v5 models (replaced by v6_small)
+    'ch_PP-OCRv5_mobile_det_infer.onnx', 'ch_PP-OCRv5_mobile_rec_infer.onnx',
     'ch_PP-OCRv5_det_server_infer.onnx', 'ch_PP-OCRv5_rec_server_infer.onnx',
+    # v6 extras (only small needed)
+    'PP-OCRv6_det_tiny.onnx', 'PP-OCRv6_rec_tiny.onnx',
+    'PP-OCRv6_det_medium.onnx', 'PP-OCRv6_rec_medium.onnx',
     'DirectML.dll',
 }
 datas = [(s, d) for s, d in datas if os.path.basename(s) not in _EXCLUDE_FILES]
@@ -121,7 +133,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,  # 不移除符号表（避免破坏 python313.dll）
-    upx=True,
+    upx=False,  # 禁用 UPX 避免压缩损坏 DLL
     upx_exclude=[
         'onnxruntime.dll',
         'onnxruntime_providers_cuda.dll',
@@ -129,7 +141,7 @@ exe = EXE(
         'opencv_world4100.dll',
     ],
     runtime_tmpdir=None,
-    console=True,
+    console=False,  # GUI 模式不弹控制台，CLI 从终端启动时输出正常
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
