@@ -216,13 +216,7 @@ class RaceVideoToLogApp:
 		self.preview_canvas.bind("<B1-Motion>", self._on_drag_motion)
 		self.preview_canvas.bind("<ButtonRelease-1>", self._on_drag_end)
 		self.preview_canvas.bind("<ButtonPress-3>", lambda e: None)  # 右键保留
-		# 滚轮 + 方向键精确帧导航
-		self.preview_canvas.bind("<Enter>", lambda e: self.preview_canvas.focus_set())
-		self.preview_canvas.bind("<MouseWheel>", self._on_preview_scroll)
-		self.preview_canvas.bind("<Shift-MouseWheel>", self._on_preview_scroll)
-		# 备用：root 窗口也绑定滚轮（防止 canvas 焦点丢失时滚轮无效）
-		self.root.bind("<MouseWheel>", self._on_preview_scroll_root, add="+")
-		self.root.bind("<Shift-MouseWheel>", self._on_preview_scroll_root, add="+")
+		# 方向键精确帧导航
 		self.root.bind("<Left>", lambda e: self._step_preview_frame(-1))
 		self.root.bind("<Right>", lambda e: self._step_preview_frame(1))
 		self.root.bind("<Up>", lambda e: self._step_preview_frame(10))
@@ -237,7 +231,6 @@ class RaceVideoToLogApp:
 		self._preview_slider.grid(row=0, column=0, sticky="ew")
 		self._preview_frame_label = ttk.Label(slider_row, text="#0", width=8, anchor="e")
 		self._preview_frame_label.grid(row=0, column=1, padx=(6, 2))
-		ttk.Button(slider_row, text="刷新预览", command=self.refresh_preview).grid(row=0, column=2, padx=(2, 0))
 
 		# 预览画布右键：重置视图
 		# Row 1: 底部状态栏（OCR 处理 tab 使用，数据分析 tab 隐藏）
@@ -329,19 +322,6 @@ class RaceVideoToLogApp:
 		if self.preview_after_id is not None:
 			self.root.after_cancel(self.preview_after_id)
 		self.preview_after_id = self.root.after(200, self.refresh_preview)
-
-	def _on_preview_scroll(self, event: tk.Event) -> None:
-		"""鼠标滚轮：上下滚动 ±1 帧，Shift+滚轮 ±10 帧。"""
-		delta = -1 if event.delta > 0 else 1
-		if int(event.state) & 0x0001:  # Shift held
-			delta *= 10
-		self._step_preview_frame(delta)
-
-	def _on_preview_scroll_root(self, event: tk.Event) -> None:
-		"""root 窗口的滚轮回调：仅当鼠标在预览画布上方时转发。"""
-		widget = self.root.winfo_containing(event.x_root, event.y_root)
-		if widget is self.preview_canvas:
-			self._on_preview_scroll(event)
 
 	def _step_preview_frame(self, delta: int) -> None:
 		"""以 delta 帧为单位移动预览位置。"""
