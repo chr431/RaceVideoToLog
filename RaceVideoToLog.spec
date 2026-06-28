@@ -24,6 +24,8 @@ hiddenimports = [
     # numpy 2.x PyInstaller 兼容性修复
     'numpy._core._multiarray_umath', 'numpy._core.multiarray',
     'numpy._core.umath', 'numpy._core._methods',
+    # rapidocr 内部依赖
+    'yaml',
 ]
 
 # rapidocr_onnxruntime（OCR 引擎）
@@ -131,7 +133,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,  # 不移除符号表（避免破坏 python313.dll）
-    upx=True,
+    upx=False,  # 禁用 UPX 避免压缩损坏 DLL
     upx_exclude=[
         'onnxruntime.dll',
         'onnxruntime_providers_cuda.dll',
