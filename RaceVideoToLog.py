@@ -217,8 +217,12 @@ class RaceVideoToLogApp:
 		self.preview_canvas.bind("<ButtonRelease-1>", self._on_drag_end)
 		self.preview_canvas.bind("<ButtonPress-3>", lambda e: None)  # 右键保留
 		# 滚轮 + 方向键精确帧导航
+		self.preview_canvas.bind("<Enter>", lambda e: self.preview_canvas.focus_set())
 		self.preview_canvas.bind("<MouseWheel>", self._on_preview_scroll)
 		self.preview_canvas.bind("<Shift-MouseWheel>", self._on_preview_scroll)
+		# 备用：root 窗口也绑定滚轮（防止 canvas 焦点丢失时滚轮无效）
+		self.root.bind("<MouseWheel>", self._on_preview_scroll_root, add="+")
+		self.root.bind("<Shift-MouseWheel>", self._on_preview_scroll_root, add="+")
 		self.root.bind("<Left>", lambda e: self._step_preview_frame(-1))
 		self.root.bind("<Right>", lambda e: self._step_preview_frame(1))
 		self.root.bind("<Up>", lambda e: self._step_preview_frame(10))
@@ -332,6 +336,12 @@ class RaceVideoToLogApp:
 		if int(event.state) & 0x0001:  # Shift held
 			delta *= 10
 		self._step_preview_frame(delta)
+
+	def _on_preview_scroll_root(self, event: tk.Event) -> None:
+		"""root 窗口的滚轮回调：仅当鼠标在预览画布上方时转发。"""
+		widget = self.root.winfo_containing(event.x_root, event.y_root)
+		if widget is self.preview_canvas:
+			self._on_preview_scroll(event)
 
 	def _step_preview_frame(self, delta: int) -> None:
 		"""以 delta 帧为单位移动预览位置。"""

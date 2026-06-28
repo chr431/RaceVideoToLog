@@ -55,7 +55,7 @@ def parse_csv(path: str | Path) -> tuple[list[float], list[float], list[float], 
 					flags.append(int(parts[3]) if len(parts) > 3 else 0)
 				except ValueError:
 					continue
-	# 裁剪起始零速帧
+	# 裁剪起始零速帧，并将时间轴和距离轴归零
 	start = 0
 	for i, s in enumerate(speeds):
 		if s > 0:
@@ -64,11 +64,15 @@ def parse_csv(path: str | Path) -> tuple[list[float], list[float], list[float], 
 	if start > 0:
 		times = times[start:]
 		speeds = speeds[start:]
-		base_dist = dists[start]
-		dists = [d - base_dist for d in dists[start:]]
+		dists = dists[start:]
 		flags = flags[start:]
+	# 始终归零时间轴和距离轴（不受 --frame-start 参数影响）
+	if times:
 		base_time = times[0]
 		times = [t - base_time for t in times]
+	if dists:
+		base_dist = dists[0]
+		dists = [d - base_dist for d in dists]
 	return times, dists, speeds, flags
 
 
