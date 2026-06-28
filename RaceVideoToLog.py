@@ -894,12 +894,18 @@ class RaceVideoToLogApp:
 		"""Correction pipeline. Delegates to correction.correct_with_anchors
 		with a per-frame progress callback for precise x/y updates."""
 		from correction import correct_with_anchors
+		# Accumulate total across all correction stages so progress bar
+		# advances monotonically 60→90% instead of resetting each round.
+		_acc = [0, 0]  # [done_so_far, total_so_far]
+		_initial_total: list[int] = [0]
 		def _prog(done: int, total: int) -> None:
-			# Map done/total within correction to 60-90% of overall progress
-			pct = done / max(total, 1)
+			if _initial_total[0] == 0:
+				_initial_total[0] = total  # first round sets baseline
+			_acc[0] = _initial_total[0] + done - total if total > 0 else _acc[0] + done
+			pct = min(1.0, _acc[0] / max(_initial_total[0], 1))
 			overall = 60.0 + pct * 30.0
 			self.root.after(0, self._update_progress,
-				f"物理纠错: {done}/{total} 帧", overall)
+				f"物理纠错: {_acc[0]} 帧已处理", overall)
 		return correct_with_anchors(rows, observations, raw_frames, ocr,
 			max_speed_kmh, max_accel_mps2, anchor_indices,
 			log_fn=self._log, progress_fn=_prog)
@@ -936,8 +942,7 @@ class RaceVideoToLogApp:
 			else:
 				rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh, 0])
 
-		# Run Correction B
-		self.root.after(0, self._update_progress, "正在以自动锚点进行物理约束纠错...", 60.0)
+		# Run Correction B (progress updated via per-frame callback)
 		self._check_cancel()
 		print(f'[AutoAnchor] Running Correction B...', flush=True)
 		rows = self._correct_with_anchors(rows, observations, raw_frames, ocr, max_speed_kmh, max_accel_mps2, anchor_indices)
@@ -1032,8 +1037,6 @@ class RaceVideoToLogApp:
 			if i not in manual_anchors and rows[i][3] == 0:
 				rows[i][3] = 2
 		print(f'[Baseline] Anchors: {len(manual_anchors)} manual + {len(auto_anchors - manual_anchors)} auto = {len(merged_anchors)} total', flush=True)
-		self.root.after(0, self._update_progress,
-			"正在以混合锚点进行物理约束纠错...", 85.0)
 		self._check_cancel()
 		self._log(f"Correction B: {n_obs} rows, anchors={len(merged_anchors)} ({len(manual_anchors)} manual + {len(auto_anchors - manual_anchors)} auto)")
 		print(f'[Baseline] Annotation done, running correction B...', flush=True); rows = self._correct_with_anchors(rows, observations, raw_frames, ocr, max_speed_kmh, max_accel_mps2,
