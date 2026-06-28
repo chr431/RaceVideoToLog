@@ -139,7 +139,7 @@ exe = EXE(
         'opencv_world4100.dll',
     ],
     runtime_tmpdir=None,
-    console=True,
+    console=False,  # GUI 模式不弹控制台，CLI 从终端启动时输出正常
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

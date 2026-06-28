@@ -1206,7 +1206,7 @@ class RaceVideoToLogApp:
 
 
 def main() -> None:
-	import argparse, sys
+	import argparse
 	parser = argparse.ArgumentParser(description="RaceVideoToLog - 视频速度提取工具")
 	parser.add_argument("video", nargs="?", help="视频文件路径")
 	parser.add_argument("--roi", nargs=4, type=int, metavar=("X1","Y1","X2","Y2"), help="识别范围")
@@ -1233,9 +1233,6 @@ def main() -> None:
 		from analysis import run_analysis_headless
 		run_analysis_headless(args)
 	else:
-		if sys.platform == "win32":
-			import ctypes
-			ctypes.windll.user32.ShowWindow(ctypes.windll.kernel32.GetConsoleWindow(), 0)
 		app = RaceVideoToLogApp()
 		app.run()
 
