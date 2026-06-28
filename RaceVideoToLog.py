@@ -727,15 +727,19 @@ class RaceVideoToLogApp:
 		self._release_ocr_engines()
 		self.status_var.set("已取消。")
 
-	def _finish_export_state(self) -> None:
+	def _finish_export_state(self, mode: str = "") -> None:
 		"""重置导出状态（不弹窗，用于已自行处理结果输出的流程）。"""
-		print("[Baseline] _finish_export_state called", flush=True)
 		self.is_exporting = False
 		self._cancel_flag = False
 		self.export_btn.config(state="normal")
 		self.cancel_btn.config(state="disabled")
 		self.progress_var.set(100.0)
-		self.status_var.set("人工基准完成 — 结果已保存。")
+		if mode == "auto":
+			self.status_var.set("自动锚点完成 — 结果已保存。")
+		elif mode == "baseline":
+			self.status_var.set("人工基准完成 — 结果已保存。")
+		else:
+			self.status_var.set("导出完成。")
 
 	def _on_export_error(self, err: str) -> None:
 		self.is_exporting = False
@@ -746,27 +750,6 @@ class RaceVideoToLogApp:
 		self._release_ocr_engines()
 		messagebox.showerror("导出失败", err)
 		self.status_var.set("导出失败。")
-
-	def _on_export_success(self, output_path: Path, rows_len: int, elapsed: float,
-		total_frames: int, accuracy: float, backend: str) -> None:
-
-		self.is_exporting = False
-		self._cancel_flag = False
-		self.export_btn.config(state="normal")
-		self.cancel_btn.config(state="disabled")
-		self._release_ocr_engines()
-		self.status_var.set(f"导出完成：{output_path}")
-		self.progress_var.set(100.0)
-		fps_val = total_frames / elapsed if elapsed > 0 else 0.0
-		msg = (
-			f"已导出 {rows_len} 条记录。\n"
-			f"引擎: {backend}  |  "
-			f"用时: {elapsed:.1f}s  |  "
-			f"速度: {fps_val:.1f} fps  |  "
-			f"准确率: {accuracy:.1f}%\n\n"
-			f"{output_path}"
-		)
-		messagebox.showinfo("导出完成", msg)
 
 	def _update_progress(self, msg: str, pct: float) -> None:
 		self.status_var.set(msg)
@@ -865,9 +848,9 @@ class RaceVideoToLogApp:
 				traceback.print_exc()
 				self.root.after(0, lambda: messagebox.showerror(
 					"自动锚点错误", traceback.format_exc()))
-				self.root.after(0, self._finish_export_state)
+				self.root.after(0, lambda: self._finish_export_state("auto"))
 			else:
-				self.root.after(0, self._finish_export_state)
+				self.root.after(0, lambda: self._finish_export_state("auto"))
 		elif mode == "baseline":
 			try:
 				self._run_baseline_mode(raw_frames, total_frames, output_path, region,
@@ -880,9 +863,9 @@ class RaceVideoToLogApp:
 				traceback.print_exc()
 				self.root.after(0, lambda: messagebox.showerror(
 					"人工基准错误", traceback.format_exc()))
-				self.root.after(0, self._finish_export_state)
+				self.root.after(0, lambda: self._finish_export_state("baseline"))
 			else:
-				self.root.after(0, self._finish_export_state)
+				self.root.after(0, lambda: self._finish_export_state("baseline"))
 		else:
 			messagebox.showwarning("未选择模式", "请选择纠错模式（自动锚点或人工基准）。")
 			raise _CancelExport()
