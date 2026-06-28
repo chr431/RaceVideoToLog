@@ -35,6 +35,9 @@ class RaceVideoToLogApp:
 		self.first_frame_bgr: np.ndarray | None = None
 		self.preview_photo: ImageTk.PhotoImage | None = None
 		self.preview_after_id: str | None = None
+		self._preview_cap: cv2.VideoCapture | None = None  # 持久化的预览用 VideoCapture
+		self._preview_frame_no: int = 0  # 当前预览帧号
+		self._preview_throttle_id: str | None = None  # 拖动节流
 		self.ocr_engine: RapidOCR | None = None
 		self.ocr_engines: list[RapidOCR] = []
 
@@ -213,15 +216,24 @@ class RaceVideoToLogApp:
 		self.preview_canvas.bind("<B1-Motion>", self._on_drag_motion)
 		self.preview_canvas.bind("<ButtonRelease-1>", self._on_drag_end)
 		self.preview_canvas.bind("<ButtonPress-3>", lambda e: None)  # 右键保留
+		# 滚轮 + 方向键精确帧导航
+		self.preview_canvas.bind("<MouseWheel>", self._on_preview_scroll)
+		self.preview_canvas.bind("<Shift-MouseWheel>", self._on_preview_scroll)
+		self.root.bind("<Left>", lambda e: self._step_preview_frame(-1))
+		self.root.bind("<Right>", lambda e: self._step_preview_frame(1))
+		self.root.bind("<Up>", lambda e: self._step_preview_frame(10))
+		self.root.bind("<Down>", lambda e: self._step_preview_frame(-10))
 
-		# 视频帧位置滑动条 + 刷新按钮
+		# 视频帧位置滑动条 + 帧号标签
 		slider_row = ttk.Frame(preview_box)
 		slider_row.grid(row=1, column=0, sticky="ew", pady=(6, 0))
 		slider_row.columnconfigure(0, weight=1)
 		self._preview_slider = ttk.Scale(slider_row, from_=0, to=1, variable=self._preview_frame_pos,
-			orient="horizontal")
+			orient="horizontal", command=self._on_slider_drag)
 		self._preview_slider.grid(row=0, column=0, sticky="ew")
-		ttk.Button(slider_row, text="刷新预览", command=self.refresh_preview).grid(row=0, column=1, padx=(8, 0))
+		self._preview_frame_label = ttk.Label(slider_row, text="#0", width=8, anchor="e")
+		self._preview_frame_label.grid(row=0, column=1, padx=(6, 2))
+		ttk.Button(slider_row, text="刷新预览", command=self.refresh_preview).grid(row=0, column=2, padx=(2, 0))
 
 		# 预览画布右键：重置视图
 		# Row 1: 底部状态栏（OCR 处理 tab 使用，数据分析 tab 隐藏）
@@ -314,6 +326,58 @@ class RaceVideoToLogApp:
 			self.root.after_cancel(self.preview_after_id)
 		self.preview_after_id = self.root.after(200, self.refresh_preview)
 
+	def _on_preview_scroll(self, event: tk.Event) -> None:
+		"""鼠标滚轮：上下滚动 ±1 帧，Shift+滚轮 ±10 帧。"""
+		delta = -1 if event.delta > 0 else 1
+		if int(event.state) & 0x0001:  # Shift held
+			delta *= 10
+		self._step_preview_frame(delta)
+
+	def _step_preview_frame(self, delta: int) -> None:
+		"""以 delta 帧为单位移动预览位置。"""
+		if not self.metadata:
+			return
+		pos = int(self._preview_slider.get())
+		new_pos = max(0, min(self.metadata.frame_count - 1, pos + delta))
+		self._preview_slider.set(new_pos)
+		self._preview_frame_pos.set(new_pos)
+		self._throttle_preview()
+
+	def _on_slider_drag(self, _value: str) -> None:
+		"""滑块拖动时实时更新预览（节流）。"""
+		self._throttle_preview()
+
+	def _throttle_preview(self) -> None:
+		"""节流预览刷新：30ms 内只触发一次。"""
+		if self._preview_throttle_id is not None:
+			self.root.after_cancel(self._preview_throttle_id)
+		self._preview_throttle_id = self.root.after(30, self._do_refresh_preview)
+
+	def _do_refresh_preview(self) -> None:
+		"""实际执行预览帧刷新（由节流器调用）。"""
+		self._preview_throttle_id = None
+		self.refresh_preview()
+
+	def _seek_preview_frame(self, target: int) -> bool:
+		"""高效定位 VideoCapture 到目标帧。小跳用 grab()，大跳用 set()。
+		返回 True 表示成功。"""
+		cap = self._preview_cap
+		if cap is None:
+			return False
+		current = self._preview_frame_no
+		diff = target - current
+		# 小范围前跳：连续 grab() 比 seek 更快（避免关键帧搜索）
+		if 0 < diff <= 30:
+			for _ in range(diff):
+				if not cap.grab():
+					return False
+			self._preview_frame_no = target
+			return True
+		# 其他情况：使用 set() 定位
+		cap.set(cv2.CAP_PROP_POS_FRAMES, target)
+		self._preview_frame_no = target
+		return True
+
 	def load_video(self, path: Path) -> None:
 		capture = cv2.VideoCapture(str(path))
 		if not capture.isOpened():
@@ -327,9 +391,15 @@ class RaceVideoToLogApp:
 		duration_sec = (frame_count / fps) if fps > 0 else 0.0
 
 		ok, frame = capture.read()
-		capture.release()
 		if not ok or frame is None:
+			capture.release()
 			raise RuntimeError("无法读取视频第一帧。")
+
+		# 保持 capture 打开用于高效预览（关闭旧的如果有）
+		if self._preview_cap is not None:
+			self._preview_cap.release()
+		self._preview_cap = capture
+		self._preview_frame_no = 0
 
 		self.video_path = path
 		self.metadata = VideoMetadata(
@@ -391,23 +461,27 @@ class RaceVideoToLogApp:
 			self.preview_canvas.delete("all")
 			return
 
-		# 从滑动条直接读取位置
 		pos = int(self._preview_slider.get())
-		if pos > 0 and self.video_path is not None:
-			cap = cv2.VideoCapture(str(self.video_path))
-			cap.set(cv2.CAP_PROP_POS_FRAMES, pos)
-			ok, frame = cap.read()
-			cap.release()
-			if ok and frame is not None:
-				frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-				self._draw_preview_image(Image.fromarray(frame_rgb))
-				self.status_var.set(f"预览帧 #{pos}")
-			else:
-				self._draw_preview_image(self.first_frame_pil)
-				self.status_var.set(f"无法读取帧 #{pos}")
+		cap = self._preview_cap
+
+		if pos > 0 and cap is not None and self.video_path is not None:
+			if self._seek_preview_frame(pos):
+				ok, frame = cap.retrieve()
+				if ok and frame is not None:
+					frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+					self._draw_preview_image(Image.fromarray(frame_rgb))
+					total = self.metadata.frame_count if self.metadata else 0
+					self.status_var.set(f"预览帧 #{pos}/{total}")
+					self._preview_frame_label.configure(text=f"#{pos}")
+					self._update_roi_rect()
+					return
+			# 定位/解码失败，回退到首帧
+			self._draw_preview_image(self.first_frame_pil)
+			self.status_var.set(f"无法读取帧 #{pos}")
 		else:
 			self._draw_preview_image(self.first_frame_pil)
 			self.status_var.set("预览帧 #0（首帧）")
+			self._preview_frame_label.configure(text="#0")
 		self._update_roi_rect()
 
 	def _update_roi_rect(self) -> None:
@@ -1123,8 +1197,21 @@ class RaceVideoToLogApp:
 		else:
 			win.destroy()
 
+	def _release_preview_cap(self) -> None:
+		"""释放预览用的 VideoCapture。"""
+		if self._preview_cap is not None:
+			self._preview_cap.release()
+			self._preview_cap = None
+		self._preview_frame_no = 0
+
 	def run(self) -> None:
+		self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 		self.root.mainloop()
+
+	def _on_close(self) -> None:
+		"""关闭窗口时清理资源。"""
+		self._release_preview_cap()
+		self.root.destroy()
 
 
 def main() -> None:
