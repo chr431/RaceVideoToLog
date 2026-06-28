@@ -130,12 +130,17 @@ def run_headless(args: argparse.Namespace) -> None:
 
 	# Correction（与 GUI 共享同一实现, 添加 CLI 进度回调）
 	from correction import correct_with_anchors
-	def _cli_progress(msg: str, _pct: float) -> None:
-		print(f"  {msg}", flush=True)
+	_cli_progress_called = [False]
+	def _cli_progress(done: int, total: int) -> None:
+		_cli_progress_called[0] = True
+		if done % max(1, total // 10) == 0 or done == total:
+			print(f"\r  纠错: {done}/{total} 帧", end="", flush=True)
 	rows_data = correct_with_anchors(
 		rows_data, observations, raw_frames, ocr,
 		args.max_speed, args.max_accel, anchor_indices,
 		progress_fn=_cli_progress)
+	if _cli_progress_called[0]:
+		print(f"\r  纠错: 完成" + " " * 10)
 
 	# 积分距离
 	dist = 0.0; prev_t, prev_v = None, None

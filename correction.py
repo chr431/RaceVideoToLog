@@ -20,7 +20,7 @@ def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: 
 	以 anchor_indices 中帧的速度为硬约束（固定不变），
 	对其余帧进行错误检测、重OCR、最优选择和级联填充。
 
-	progress_fn(msg, pct_0_to_100) — 用于更新 GUI 进度条
+	progress_fn(done, total): 在每个待修复帧处理完时调用, 提供精确进度。
 	Returns: 修改后的 rows（原地修改）
 	"""
 	if len(anchor_indices) < 2:
@@ -32,27 +32,20 @@ def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: 
 
 	if log_fn:
 		log_fn(f"Correction: {n} rows, {len(anchors)} anchors")
-	if progress_fn:
-		progress_fn(f"错误检测 ({n} 帧)...", 5.0)
 
 	# ── 阶段 1：错误检测 ──
 	error_set = _detect_errors(rows, anchors, times, max_speed_kmh, max_accel_mps2)
 	if log_fn:
 		log_fn(f"  Stage 1: detected {len(error_set)} errors")
-	if progress_fn:
-		progress_fn(f"检测到 {len(error_set)} 处错误, 重OCR修复...", 20.0)
 	if not error_set:
-		if progress_fn:
-			progress_fn("纠错完成 (无错误)", 100.0)
 		return rows
 
 	# ── 阶段 2+3：重 OCR + 最优选择（首轮）──
 	fixed = _fix_errors(rows, observations, raw_frames, ocr, error_set,
-	                    anchors, times, max_speed_kmh, max_accel_mps2)
+	                    anchors, times, max_speed_kmh, max_accel_mps2,
+	                    progress_fn=progress_fn)
 	if log_fn:
 		log_fn(f"  Stage 2+3: fixed {fixed} frames in round 1")
-	if progress_fn:
-		progress_fn(f"首轮修复 {fixed} 帧, 多轮迭代...", 40.0)
 
 	# ── 阶段 4：多轮迭代 ──
 	max_rounds = 3
@@ -61,11 +54,10 @@ def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: 
 		if not error_set:
 			break
 		fixed = _fix_errors(rows, observations, raw_frames, ocr, error_set,
-		                    anchors, times, max_speed_kmh, max_accel_mps2)
+		                    anchors, times, max_speed_kmh, max_accel_mps2,
+		                    progress_fn=progress_fn)
 		if log_fn:
 			log_fn(f"  Stage 4 round {rnd}: {len(error_set)} errors, fixed {fixed}")
-		if progress_fn:
-			progress_fn(f"第 {rnd} 轮: {len(error_set)} 错误, 修复 {fixed} 帧", 40.0 + 20.0 * (rnd - 1) / max_rounds)
 
 	# ── 阶段 5：迭代填充直到收敛（处理级联效应）──
 	fill_pass = 0
@@ -73,15 +65,12 @@ def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: 
 		error_set = _detect_errors(rows, anchors, times, max_speed_kmh, max_accel_mps2)
 		if not error_set:
 			break
-		_fill_unrecoverable(rows, anchors, error_set, times, max_speed_kmh, max_accel_mps2)
+		_fill_unrecoverable(rows, anchors, error_set, times, max_speed_kmh, max_accel_mps2,
+		                    progress_fn=progress_fn)
 		if log_fn:
 			log_fn(f"  Stage 5 pass {fill_pass+1}: filled {len(error_set)} unrecoverable frames")
-		if progress_fn:
-			progress_fn(f"级联填充 {fill_pass+1}: {len(error_set)} 帧", 65.0 + 25.0 * (fill_pass + 1) / 10)
 		fill_pass += 1
 
-	if progress_fn:
-		progress_fn("纠错完成", 95.0)
 	return rows
 
 
@@ -224,12 +213,14 @@ def _detect_errors(rows: list, anchors: set, times: list, max_speed_kmh: float, 
 
 
 def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR", error_set: set,
-                anchors: set, times: list, max_speed_kmh: float, max_accel_mps2: float) -> int:
+                anchors: set, times: list, max_speed_kmh: float, max_accel_mps2: float,
+                progress_fn: "Callable | None" = None) -> int:
 	"""阶段 2+3：对每个 error 帧重 OCR 获取备选，选最优值填入。"""
 	fixed = 0
-	for i in error_set:
-		if i in anchors:
-			continue
+	progress_done = 0
+	error_list = sorted(i for i in error_set if i not in anchors)
+	total = len(error_list)
+	for i in error_list:
 		candidates = list(_re_ocr_frame(raw_frames[i][1], ocr, max_speed_kmh))
 		interp_cand = _interp_candidate(i, rows, anchors, times, max_speed_kmh)
 		if interp_cand is not None:
@@ -238,36 +229,35 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
 		confusion_cands = build_speed_candidates(observations[oid].raw_text, max_speed_kmh)
 		candidates.extend(c for c in confusion_cands if c not in candidates)
 
-		if not candidates:
-			continue
+		if candidates:
+			raw_val = rows[i][2]
+			reocr_unique = _re_ocr_frame(raw_frames[i][1], ocr, max_speed_kmh)
+			if len(reocr_unique) <= 1 and interp_cand is not None and abs(interp_cand - raw_val) > 10.0:
+				if abs(raw_val - interp_cand) > 0.5:
+					rows[i][2] = interp_cand
+					if rows[i][3] == 0:
+						rows[i][3] = 1
+					fixed += 1
+			else:
+				best_val = None
+				best_score = -1.0
+				for cand in set(candidates):
+					if not (0 <= cand <= max_speed_kmh):
+						continue
+					score = _score_candidate(cand, i, rows, anchors, error_set, times, max_speed_kmh, max_accel_mps2)
+					if score > best_score:
+						best_score = score
+						best_val = cand
 
-		# 若重 OCR 无法产生与原值不同的候选，且插值候选偏差 > 10 km/h，
-		# 直接使用插值（信任物理模型优于 OCR）
-		raw_val = rows[i][2]
-		reocr_unique = _re_ocr_frame(raw_frames[i][1], ocr, max_speed_kmh)
-		if len(reocr_unique) <= 1 and interp_cand is not None and abs(interp_cand - raw_val) > 10.0:
-			if abs(raw_val - interp_cand) > 0.5:
-				rows[i][2] = interp_cand
-				if rows[i][3] == 0:
-					rows[i][3] = 1
-				fixed += 1
-			continue
+				if best_val is not None and abs(rows[i][2] - best_val) > 0.5:
+					rows[i][2] = best_val
+					if rows[i][3] == 0:
+						rows[i][3] = 1
+					fixed += 1
 
-		best_val = None
-		best_score = -1.0
-		for cand in set(candidates):
-			if not (0 <= cand <= max_speed_kmh):
-				continue
-			score = _score_candidate(cand, i, rows, anchors, error_set, times, max_speed_kmh, max_accel_mps2)
-			if score > best_score:
-				best_score = score
-				best_val = cand
-
-		if best_val is not None and abs(rows[i][2] - best_val) > 0.5:
-			rows[i][2] = best_val
-			if rows[i][3] == 0:
-				rows[i][3] = 1
-			fixed += 1
+		progress_done += 1
+		if progress_fn:
+			progress_fn(progress_done, total)
 	return fixed
 
 
@@ -400,10 +390,13 @@ def _score_candidate(val: float, i: int, rows: list, anchors: set, error_set: se
 	return neighbor_score * 0.4 + anchor_score * 0.35 + smoothness_score * 0.25
 
 
-def _fill_unrecoverable(rows: list, anchors: set, error_set: set, times: list, max_speed_kmh: float, max_accel_mps2: float) -> None:
+def _fill_unrecoverable(rows: list, anchors: set, error_set: set, times: list, max_speed_kmh: float, max_accel_mps2: float,
+                        progress_fn: "Callable | None" = None) -> None:
 	"""阶段 5：对无法通过重 OCR 修复的帧，从左到右传播可信值。"""
 	n = len(rows)
 	sorted_errors = sorted(i for i in error_set if i not in anchors)
+	total = len(sorted_errors)
+	progress_done = 0
 	for i in sorted_errors:
 		la = None
 		for j in range(i - 1, -1, -1):
@@ -432,3 +425,7 @@ def _fill_unrecoverable(rows: list, anchors: set, error_set: set, times: list, m
 		rows[i][2] = val
 		if rows[i][3] == 0:
 			rows[i][3] = 1
+
+		progress_done += 1
+		if progress_fn:
+			progress_fn(progress_done, total)

@@ -892,13 +892,14 @@ class RaceVideoToLogApp:
 
 	def _correct_with_anchors(self, rows: list, observations: list, raw_frames: list, ocr: "RapidOCR", max_speed_kmh: float, max_accel_mps2: float, anchor_indices: set) -> list:
 		"""Correction pipeline. Delegates to correction.correct_with_anchors
-		with a progress callback that updates the GUI status bar."""
+		with a per-frame progress callback for precise x/y updates."""
 		from correction import correct_with_anchors
-		def _prog(msg: str, pct: float) -> None:
-			# Map 0-100% within correction to 60-90% of overall progress
-			overall = 60.0 + pct * 0.30
+		def _prog(done: int, total: int) -> None:
+			# Map done/total within correction to 60-90% of overall progress
+			pct = done / max(total, 1)
+			overall = 60.0 + pct * 30.0
 			self.root.after(0, self._update_progress,
-				f"物理纠错: {msg}", overall)
+				f"物理纠错: {done}/{total} 帧", overall)
 		return correct_with_anchors(rows, observations, raw_frames, ocr,
 			max_speed_kmh, max_accel_mps2, anchor_indices,
 			log_fn=self._log, progress_fn=_prog)
