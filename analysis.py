@@ -316,6 +316,7 @@ class AnalysisTab:
 		all_flags: list[list[int]] = [[], [], []]
 		is_vt = (mode == "v-t")
 		is_dtx = (mode == "dt-x")
+		name1 = name2 = label = ""  # 消除 possibly-unbound 警告
 
 		if is_dtx:
 			if not self._analysis_csvs[0] or not self._analysis_csvs[1]:
@@ -408,7 +409,7 @@ class AnalysisTab:
 				xd = all_x_data[i]
 				if not xd:
 					continue
-				name = Path(self._analysis_csvs[i]).stem if self._analysis_csvs[i] else ""
+				name = Path(self._analysis_csvs[i] or "").stem  # type: ignore[arg-type]
 				total = 0.0
 				if is_dtx:
 					y_start = y_end = None
@@ -469,9 +470,12 @@ class AnalysisTab:
 				_press_xy[0], _press_xy[1] = getattr(event, 'xdata', None), getattr(event, 'ydata', None)
 
 		def _on_motion(event: object) -> None:
-			if event.button == 3 and _press_xy[0] is not None and event.xdata is not None:
-				dx = _press_xy[0] - event.xdata
-				dy = _press_xy[1] - event.ydata
+			btn = getattr(event, 'button', 0)
+			xd = getattr(event, 'xdata', None)
+			yd = getattr(event, 'ydata', None)
+			if btn == 3 and _press_xy[0] is not None and xd is not None:
+				dx = _press_xy[0] - xd
+				dy = (_press_xy[1] or 0) - (yd or 0)
 				xlim = ax.get_xlim()
 				ylim = ax.get_ylim()
 				ax.set_xlim(xlim[0] + dx, xlim[1] + dx)
