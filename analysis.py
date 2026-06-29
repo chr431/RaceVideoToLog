@@ -15,7 +15,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
 from typing import TYPE_CHECKING
 
 import numpy as np
