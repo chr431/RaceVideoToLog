@@ -141,25 +141,36 @@ class RaceVideoToLogApp:
 		ocr_main.columnconfigure(0, weight=1)
 		ocr_main.rowconfigure(0, weight=1)
 
-		# 左侧配置面板：Canvas 实现垂直滚动，防止窗口较小时元素被挤出
-		config_canvas = tk.Canvas(ocr_main, highlightthickness=0)
-		config_scroll = ttk.Scrollbar(ocr_main, orient="vertical", command=config_canvas.yview)
-		config_col = ttk.Frame(config_canvas, padding=(0, 0, 6, 0))
-		config_col.bind("<Configure>", lambda _e: config_canvas.configure(
-			scrollregion=config_canvas.bbox("all")))
-		_config_win = config_canvas.create_window((0, 0), window=config_col, anchor="nw", tags="config_inner")
-		config_canvas.configure(yscrollcommand=config_scroll.set)
-		# Canvas 宽度变化时，内部 frame 同步拉伸
-		def _on_config_width(event: tk.Event) -> None:
-			config_canvas.itemconfig(_config_win, width=event.width)
-		config_canvas.bind("<Configure>", _on_config_width, add="+")
-		# 鼠标滚轮在面板上滚动
-		def _on_mousewheel(event: tk.Event) -> None:
+		# 左侧配置面板：Canvas 实现双向滚动，防止窗口较小时元素被挤出/遮挡
+		_CONFIG_MIN_W = 420  # 内部最小宽度(px), 防止元素横向被裁切
+		config_canvas = tk.Canvas(ocr_main, highlightthickness=0, width=_CONFIG_MIN_W)
+		config_v_scroll = tk.Scrollbar(ocr_main, orient="vertical", command=config_canvas.yview)
+		config_h_scroll = tk.Scrollbar(ocr_main, orient="horizontal", command=config_canvas.xview)
+		config_col = ttk.Frame(config_canvas, padding=(0, 0, 6, 0), width=_CONFIG_MIN_W)
+		config_col.pack_propagate(False)  # 保持最小宽度
+		_config_win = config_canvas.create_window((0, 0), window=config_col, anchor="nw")
+		config_canvas.configure(yscrollcommand=config_v_scroll.set, xscrollcommand=config_h_scroll.set)
+		# 内容变化时更新滚动区域，内部宽度不小于 Canvas 宽度
+		def _on_config_inner(_e: tk.Event | None = None) -> None:
+			bbox = config_canvas.bbox("all")
+			if bbox:
+				x1, y1, x2, y2 = bbox
+				config_canvas.configure(scrollregion=(0, 0, max(x2, config_canvas.winfo_width()), y2))
+		config_col.bind("<Configure>", _on_config_inner, add="+")
+		# Canvas 尺寸变化时调整内部窗口宽度（取 Canvas 宽度和最小宽度的较大值）
+		def _on_canvas_resize(event: tk.Event) -> None:
+			w = max(_CONFIG_MIN_W, event.width)
+			config_canvas.itemconfig(_config_win, width=w)
+			_on_config_inner()
+		config_canvas.bind("<Configure>", _on_canvas_resize, add="+")
+		# 鼠标滚轮
+		def _on_cwheel(event: tk.Event) -> None:
 			config_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-		config_canvas.bind("<Enter>", lambda e: config_canvas.bind_all("<MouseWheel>", _on_mousewheel, add="+"))
-		config_canvas.bind("<Leave>", lambda e: config_canvas.unbind_all("<MouseWheel>"))
+		config_canvas.bind("<Enter>", lambda _e: config_canvas.bind_all("<MouseWheel>", _on_cwheel, add="+"))
+		config_canvas.bind("<Leave>", lambda _e: config_canvas.unbind_all("<MouseWheel>"))
 		config_canvas.grid(row=0, column=0, sticky="nsew")
-		config_scroll.grid(row=0, column=1, sticky="ns")
+		config_v_scroll.grid(row=0, column=1, sticky="ns")
+		config_h_scroll.grid(row=1, column=0, sticky="ew")
 		ocr_main.columnconfigure(0, weight=1)
 
 		range_box = ttk.LabelFrame(config_col, text="识别范围（像素）", padding=(12, 10, 12, 12))
@@ -242,7 +253,7 @@ class RaceVideoToLogApp:
 
 		self.preview_canvas = tk.Canvas(preview_box, background="#151515", highlightthickness=0, cursor="crosshair")
 		self.preview_canvas.grid(row=0, column=0, sticky="nsew")
-		self.preview_canvas.bind("<Configure>", lambda event: self.schedule_preview_refresh())
+		self.preview_canvas.bind("<Configure>", lambda _e: self._update_roi_rect())
 		self.preview_canvas.bind("<ButtonPress-1>", self._on_drag_start)
 		self.preview_canvas.bind("<B1-Motion>", self._on_drag_motion)
 		self.preview_canvas.bind("<ButtonRelease-1>", self._on_drag_end)
