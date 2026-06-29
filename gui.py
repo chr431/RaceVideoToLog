@@ -339,22 +339,23 @@ class RaceVideoToLogApp(QMainWindow):
 		# ── 右上角主题切换按钮 ──
 		self._dark = self._is_system_dark()
 		self._theme_btn = QPushButton("☀" if not self._dark else "☾")
-		self._theme_btn.setFixedSize(28, 28)
+		self._theme_btn.setFixedSize(30, 24)
+		self._theme_btn.setFlat(True)
 		self._theme_btn.setToolTip("切换亮色/暗色主题")
 		self._theme_btn.clicked.connect(self._toggle_theme)
 		self._tabs.setCornerWidget(self._theme_btn, Qt.Corner.TopRightCorner)
 		self._apply_theme()
 
 		# ── 底部状态栏 ──
-		footer = QWidget()
-		fl = QVBoxLayout(footer); fl.setContentsMargins(0, 4, 0, 0)
+		self._footer = QWidget()
+		fl = QVBoxLayout(self._footer); fl.setContentsMargins(0, 4, 0, 0)
 		self._status_label = QLabel("请选择视频并设置识别范围。")
 		self._progress_bar = QProgressBar()
 		self._progress_bar.setRange(0, 100); self._progress_bar.setValue(0)
 		self._progress_bar.setTextVisible(True)
 		fl.addWidget(self._status_label)
 		fl.addWidget(self._progress_bar)
-		root.addWidget(footer)
+		root.addWidget(self._footer)
 
 	def _build_ocr_tab(self) -> None:
 		layout = QVBoxLayout(self._ocr_tab)
@@ -826,7 +827,9 @@ class RaceVideoToLogApp(QMainWindow):
 
 	def _on_tab(self, index: int) -> None:
 		if index == 1:
-			self._status_label.setText(""); self._progress_bar.setValue(0)
+			self._footer.hide()
+		else:
+			self._footer.show()
 
 	def closeEvent(self, event) -> None:
 		if self._preview_cap is not None: self._preview_cap.release()

@@ -113,6 +113,7 @@ class AnalysisTab:
 		self._figure = self._Figure(figsize=(8, 5), dpi=100)
 		self._canvas = self._FigureCanvas(self._figure)
 		self._canvas.setParent(tab)
+		self._canvas.setContentsMargins(0, 0, 0, 0)
 		layout.addWidget(self._canvas, 1)
 		self._sync_figure_theme()
 
@@ -346,7 +347,7 @@ class AnalysisTab:
 		fig.canvas.mpl_connect("button_press_event", _on_press)
 		fig.canvas.mpl_connect("motion_notify_event", _on_motion)
 
-		fig.tight_layout()
+		fig.tight_layout(pad=1.2)
 		if not is_dtx:
 			saved = self._saved_limits.get(mode)
 			if saved is not None:
