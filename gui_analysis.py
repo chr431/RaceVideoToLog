@@ -275,7 +275,7 @@ class AnalysisTab:
 				xd = all_x[i]
 				if not xd:
 					continue
-				n = Path(self._csvs[i]).stem if self._csvs[i] else ""
+				n = Path(self._csvs[i] or "").stem
 				total = 0.0
 				if is_dtx:
 					ys = ye = None
@@ -371,7 +371,8 @@ class AnalysisTab:
 	def _export_png(self) -> None:
 		fig = self._figure
 		if fig is None or not fig.axes:
-			return QMessageBox.warning(self._tabs, "无数据", "请先渲染曲线。")
+			QMessageBox.warning(self._tabs, "无数据", "请先渲染曲线。")
+			return
 		path, _ = QFileDialog.getSaveFileName(
 			self._tabs, "导出 PNG", "", "PNG 图片 (*.png)")
 		if path:

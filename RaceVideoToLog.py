@@ -14,17 +14,6 @@ import sys
 
 
 def main() -> None:
-	# ── DPI 感知 ──
-	if sys.platform == "win32":
-		import ctypes
-		try:
-			ctypes.windll.shcore.SetProcessDpiAwareness(2)
-		except Exception:
-			try:
-				ctypes.windll.user32.SetProcessDPIAware()
-			except Exception:
-				pass
-
 	parser = argparse.ArgumentParser(description="RaceVideoToLog - 视频速度提取工具")
 	parser.add_argument("video", nargs="?", help="视频文件路径")
 	parser.add_argument("--roi", nargs=4, type=int, metavar=("X1","Y1","X2","Y2"), help="识别范围")
