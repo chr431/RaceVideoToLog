@@ -110,10 +110,9 @@ class AnalysisTab:
 		layout.addWidget(ctrl)
 
 		# ── Matplotlib 画布 ──
-		self._figure = self._Figure(figsize=(7, 4.5), dpi=100)
+		self._figure = self._Figure(figsize=(8, 5), dpi=100)
 		self._canvas = self._FigureCanvas(self._figure)
 		self._canvas.setParent(tab)
-		self._canvas.setContentsMargins(0, 0, 0, 0)
 		layout.addWidget(self._canvas, 1)
 		self._sync_figure_theme()
 
@@ -138,8 +137,8 @@ class AnalysisTab:
 					ax.title.set_color(fg)
 					ax.spines["bottom"].set_color(fg if dark else "#888")
 					ax.spines["left"].set_color(fg if dark else "#888")
-					ax.spines["top"].set_visible(False)
-					ax.spines["right"].set_visible(False)
+					ax.spines["top"].set_color(fg if dark else "#888")
+					ax.spines["right"].set_color(fg if dark else "#888")
 					ax.grid(True, alpha=0.2 if dark else 0.3)
 		if self._canvas:
 			# 直接设置 canvas widget 的背景色（覆盖 QSS）
@@ -347,7 +346,7 @@ class AnalysisTab:
 		fig.canvas.mpl_connect("button_press_event", _on_press)
 		fig.canvas.mpl_connect("motion_notify_event", _on_motion)
 
-		fig.tight_layout(pad=1.5)
+		fig.tight_layout()
 		if not is_dtx:
 			saved = self._saved_limits.get(mode)
 			if saved is not None:
