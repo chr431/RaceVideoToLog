@@ -14,7 +14,6 @@
 """
 from __future__ import annotations
 
-import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import TYPE_CHECKING
