@@ -114,8 +114,24 @@ class AnalysisTab:
 		self._canvas = self._FigureCanvas(self._figure)
 		self._canvas.setParent(tab)
 		layout.addWidget(self._canvas, 1)
+		self._sync_figure_theme()
 
 	# ═══════════════════ 事件 ═══════════════════
+
+	def _sync_figure_theme(self) -> None:
+		"""根据应用当前主题同步 matplotlib 画布背景色。"""
+		from PySide6.QtWidgets import QApplication
+		app = QApplication.instance()
+		bg = "#ffffff"
+		if app:
+			bg = "#2a2a2a" if app.property("dark_mode") else "#ffffff"
+		if self._figure:
+			self._figure.set_facecolor(bg)
+			if self._figure.axes:
+				for ax in self._figure.axes:
+					ax.set_facecolor(bg)
+		if self._canvas:
+			self._canvas.draw_idle()
 
 	def _on_mode(self, mode: str) -> None:
 		self._chart_mode = mode

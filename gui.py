@@ -527,6 +527,7 @@ class RaceVideoToLogApp(QMainWindow):
 		app = QApplication.instance()
 		if app is None:
 			return
+		app.setProperty("dark_mode", self._dark)
 		if self._dark:
 			app.setStyle("Fusion")  # type: ignore[attr-defined]
 			p = app.palette()  # type: ignore[attr-defined]
@@ -545,8 +546,19 @@ class RaceVideoToLogApp(QMainWindow):
 			p.setColor(p.ColorRole.HighlightedText, QColor(0, 0, 0))
 			app.setPalette(p)  # type: ignore[attr-defined]
 		else:
-			app.setStyle("Fusion")  # type: ignore[attr-defined]
-			app.setPalette(app.style().standardPalette())  # type: ignore[attr-defined]
+			from PySide6.QtWidgets import QStyleFactory
+			if "windowsvista" in QStyleFactory.keys():
+				app.setStyle("windowsvista")  # type: ignore[attr-defined]
+			else:
+				app.setStyle("Fusion")  # type: ignore[attr-defined]
+				lp = app.palette()  # type: ignore[attr-defined]
+				lp.setColor(lp.ColorRole.Window, QColor(255, 255, 255))
+				lp.setColor(lp.ColorRole.Base, QColor(255, 255, 255))
+				lp.setColor(lp.ColorRole.Button, QColor(240, 240, 240))
+				app.setPalette(lp)  # type: ignore[attr-defined]
+		# 同步分析 tab 的 matplotlib 画布
+		if hasattr(self, '_analysis_tab'):
+			self._analysis_tab._sync_figure_theme()
 
 	def _toggle_theme(self) -> None:
 		self._dark = not self._dark
