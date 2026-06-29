@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import os
 import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -32,18 +31,7 @@ class RaceVideoToLogApp:
 		self.root.geometry("1500x920")
 		self.root.resizable(False, False)
 
-		# Windows 11 Sun Valley 主题（sv_ttk ~82KB 轻量无依赖）
-		# 设置 RACEVIDEOTOLOG_NATIVE=1 可临时禁用主题以排查 GUI 问题
-		if not os.environ.get("RACEVIDEOTOLOG_NATIVE"):
-			try:
-				import sv_ttk
-				sv_ttk.set_theme("light")
-				import tkinter.font as tkf
-				_default = tkf.nametofont("TkDefaultFont")
-				_default.configure(size=max(8, _default.cget("size") - 1))
-				self.root.option_add("*Font", _default)
-			except ImportError:
-				pass
+		# 使用原生 tkinter 主题（sv_ttk 会导致 tab 切换重绘卡顿）
 
 		self.video_path: Path | None = None
 		self.metadata: VideoMetadata | None = None

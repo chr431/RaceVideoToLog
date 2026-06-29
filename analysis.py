@@ -204,7 +204,7 @@ class AnalysisTab:
 
 	def _build_tab(self) -> None:
 		"""构建数据分析标签页 UI。"""
-		tab = ttk.Frame(self._notebook)
+		tab = tk.Frame(self._notebook)
 		self._notebook.add(tab, text="数据分析")
 		tab.columnconfigure(0, weight=1)
 		tab.rowconfigure(1, weight=1)
