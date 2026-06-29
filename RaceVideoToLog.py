@@ -169,9 +169,9 @@ class RaceVideoToLogApp:
 		constraint_box.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(10, 0))
 		constraint_box.columnconfigure(1, weight=1); constraint_box.columnconfigure(3, weight=1)
 		ttk.Label(constraint_box, text="最大速度 (km/h)").grid(row=0, column=0, sticky="w")
-		ttk.Entry(constraint_box, textvariable=self.max_speed_var, width=10).grid(row=0, column=1, sticky="ew", padx=(6, 14))
+		ttk.Entry(constraint_box, textvariable=self.max_speed_var, width=7).grid(row=0, column=1, sticky="ew", padx=(4, 10))
 		ttk.Label(constraint_box, text="最大加速度 (m/s²)").grid(row=0, column=2, sticky="w")
-		ttk.Entry(constraint_box, textvariable=self.max_accel_var, width=10).grid(row=0, column=3, sticky="ew", padx=(6, 0))
+		ttk.Entry(constraint_box, textvariable=self.max_accel_var, width=7).grid(row=0, column=3, sticky="ew", padx=(6, 0))
 		ttk.Label(constraint_box, text="设为 0 则不限制。用于自动修正丢位、多位和跳变异常。", foreground="#555555").grid(row=1, column=0, columnspan=4, sticky="w", pady=(8, 0))
 
 		perf_box = ttk.LabelFrame(config_col, text="性能", padding=(12, 10, 12, 12))
@@ -183,19 +183,19 @@ class RaceVideoToLogApp:
 		self.frame_div_spinbox.grid(row=0, column=1, sticky="ew", padx=(6, 2))
 		ttk.Label(perf_box, text="1/N 采集", foreground="#555555").grid(row=0, column=2, sticky="w")
 
-		ttk.Label(perf_box, text="OCR 后端").grid(row=0, column=3, sticky="w", padx=(20,0))
+		ttk.Label(perf_box, text="OCR 后端").grid(row=0, column=3, sticky="w", padx=(14,0))
 		_BL = {"auto": "自动", "cuda": "CUDA", "cpu": "CPU"}
-		self.backend_combo = ttk.Combobox(perf_box, textvariable=self.backend_var, values=[_BL[k] for k in ["auto","cuda","cpu"]], width=10, state="readonly")
+		self.backend_combo = ttk.Combobox(perf_box, textvariable=self.backend_var, values=[_BL[k] for k in ["auto","cuda","cpu"]], width=7, state="readonly")
 		self.backend_combo.grid(row=0, column=4, sticky="ew", padx=(6, 2))
 		self.backend_combo.bind("<<ComboboxSelected>>", self._on_backend_changed)
 
 
 		ttk.Label(perf_box, text="OCR 高度 (px)").grid(row=1, column=0, sticky="w", pady=(8,0))
-		ttk.Entry(perf_box, textvariable=self.target_height_var, width=8).grid(row=1, column=1, sticky="ew", padx=(6, 14), pady=(8,0))
+		ttk.Entry(perf_box, textvariable=self.target_height_var, width=6).grid(row=1, column=1, sticky="ew", padx=(4, 10), pady=(8,0))
 		ttk.Label(perf_box, text="边缘填充 (px)").grid(row=1, column=2, sticky="w", pady=(8,0))
-		ttk.Entry(perf_box, textvariable=self.pad_var, width=8).grid(row=1, column=3, sticky="ew", padx=(6, 14), pady=(8,0))
+		ttk.Entry(perf_box, textvariable=self.pad_var, width=6).grid(row=1, column=3, sticky="ew", padx=(4, 10), pady=(8,0))
 		ttk.Label(perf_box, text="并行线程数").grid(row=1, column=4, sticky="w", pady=(8,0))
-		ttk.Entry(perf_box, textvariable=self.num_workers_var, width=8).grid(row=1, column=5, sticky="ew", padx=(6, 14), pady=(8,0))
+		ttk.Entry(perf_box, textvariable=self.num_workers_var, width=6).grid(row=1, column=5, sticky="ew", padx=(4, 10), pady=(8,0))
 		ttk.Label(perf_box, text=">1 时启用并行推理。", foreground="#555555").grid(row=2, column=0, columnspan=6, sticky="w", pady=(4, 0))
 		# 纠错模式选择
 		mode_frame = ttk.LabelFrame(config_col, text="纠错模式", padding=(12, 10, 12, 12))
@@ -216,10 +216,10 @@ class RaceVideoToLogApp:
 		time_box.grid(row=4, column=0, sticky="ew", pady=(8, 0))
 		time_box.columnconfigure(1, weight=1); time_box.columnconfigure(4, weight=1)
 		ttk.Label(time_box, text="起始帧").grid(row=0, column=0, sticky="w")
-		ttk.Entry(time_box, textvariable=self._frame_start_var, width=8).grid(row=0, column=1, sticky="ew", padx=(4, 4))
+		ttk.Entry(time_box, textvariable=self._frame_start_var, width=6).grid(row=0, column=1, sticky="ew", padx=(4, 4))
 		ttk.Button(time_box, text="设为当前", command=lambda: self._frame_start_var.set(str(int(self._preview_slider.get())))).grid(row=0, column=2, padx=(0, 8))
 		ttk.Label(time_box, text="结束帧").grid(row=0, column=3, sticky="w")
-		ttk.Entry(time_box, textvariable=self._frame_end_var, width=8).grid(row=0, column=4, sticky="ew", padx=(4, 4))
+		ttk.Entry(time_box, textvariable=self._frame_end_var, width=6).grid(row=0, column=4, sticky="ew", padx=(4, 4))
 		ttk.Button(time_box, text="设为当前", command=lambda: self._frame_end_var.set(str(int(self._preview_slider.get())))).grid(row=0, column=5)
 		ttk.Label(time_box, text="留空=全部。仅处理 [起始, 结束) 之间的帧。", foreground="#555555").grid(row=1, column=0, columnspan=6, sticky="w", pady=(6, 0))
 
@@ -248,7 +248,7 @@ class RaceVideoToLogApp:
 		self._preview_slider = ttk.Scale(slider_row, from_=0, to=1, variable=self._preview_frame_pos,
 			orient="horizontal", command=self._on_slider_drag)
 		self._preview_slider.grid(row=0, column=0, sticky="ew")
-		self._preview_frame_label = ttk.Label(slider_row, text="#0", width=8, anchor="e")
+		self._preview_frame_label = ttk.Label(slider_row, text="#0", width=7, anchor="e")
 		self._preview_frame_label.grid(row=0, column=1, padx=(6, 2))
 
 		# 预览画布右键：重置视图
@@ -273,7 +273,7 @@ class RaceVideoToLogApp:
 		cell = ttk.Frame(parent)
 		cell.grid(row=row, column=column, columnspan=2, sticky="ew", padx=4, pady=4)
 		ttk.Label(cell, text=label).grid(row=0, column=0, sticky="w")
-		ttk.Entry(cell, textvariable=variable, width=10).grid(row=1, column=0, sticky="ew", pady=(4, 0))
+		ttk.Entry(cell, textvariable=variable, width=7).grid(row=1, column=0, sticky="ew", pady=(4, 0))
 
 	# ═══════════════════ 数据分析 Tab ═══════════════════
 	
