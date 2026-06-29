@@ -154,9 +154,9 @@ class RaceVideoToLogApp:
 		range_box.grid(row=0, column=0, sticky="ew", pady=(0, 8))
 		for index in range(4): range_box.columnconfigure(index, weight=1)
 		self._add_range_entry(range_box, 0, 0, "左上 X", self.left_x_var)
+		self._add_range_entry(range_box, 0, 1, "左上 Y", self.left_y_var)
 		self._add_range_entry(range_box, 0, 2, "右下 X", self.right_x_var)
-		self._add_range_entry(range_box, 1, 0, "左上 Y", self.left_y_var)
-		self._add_range_entry(range_box, 1, 2, "右下 Y", self.right_y_var)
+		self._add_range_entry(range_box, 0, 3, "右下 Y", self.right_y_var)
 
 		format_box = ttk.LabelFrame(config_col, text="速度格式", padding=(12, 10, 12, 12))
 		format_box.grid(row=1, column=0, sticky="ew", pady=(0, 8))
@@ -193,10 +193,11 @@ class RaceVideoToLogApp:
 		ttk.Label(perf_box, text="OCR 高度 (px)").grid(row=1, column=0, sticky="w", pady=(8,0))
 		ttk.Entry(perf_box, textvariable=self.target_height_var, width=6).grid(row=1, column=1, sticky="ew", padx=(4, 10), pady=(8,0))
 		ttk.Label(perf_box, text="边缘填充 (px)").grid(row=1, column=2, sticky="w", pady=(8,0))
-		ttk.Entry(perf_box, textvariable=self.pad_var, width=6).grid(row=1, column=3, sticky="ew", padx=(4, 10), pady=(8,0))
-		ttk.Label(perf_box, text="并行线程数").grid(row=1, column=4, sticky="w", pady=(8,0))
-		ttk.Entry(perf_box, textvariable=self.num_workers_var, width=6).grid(row=1, column=5, sticky="ew", padx=(4, 10), pady=(8,0))
-		ttk.Label(perf_box, text=">1 时启用并行推理。", foreground="#555555").grid(row=2, column=0, columnspan=6, sticky="w", pady=(4, 0))
+		ttk.Entry(perf_box, textvariable=self.pad_var, width=6).grid(row=1, column=3, sticky="ew", padx=(4, 0), pady=(8,0))
+		# 并行线程数 + 调试日志 单独一行
+		ttk.Label(perf_box, text="并行线程数").grid(row=2, column=0, sticky="w", pady=(8,0))
+		ttk.Entry(perf_box, textvariable=self.num_workers_var, width=6).grid(row=2, column=1, sticky="ew", padx=(4, 10), pady=(8,0))
+		ttk.Checkbutton(perf_box, text="调试日志", variable=self._debug_log_var).grid(row=2, column=2, columnspan=2, sticky="w", pady=(8,0))
 		# 纠错模式选择
 		mode_frame = ttk.LabelFrame(config_col, text="纠错模式", padding=(12, 10, 12, 12))
 		mode_frame.grid(row=3, column=0, sticky="ew", pady=(8, 0))
@@ -209,7 +210,6 @@ class RaceVideoToLogApp:
 		self._baseline_spinbox = ttk.Spinbox(baseline_frame, textvariable=self._baseline_freq_var, from_=1, to=50, width=4)
 		self._baseline_spinbox.grid(row=0, column=1, sticky="w")
 		ttk.Label(baseline_frame, text="(1=全部人工)", foreground="#888888").grid(row=0, column=2, sticky="w", padx=(4, 0))
-		ttk.Checkbutton(mode_frame, text="调试日志", variable=self._debug_log_var).grid(row=2, column=0, sticky="w", pady=(8, 0))
 
 		# 时间轴范围
 		time_box = ttk.LabelFrame(config_col, text="时间轴范围", padding=(12, 10, 12, 12))
