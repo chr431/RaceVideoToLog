@@ -28,8 +28,8 @@ class RaceVideoToLogApp:
 	def __init__(self) -> None:
 		self.root = tk.Tk()
 		self.root.title("Race Video To Log")
-		self.root.geometry("1180x860")
-		self.root.minsize(980, 720)
+		self.root.geometry("1200x860")
+		self.root.resizable(False, False)  # 固定尺寸，避免 sv_ttk 下元素溢出和缩放卡顿
 
 		# Windows 11 Sun Valley 主题（sv_ttk ~82KB 轻量无依赖）
 		try:
@@ -86,7 +86,6 @@ class RaceVideoToLogApp:
 		self.progress_var = tk.DoubleVar(value=0.0)
 
 		self.first_frame_pil: Image.Image | None = None
-		self._cached_preview_pil: Image.Image | None = None  # 缓存的预览帧（用于缩放时不重读视频）
 		self._preview_scale = 1.0
 		self._preview_offset_x = 0.0
 		self._preview_offset_y = 0.0
@@ -141,37 +140,9 @@ class RaceVideoToLogApp:
 		ocr_main.columnconfigure(0, weight=1)
 		ocr_main.rowconfigure(0, weight=1)
 
-		# 左侧配置面板：Canvas 实现双向滚动，防止窗口较小时元素被挤出/遮挡
-		_CONFIG_MIN_W = 420  # 内部最小宽度(px), 防止元素横向被裁切
-		config_canvas = tk.Canvas(ocr_main, highlightthickness=0, width=_CONFIG_MIN_W)
-		config_v_scroll = tk.Scrollbar(ocr_main, orient="vertical", command=config_canvas.yview)
-		config_h_scroll = tk.Scrollbar(ocr_main, orient="horizontal", command=config_canvas.xview)
-		config_col = ttk.Frame(config_canvas, padding=(0, 0, 6, 0), width=_CONFIG_MIN_W)
-		config_col.pack_propagate(False)  # 保持最小宽度
-		_config_win = config_canvas.create_window((0, 0), window=config_col, anchor="nw")
-		config_canvas.configure(yscrollcommand=config_v_scroll.set, xscrollcommand=config_h_scroll.set)
-		# 内容变化时更新滚动区域，内部宽度不小于 Canvas 宽度
-		def _on_config_inner(_e: tk.Event | None = None) -> None:
-			bbox = config_canvas.bbox("all")
-			if bbox:
-				x1, y1, x2, y2 = bbox
-				config_canvas.configure(scrollregion=(0, 0, max(x2, config_canvas.winfo_width()), y2))
-		config_col.bind("<Configure>", _on_config_inner, add="+")
-		# Canvas 尺寸变化时调整内部窗口宽度（取 Canvas 宽度和最小宽度的较大值）
-		def _on_canvas_resize(event: tk.Event) -> None:
-			w = max(_CONFIG_MIN_W, event.width)
-			config_canvas.itemconfig(_config_win, width=w)
-			_on_config_inner()
-		config_canvas.bind("<Configure>", _on_canvas_resize, add="+")
-		# 鼠标滚轮
-		def _on_cwheel(event: tk.Event) -> None:
-			config_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-		config_canvas.bind("<Enter>", lambda _e: config_canvas.bind_all("<MouseWheel>", _on_cwheel, add="+"))
-		config_canvas.bind("<Leave>", lambda _e: config_canvas.unbind_all("<MouseWheel>"))
-		config_canvas.grid(row=0, column=0, sticky="nsew")
-		config_v_scroll.grid(row=0, column=1, sticky="ns")
-		config_h_scroll.grid(row=1, column=0, sticky="ew")
-		ocr_main.columnconfigure(0, weight=1)
+		config_col = ttk.Frame(ocr_main, padding=(0, 0, 6, 0))
+		config_col.grid(row=0, column=0, sticky="nsew")
+		config_col.columnconfigure(0, weight=1)
 
 		range_box = ttk.LabelFrame(config_col, text="识别范围（像素）", padding=(12, 10, 12, 12))
 		range_box.grid(row=0, column=0, sticky="ew", pady=(0, 8))
@@ -253,7 +224,7 @@ class RaceVideoToLogApp:
 
 		self.preview_canvas = tk.Canvas(preview_box, background="#151515", highlightthickness=0, cursor="crosshair")
 		self.preview_canvas.grid(row=0, column=0, sticky="nsew")
-		self.preview_canvas.bind("<Configure>", lambda _e: self._update_roi_rect())
+		self.preview_canvas.bind("<Configure>", lambda _e: self._update_roi_rect())  # resize 时仅更新 ROI 框
 		self.preview_canvas.bind("<ButtonPress-1>", self._on_drag_start)
 		self.preview_canvas.bind("<B1-Motion>", self._on_drag_motion)
 		self.preview_canvas.bind("<ButtonRelease-1>", self._on_drag_end)
@@ -361,18 +332,10 @@ class RaceVideoToLogApp:
 	
 	
 	def schedule_preview_refresh(self) -> None:
-		"""窗口 resize 时仅重绘已有图像（无视频 I/O，避免卡顿）。"""
+		"""延迟刷新预览（用于视频加载后首帧渲染）。"""
 		if self.preview_after_id is not None:
 			self.root.after_cancel(self.preview_after_id)
-		self.preview_after_id = self.root.after(300, self._rerender_preview)
-
-	def _rerender_preview(self) -> None:
-		"""轻量重绘：仅缩放已有缓存图像，不读取视频文件。"""
-		self.preview_after_id = None
-		pil = self._cached_preview_pil or self.first_frame_pil
-		if pil is not None:
-			self._draw_preview_image(pil)
-			self._update_roi_rect()
+		self.preview_after_id = self.root.after(100, self.refresh_preview)
 
 	def _step_preview_frame(self, delta: int) -> None:
 		"""以 delta 帧为单位移动预览位置。"""
@@ -510,20 +473,16 @@ class RaceVideoToLogApp:
 				ok, frame = cap.retrieve()
 				if ok and frame is not None:
 					frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-					pil = Image.fromarray(frame_rgb)
-					self._cached_preview_pil = pil  # 缓存以支持缩放重绘
-					self._draw_preview_image(pil)
+					self._draw_preview_image(Image.fromarray(frame_rgb))
 					total = self.metadata.frame_count if self.metadata else 0
 					self.status_var.set(f"预览帧 #{pos}/{total}")
 					self._preview_frame_label.configure(text=f"#{pos}")
 					self._update_roi_rect()
 					return
 			# 定位/解码失败，回退到首帧
-			self._cached_preview_pil = self.first_frame_pil
 			self._draw_preview_image(self.first_frame_pil)
 			self.status_var.set(f"无法读取帧 #{pos}")
 		else:
-			self._cached_preview_pil = self.first_frame_pil
 			self._draw_preview_image(self.first_frame_pil)
 			self.status_var.set("预览帧 #0（首帧）")
 			self._preview_frame_label.configure(text="#0")
