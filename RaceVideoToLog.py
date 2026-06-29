@@ -28,11 +28,8 @@ class RaceVideoToLogApp:
 	def __init__(self) -> None:
 		self.root = tk.Tk()
 		self.root.title("Race Video To Log")
-		self.root.geometry("1200x860")  # 默认窗口尺寸
-		self.root.minsize(1000, 720)
-		# 默认全屏启动，Esc 退出全屏
-		self.root.attributes("-fullscreen", True)
-		self.root.bind("<Escape>", lambda _e: self.root.attributes("-fullscreen", False))
+		self.root.geometry("1400x900")
+		self.root.minsize(1100, 760)
 
 		# Windows 11 Sun Valley 主题（sv_ttk ~82KB 轻量无依赖）
 		try:
@@ -147,7 +144,13 @@ class RaceVideoToLogApp:
 		config_col.grid(row=0, column=0, sticky="nsew")
 		config_col.columnconfigure(0, weight=1)
 
-		range_box = ttk.LabelFrame(config_col, text="识别范围（像素）", padding=(12, 10, 12, 12))
+		# 右侧：识别范围 + 预览画面
+		right_col = ttk.Frame(ocr_main)
+		right_col.grid(row=0, column=1, sticky="nsew")
+		right_col.columnconfigure(0, weight=1)
+		right_col.rowconfigure(1, weight=1)  # 预览区可拉伸
+
+		range_box = ttk.LabelFrame(right_col, text="识别范围（像素）", padding=(12, 10, 12, 12))
 		range_box.grid(row=0, column=0, sticky="ew", pady=(0, 8))
 		for index in range(4): range_box.columnconfigure(index, weight=1)
 		self._add_range_entry(range_box, 0, 0, "左上 X", self.left_x_var)
@@ -221,8 +224,8 @@ class RaceVideoToLogApp:
 		ttk.Label(time_box, text="留空=全部。仅处理 [起始, 结束) 之间的帧。", foreground="#555555").grid(row=1, column=0, columnspan=6, sticky="w", pady=(6, 0))
 
 		# 右侧预览
-		preview_box = ttk.LabelFrame(ocr_main, text="识别范围预览", padding=(6, 6, 6, 6))
-		preview_box.grid(row=0, column=1, sticky="nsew")
+		preview_box = ttk.LabelFrame(right_col, text="识别范围预览", padding=(6, 6, 6, 6))
+		preview_box.grid(row=1, column=0, sticky="nsew")
 		preview_box.columnconfigure(0, weight=1); preview_box.rowconfigure(0, weight=1)
 
 		self.preview_canvas = tk.Canvas(preview_box, background="#151515", highlightthickness=0, cursor="crosshair")
