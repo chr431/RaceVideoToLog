@@ -28,8 +28,11 @@ class RaceVideoToLogApp:
 	def __init__(self) -> None:
 		self.root = tk.Tk()
 		self.root.title("Race Video To Log")
-		self.root.geometry("1200x860")
-		self.root.resizable(False, False)  # 固定尺寸，避免 sv_ttk 下元素溢出和缩放卡顿
+		self.root.geometry("1200x860")  # 默认窗口尺寸
+		self.root.minsize(1000, 720)
+		# 默认全屏启动，Esc 退出全屏
+		self.root.attributes("-fullscreen", True)
+		self.root.bind("<Escape>", lambda _e: self.root.attributes("-fullscreen", False))
 
 		# Windows 11 Sun Valley 主题（sv_ttk ~82KB 轻量无依赖）
 		try:
