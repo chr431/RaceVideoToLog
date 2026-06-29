@@ -101,10 +101,9 @@ class RaceVideoToLogApp:
 		self.root.columnconfigure(0, weight=1)
 		self.root.rowconfigure(0, weight=1)
 
-		# Notebook 占满主区域（grid_propagate 阻止子组件尺寸变化向上传播，减少重绘）
+		# Notebook 占满主区域
 		self._notebook = ttk.Notebook(self.root)
 		self._notebook.grid(row=0, column=0, sticky="nsew", padx=12, pady=(12, 10))
-		self._notebook.grid_propagate(False)
 
 		# ── Tab 1: OCR 处理 ──
 		tab_ocr = ttk.Frame(self._notebook)

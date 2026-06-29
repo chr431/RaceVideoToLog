@@ -250,7 +250,7 @@ class AnalysisTab:
 		self._smooth_entry_var.trace_add("write", _entry_to_slider)
 
 		# Matplotlib 画布
-		self._analysis_figure = self._Figure(figsize=(12, 6), dpi=100)
+		self._analysis_figure = self._Figure(figsize=(6, 4), dpi=100)
 		self._analysis_canvas = self._FigureCanvasTkAgg(self._analysis_figure, master=tab)
 		self._analysis_canvas.get_tk_widget().grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 10))
 
