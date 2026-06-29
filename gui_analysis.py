@@ -121,6 +121,7 @@ class AnalysisTab:
 	def _sync_figure_theme(self) -> None:
 		"""根据应用当前主题同步 matplotlib 画布背景色和文字颜色。"""
 		from PySide6.QtWidgets import QApplication
+		from PySide6.QtGui import QPalette, QColor
 		app = QApplication.instance()
 		dark = bool(app.property("dark_mode")) if app else False
 		bg = "#2a2a2a" if dark else "#ffffff"
@@ -140,8 +141,13 @@ class AnalysisTab:
 					ax.spines["right"].set_visible(False)
 					ax.grid(True, alpha=0.2 if dark else 0.3)
 		if self._canvas:
-			self._canvas.setStyleSheet(
-				"background: transparent;" if dark else "")
+			# 直接设置 canvas widget 的背景色（覆盖 QSS）
+			c = QColor(bg)
+			p = self._canvas.palette()
+			p.setColor(QPalette.ColorRole.Window, c)
+			p.setColor(QPalette.ColorRole.Base, c)
+			self._canvas.setPalette(p)
+			self._canvas.setAutoFillBackground(True)
 			self._canvas.draw_idle()
 
 	def _on_mode(self, mode: str) -> None:
@@ -348,6 +354,7 @@ class AnalysisTab:
 
 		canvas.draw()
 		self._last_mode = mode
+		self._sync_figure_theme()
 
 	# ═══════════════════ 其他 ═══════════════════
 

@@ -336,6 +336,15 @@ class RaceVideoToLogApp(QMainWindow):
 		# ── Tab 2: 数据分析 ──
 		self._analysis_tab = AnalysisTab(self._tabs)
 
+		# ── 右上角主题切换按钮 ──
+		self._dark = self._is_system_dark()
+		self._theme_btn = QPushButton("☀" if not self._dark else "☾")
+		self._theme_btn.setFixedSize(28, 28)
+		self._theme_btn.setToolTip("切换亮色/暗色主题")
+		self._theme_btn.clicked.connect(self._toggle_theme)
+		self._tabs.setCornerWidget(self._theme_btn, Qt.Corner.TopRightCorner)
+		self._apply_theme()
+
 		# ── 底部状态栏 ──
 		footer = QWidget()
 		fl = QVBoxLayout(footer); fl.setContentsMargins(0, 4, 0, 0)
@@ -363,14 +372,6 @@ class RaceVideoToLogApp(QMainWindow):
 		self._cancel_btn = QPushButton("取消")
 		self._cancel_btn.setEnabled(False)
 		hdr.addWidget(self._cancel_btn)
-		# 主题切换按钮
-		self._dark = self._is_system_dark()
-		self._theme_btn = QPushButton("☀" if not self._dark else "☾")
-		self._theme_btn.setFixedWidth(30)
-		self._theme_btn.setToolTip("切换亮色/暗色主题")
-		self._theme_btn.clicked.connect(self._toggle_theme)
-		self._apply_theme()
-		hdr.addWidget(self._theme_btn)
 		layout.addLayout(hdr)
 
 		# 视频信息
