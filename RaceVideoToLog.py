@@ -95,6 +95,11 @@ class RaceVideoToLogApp:
 		self._preview_frame_pos = tk.DoubleVar(value=0)  # 预览帧位置
 
 		self._build_ui()
+		# 预渲染所有 tab：短暂选择每个 tab 强制完成首次绘制，
+		# 消除后续切换时的可见重绘延迟
+		self._notebook.select(1)
+		self.root.update_idletasks()
+		self._notebook.select(0)
 		self._bind_preview_updates()
 
 	def _build_ui(self) -> None:
