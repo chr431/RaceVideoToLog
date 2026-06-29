@@ -110,7 +110,7 @@ class AnalysisTab:
 		layout.addWidget(ctrl)
 
 		# ── Matplotlib 画布 ──
-		self._figure = self._Figure(figsize=(8, 5), dpi=100)
+		self._figure = self._Figure(figsize=(7, 4.5), dpi=100)
 		self._canvas = self._FigureCanvas(self._figure)
 		self._canvas.setParent(tab)
 		self._canvas.setContentsMargins(0, 0, 0, 0)
@@ -347,7 +347,7 @@ class AnalysisTab:
 		fig.canvas.mpl_connect("button_press_event", _on_press)
 		fig.canvas.mpl_connect("motion_notify_event", _on_motion)
 
-		fig.tight_layout(pad=1.2)
+		fig.tight_layout(pad=1.5)
 		if not is_dtx:
 			saved = self._saved_limits.get(mode)
 			if saved is not None:

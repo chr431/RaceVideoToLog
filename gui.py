@@ -325,6 +325,21 @@ class RaceVideoToLogApp(QMainWindow):
 		root.setContentsMargins(12, 12, 12, 10)
 		root.setSpacing(0)
 
+		# ── 顶栏：主题按钮（右上角固定位置）──
+		top_bar = QWidget()
+		tbl = QHBoxLayout(top_bar); tbl.setContentsMargins(0, 0, 0, 4)
+		tbl.addStretch()
+		self._dark = self._is_system_dark()
+		self._theme_btn = QPushButton("☀" if not self._dark else "☾")
+		self._theme_btn.setFixedSize(28, 22)
+		self._theme_btn.setFlat(True)
+		self._theme_btn.setToolTip("切换亮色/暗色主题")
+		self._theme_btn.clicked.connect(self._toggle_theme)
+		tbl.addWidget(self._theme_btn)
+		root.addWidget(top_bar)
+		self._apply_theme()
+
+		# ── TabWidget ──
 		self._tabs = QTabWidget()
 		root.addWidget(self._tabs)
 
@@ -335,16 +350,6 @@ class RaceVideoToLogApp(QMainWindow):
 
 		# ── Tab 2: 数据分析 ──
 		self._analysis_tab = AnalysisTab(self._tabs)
-
-		# ── 右上角主题切换按钮 ──
-		self._dark = self._is_system_dark()
-		self._theme_btn = QPushButton("☀" if not self._dark else "☾")
-		self._theme_btn.setFixedSize(30, 24)
-		self._theme_btn.setFlat(True)
-		self._theme_btn.setToolTip("切换亮色/暗色主题")
-		self._theme_btn.clicked.connect(self._toggle_theme)
-		self._tabs.setCornerWidget(self._theme_btn, Qt.Corner.TopRightCorner)
-		self._apply_theme()
 
 		# ── 底部状态栏 ──
 		self._footer = QWidget()
