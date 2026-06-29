@@ -30,6 +30,13 @@ class RaceVideoToLogApp:
 		self.root.geometry("1180x860")
 		self.root.minsize(980, 720)
 
+		# Windows 11 Sun Valley 主题（sv_ttk ~82KB 轻量无依赖）
+		try:
+			import sv_ttk
+			sv_ttk.set_theme("light")
+		except ImportError:
+			pass
+
 		self.video_path: Path | None = None
 		self.metadata: VideoMetadata | None = None
 		self.first_frame_bgr: np.ndarray | None = None

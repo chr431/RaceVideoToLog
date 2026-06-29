@@ -26,6 +26,8 @@ hiddenimports = [
     'numpy._core.umath', 'numpy._core._methods',
     # rapidocr 内部依赖
     'yaml',
+    # Win11 主题
+    'sv_ttk',
 ]
 
 # rapidocr_onnxruntime（OCR 引擎）
