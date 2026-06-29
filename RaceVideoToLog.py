@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
@@ -34,6 +35,11 @@ class RaceVideoToLogApp:
 		try:
 			import sv_ttk
 			sv_ttk.set_theme("light")
+			# 缩小默认字体（sv_ttk 默认偏大），适应密集布局
+			import tkinter.font as tkf
+			_default = tkf.nametofont("TkDefaultFont")
+			_default.configure(size=max(8, _default.cget("size") - 1))
+			self.root.option_add("*Font", _default)
 		except ImportError:
 			pass
 
@@ -1199,6 +1205,16 @@ class RaceVideoToLogApp:
 
 
 def main() -> None:
+	# ── DPI 感知：必须在创建任何 tk 窗口之前设置 ──
+	if sys.platform == "win32":
+		import ctypes
+		try:
+			ctypes.windll.shcore.SetProcessDpiAwareness(2)  # Per Monitor DPI v2
+		except Exception:
+			try:
+				ctypes.windll.user32.SetProcessDPIAware()
+			except Exception:
+				pass
 	import argparse
 	parser = argparse.ArgumentParser(description="RaceVideoToLog - 视频速度提取工具")
 	parser.add_argument("video", nargs="?", help="视频文件路径")
