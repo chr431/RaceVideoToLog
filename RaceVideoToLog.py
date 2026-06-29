@@ -28,8 +28,8 @@ class RaceVideoToLogApp:
 	def __init__(self) -> None:
 		self.root = tk.Tk()
 		self.root.title("Race Video To Log")
-		self.root.geometry("1400x900")
-		self.root.minsize(1100, 760)
+		self.root.geometry("1500x920")
+		self.root.resizable(False, False)
 
 		# Windows 11 Sun Valley 主题（sv_ttk ~82KB 轻量无依赖）
 		try:
@@ -136,7 +136,7 @@ class RaceVideoToLogApp:
 		# OCR 主内容
 		ocr_main = ttk.Frame(tab_ocr)
 		ocr_main.grid(row=2, column=0, sticky="nsew")
-		ocr_main.columnconfigure(1, weight=3)
+		ocr_main.columnconfigure(1, weight=5)  # 预览列占更多空间
 		ocr_main.columnconfigure(0, weight=1)
 		ocr_main.rowconfigure(0, weight=1)
 

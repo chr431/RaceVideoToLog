@@ -249,13 +249,12 @@ class AnalysisTab:
 		self._smooth_strength.trace_add("write", _slider_to_entry)
 		self._smooth_entry_var.trace_add("write", _entry_to_slider)
 
-		# 切换到数据分析 tab 时隐藏底部进度条/状态
+		# 切换到数据分析 tab 时重置状态（不再隐藏 footer，避免 re-layout 卡顿）
 		def _on_tab_change(event: object) -> None:
 			cur = self._notebook.index(self._notebook.select())
-			if cur == 1:  # 数据分析 tab
+			if cur == 1:
 				self.status_var.set("")
 				self.progress_var.set(0.0)
-			self._update_footer_visibility()
 
 		self._notebook.bind("<<NotebookTabChanged>>", _on_tab_change)
 
@@ -263,14 +262,6 @@ class AnalysisTab:
 		self._analysis_figure = self._Figure(figsize=(8, 5), dpi=100)
 		self._analysis_canvas = self._FigureCanvasTkAgg(self._analysis_figure, master=tab)
 		self._analysis_canvas.get_tk_widget().grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 10))
-
-	def _update_footer_visibility(self) -> None:
-		"""OCR 处理 tab 显示底部状态栏，数据分析 tab 隐藏。"""
-		cur = self._notebook.index(self._notebook.select())
-		if cur == 1:
-			self._footer.grid_remove()
-		else:
-			self._footer.grid()
 
 	def _import_csv(self, index: int) -> None:
 		path = filedialog.askopenfilename(
