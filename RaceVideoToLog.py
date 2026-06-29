@@ -95,20 +95,16 @@ class RaceVideoToLogApp:
 		self._preview_frame_pos = tk.DoubleVar(value=0)  # 预览帧位置
 
 		self._build_ui()
-		# 预渲染所有 tab：短暂选择每个 tab 强制完成首次绘制，
-		# 消除后续切换时的可见重绘延迟
-		self._notebook.select(1)
-		self.root.update_idletasks()
-		self._notebook.select(0)
 		self._bind_preview_updates()
 
 	def _build_ui(self) -> None:
 		self.root.columnconfigure(0, weight=1)
 		self.root.rowconfigure(0, weight=1)
 
-		# Notebook 占满主区域
+		# Notebook 占满主区域（grid_propagate 阻止子组件尺寸变化向上传播，减少重绘）
 		self._notebook = ttk.Notebook(self.root)
 		self._notebook.grid(row=0, column=0, sticky="nsew", padx=12, pady=(12, 10))
+		self._notebook.grid_propagate(False)
 
 		# ── Tab 1: OCR 处理 ──
 		tab_ocr = ttk.Frame(self._notebook)

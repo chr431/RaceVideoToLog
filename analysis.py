@@ -249,17 +249,8 @@ class AnalysisTab:
 		self._smooth_strength.trace_add("write", _slider_to_entry)
 		self._smooth_entry_var.trace_add("write", _entry_to_slider)
 
-		# 切换到数据分析 tab 时重置状态（不再隐藏 footer，避免 re-layout 卡顿）
-		def _on_tab_change(event: object) -> None:
-			cur = self._notebook.index(self._notebook.select())
-			if cur == 1:
-				self.status_var.set("")
-				self.progress_var.set(0.0)
-
-		self._notebook.bind("<<NotebookTabChanged>>", _on_tab_change)
-
 		# Matplotlib 画布
-		self._analysis_figure = self._Figure(figsize=(8, 5), dpi=100)
+		self._analysis_figure = self._Figure(figsize=(12, 6), dpi=100)
 		self._analysis_canvas = self._FigureCanvasTkAgg(self._analysis_figure, master=tab)
 		self._analysis_canvas.get_tk_widget().grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 10))
 
