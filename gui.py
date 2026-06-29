@@ -13,7 +13,7 @@ import numpy as np
 
 from PySide6.QtWidgets import (
 	QApplication, QMainWindow, QWidget, QTabWidget,
-	QPushButton, QLabel, QLineEdit, QSpinBox, QComboBox,
+	QPushButton, QLabel, QLineEdit, QSlider, QSpinBox, QComboBox,
 	QRadioButton, QCheckBox, QGroupBox, QProgressBar,
 	QFileDialog, QMessageBox, QHBoxLayout, QVBoxLayout, QGridLayout,
 )
@@ -330,6 +330,14 @@ class RaceVideoToLogApp(QMainWindow):
 		self._cancel_btn = QPushButton("取消")
 		self._cancel_btn.setEnabled(False)
 		hdr.addWidget(self._cancel_btn)
+		# 主题切换按钮
+		self._dark = self._is_system_dark()
+		self._theme_btn = QPushButton("☀" if not self._dark else "☾")
+		self._theme_btn.setFixedWidth(30)
+		self._theme_btn.setToolTip("切换亮色/暗色主题")
+		self._theme_btn.clicked.connect(self._toggle_theme)
+		self._apply_theme()
+		hdr.addWidget(self._theme_btn)
 		layout.addLayout(hdr)
 
 		# 视频信息
@@ -468,10 +476,12 @@ class RaceVideoToLogApp(QMainWindow):
 		pvl.addWidget(self._preview_label, 1)
 
 		sr = QHBoxLayout()
-		self._slider = QSpinBox(); self._slider.setRange(0, 1)
-		self._slider.setSuffix(" 帧"); self._slider.setMinimumWidth(100)
+		self._slider = QSlider(Qt.Orientation.Horizontal)
+		self._slider.setRange(0, 1); self._slider.setValue(0)
+		self._slider.valueChanged.connect(self._on_slider)
 		sr.addWidget(self._slider, 1)
-		sr.addWidget(QLabel("← → ↑ ↓ 键微调"))
+		self._frame_label = QLabel("#0"); self._frame_label.setFixedWidth(60)
+		sr.addWidget(self._frame_label)
 		pvl.addLayout(sr)
 		rl.addWidget(pv, 1)
 
@@ -487,7 +497,6 @@ class RaceVideoToLogApp(QMainWindow):
 		self.mode_auto.clicked.connect(lambda: self._on_mode("auto"))
 		self.mode_baseline.clicked.connect(lambda: self._on_mode("baseline"))
 		self.backend_combo.currentIndexChanged.connect(self._on_backend)
-		self._slider.valueChanged.connect(self._on_slider)
 		self._tabs.currentChanged.connect(self._on_tab)
 		self.debug_cb.toggled.connect(lambda v: setattr(self, '_debug_log', v))
 
@@ -501,6 +510,48 @@ class RaceVideoToLogApp(QMainWindow):
 	def _on_mode(self, mode: str) -> None: self.correction_mode = mode
 	def _log(self, msg: str) -> None:
 		if self._debug_log: print(f"[DEBUG] {msg}", flush=True)
+
+	# ═══════════════════ 主题切换 ═══════════════════
+
+	@staticmethod
+	def _is_system_dark() -> bool:
+		try:
+			hints = QApplication.styleHints()
+			if hints:
+				return hints.colorScheme() == Qt.ColorScheme.Dark
+		except Exception:
+			pass
+		return False
+
+	def _apply_theme(self) -> None:
+		app = QApplication.instance()
+		if app is None:
+			return
+		if self._dark:
+			app.setStyle("Fusion")  # type: ignore[attr-defined]
+			p = app.palette()  # type: ignore[attr-defined]
+			p.setColor(p.ColorRole.Window, QColor(53, 53, 53))
+			p.setColor(p.ColorRole.WindowText, QColor(255, 255, 255))
+			p.setColor(p.ColorRole.Base, QColor(42, 42, 42))
+			p.setColor(p.ColorRole.AlternateBase, QColor(66, 66, 66))
+			p.setColor(p.ColorRole.ToolTipBase, QColor(255, 255, 255))
+			p.setColor(p.ColorRole.ToolTipText, QColor(0, 0, 0))
+			p.setColor(p.ColorRole.Text, QColor(255, 255, 255))
+			p.setColor(p.ColorRole.Button, QColor(53, 53, 53))
+			p.setColor(p.ColorRole.ButtonText, QColor(255, 255, 255))
+			p.setColor(p.ColorRole.BrightText, QColor(255, 0, 0))
+			p.setColor(p.ColorRole.Link, QColor(42, 130, 218))
+			p.setColor(p.ColorRole.Highlight, QColor(42, 130, 218))
+			p.setColor(p.ColorRole.HighlightedText, QColor(0, 0, 0))
+			app.setPalette(p)  # type: ignore[attr-defined]
+		else:
+			app.setStyle("Fusion")  # type: ignore[attr-defined]
+			app.setPalette(app.style().standardPalette())  # type: ignore[attr-defined]
+
+	def _toggle_theme(self) -> None:
+		self._dark = not self._dark
+		self._theme_btn.setText("☀" if not self._dark else "☾")
+		self._apply_theme()
 
 	# ═══════════════════ 视频导入 ═══════════════════
 
@@ -548,6 +599,7 @@ class RaceVideoToLogApp(QMainWindow):
 		self._codec_label.setText(self.metadata.codec)
 		self._status_label.setText("视频已载入，请输入识别范围并预览。")
 		self._slider.setRange(0, fc - 1); self._slider.setValue(0)
+		self._frame_label.setText(f"#{0}/{fc}")
 		self._show_frame(0)
 
 	# ═══════════════════ 预览 ═══════════════════
@@ -605,6 +657,8 @@ class RaceVideoToLogApp(QMainWindow):
 		self._preview_frame_no = target; return True
 
 	def _on_slider(self, value: int) -> None:
+		if self.metadata:
+			self._frame_label.setText(f"#{value}/{self.metadata.frame_count}")
 		if self._throttle_timer:
 			self._throttle_timer.stop()
 		self._throttle_timer = QTimer(self)
@@ -701,7 +755,7 @@ class RaceVideoToLogApp(QMainWindow):
 			return QMessageBox.warning(self, "识别范围不完整", "请先填写或拖拽选择识别范围。")
 
 		out, _ = QFileDialog.getSaveFileName(self, "保存 CSV",
-			str(self.video_path.parent), f"{self.video_path.stem}_log.csv",
+			str(self.video_path.parent / f"{self.video_path.stem}_log.csv"),
 			"CSV 文件 (*.csv)")
 		if not out: return
 
