@@ -119,18 +119,29 @@ class AnalysisTab:
 	# ═══════════════════ 事件 ═══════════════════
 
 	def _sync_figure_theme(self) -> None:
-		"""根据应用当前主题同步 matplotlib 画布背景色。"""
+		"""根据应用当前主题同步 matplotlib 画布背景色和文字颜色。"""
 		from PySide6.QtWidgets import QApplication
 		app = QApplication.instance()
-		bg = "#ffffff"
-		if app:
-			bg = "#2a2a2a" if app.property("dark_mode") else "#ffffff"
+		dark = bool(app.property("dark_mode")) if app else False
+		bg = "#2a2a2a" if dark else "#ffffff"
+		fg = "#e0e0e0" if dark else "#333333"
 		if self._figure:
 			self._figure.set_facecolor(bg)
 			if self._figure.axes:
 				for ax in self._figure.axes:
 					ax.set_facecolor(bg)
+					ax.tick_params(colors=fg)
+					ax.xaxis.label.set_color(fg)
+					ax.yaxis.label.set_color(fg)
+					ax.title.set_color(fg)
+					ax.spines["bottom"].set_color(fg if dark else "#888")
+					ax.spines["left"].set_color(fg if dark else "#888")
+					ax.spines["top"].set_visible(False)
+					ax.spines["right"].set_visible(False)
+					ax.grid(True, alpha=0.2 if dark else 0.3)
 		if self._canvas:
+			self._canvas.setStyleSheet(
+				"background: transparent;" if dark else "")
 			self._canvas.draw_idle()
 
 	def _on_mode(self, mode: str) -> None:
@@ -165,6 +176,11 @@ class AnalysisTab:
 				fig.axes[0].get_xlim(), fig.axes[0].get_ylim())
 
 		fig.clear()
+		# 新建 axes 前设置背景色（后续 _sync_figure_theme 会同步完整主题）
+		from PySide6.QtWidgets import QApplication
+		app = QApplication.instance()
+		dark = bool(app.property("dark_mode")) if app else False
+		fig.set_facecolor("#2a2a2a" if dark else "#ffffff")
 		ax = fig.add_subplot(111)
 		colors = ["#2196F3", "#FF5722", "#4CAF50"]
 		mode = self._chart_mode

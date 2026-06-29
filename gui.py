@@ -27,6 +27,39 @@ from ocr_engine import *  # noqa: F403, F405
 from gui_analysis import AnalysisTab
 
 
+# ═══════════════════════ 暗色主题 QSS ═══════════════════════
+
+_DARK_QSS = """
+QWidget { color: #f0f0f0; background-color: #2a2a2a; }
+QMainWindow { background-color: #2a2a2a; }
+QGroupBox { color: #f0f0f0; border: 1px solid #555; border-radius: 4px;
+ margin-top: 8px; padding-top: 12px; }
+QGroupBox::title { color: #f0f0f0; }
+QPushButton { background-color: #444; color: #f0f0f0; border: 1px solid #555;
+ padding: 4px 12px; border-radius: 3px; }
+QPushButton:hover { background-color: #555; }
+QPushButton:pressed { background-color: #333; }
+QPushButton:disabled { background-color: #383838; color: #777; }
+QLineEdit, QSpinBox, QComboBox { background-color: #3a3a3a; color: #f0f0f0;
+ border: 1px solid #555; padding: 2px 4px; border-radius: 3px; }
+QComboBox::drop-down { border: none; }
+QComboBox QAbstractItemView { background-color: #3a3a3a; color: #f0f0f0;
+ selection-background-color: #42a2da; }
+QRadioButton, QCheckBox { color: #f0f0f0; }
+QLabel { color: #f0f0f0; background: transparent; }
+QSlider::groove:horizontal { background: #555; height: 6px; border-radius: 3px; }
+QSlider::handle:horizontal { background: #42a2da; width: 14px; height: 14px;
+ margin: -4px 0; border-radius: 7px; }
+QProgressBar { background-color: #3a3a3a; color: #f0f0f0; border: 1px solid #555;
+ border-radius: 3px; text-align: center; }
+QProgressBar::chunk { background-color: #42a2da; border-radius: 2px; }
+QTabWidget::pane { border: 1px solid #555; background-color: #2a2a2a; }
+QTabBar::tab { background-color: #383838; color: #ccc; padding: 6px 14px;
+ border: 1px solid #555; border-bottom: none; }
+QTabBar::tab:selected { background-color: #2a2a2a; color: #f0f0f0; }
+QTabBar::tab:hover { background-color: #444; }
+"""
+
 # ═══════════════════════ 导出工作线程 ═══════════════════════
 
 class _ExportThread(QThread):
@@ -530,33 +563,15 @@ class RaceVideoToLogApp(QMainWindow):
 		app.setProperty("dark_mode", self._dark)
 		if self._dark:
 			app.setStyle("Fusion")  # type: ignore[attr-defined]
-			p = app.palette()  # type: ignore[attr-defined]
-			p.setColor(p.ColorRole.Window, QColor(53, 53, 53))
-			p.setColor(p.ColorRole.WindowText, QColor(255, 255, 255))
-			p.setColor(p.ColorRole.Base, QColor(42, 42, 42))
-			p.setColor(p.ColorRole.AlternateBase, QColor(66, 66, 66))
-			p.setColor(p.ColorRole.ToolTipBase, QColor(255, 255, 255))
-			p.setColor(p.ColorRole.ToolTipText, QColor(0, 0, 0))
-			p.setColor(p.ColorRole.Text, QColor(255, 255, 255))
-			p.setColor(p.ColorRole.Button, QColor(53, 53, 53))
-			p.setColor(p.ColorRole.ButtonText, QColor(255, 255, 255))
-			p.setColor(p.ColorRole.BrightText, QColor(255, 0, 0))
-			p.setColor(p.ColorRole.Link, QColor(42, 130, 218))
-			p.setColor(p.ColorRole.Highlight, QColor(42, 130, 218))
-			p.setColor(p.ColorRole.HighlightedText, QColor(0, 0, 0))
-			app.setPalette(p)  # type: ignore[attr-defined]
+			app.setStyleSheet(_DARK_QSS)  # type: ignore[attr-defined]
 		else:
 			from PySide6.QtWidgets import QStyleFactory
+			app.setStyleSheet("")  # type: ignore[attr-defined]
 			if "windowsvista" in QStyleFactory.keys():
 				app.setStyle("windowsvista")  # type: ignore[attr-defined]
 			else:
 				app.setStyle("Fusion")  # type: ignore[attr-defined]
-				lp = app.palette()  # type: ignore[attr-defined]
-				lp.setColor(lp.ColorRole.Window, QColor(255, 255, 255))
-				lp.setColor(lp.ColorRole.Base, QColor(255, 255, 255))
-				lp.setColor(lp.ColorRole.Button, QColor(240, 240, 240))
-				app.setPalette(lp)  # type: ignore[attr-defined]
-		# 同步分析 tab 的 matplotlib 画布
+		# 同步 matplotlib 画布
 		if hasattr(self, '_analysis_tab'):
 			self._analysis_tab._sync_figure_theme()
 
