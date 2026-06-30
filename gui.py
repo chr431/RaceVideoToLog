@@ -615,6 +615,7 @@ class RaceVideoToLogApp(QMainWindow):
 		app = QApplication.instance()
 		if app is None:
 			return
+		assert isinstance(app, QApplication)
 		app.setProperty("dark_mode", self._dark)
 		if self._dark:
 			app.setStyle("Fusion")  # type: ignore[attr-defined]
@@ -865,10 +866,10 @@ class RaceVideoToLogApp(QMainWindow):
 
 	def _export_csv(self) -> None:
 		if self.video_path is None or self.metadata is None:
-			return QMessageBox.warning(self, "未导入视频", "请先导入视频。")
+			QMessageBox.warning(self, "未导入视频", "请先导入视频。"); return
 		roi = self._get_roi()
 		if roi is None:
-			return QMessageBox.warning(self, "识别范围不完整", "请先填写或拖拽选择识别范围。")
+			QMessageBox.warning(self, "识别范围不完整", "请先填写或拖拽选择识别范围。"); return
 
 		out, _ = QFileDialog.getSaveFileName(self, "保存 CSV",
 			str(self.video_path.parent / f"{self.video_path.stem}_log.csv"),
@@ -880,7 +881,7 @@ class RaceVideoToLogApp(QMainWindow):
 			fd = int(self.div_edit.text()); th = float(self.target_h_edit.text())
 			pp = float(self.pad_edit.text()); nw = int(self.workers_edit.text())
 		except ValueError:
-			return QMessageBox.warning(self, "参数错误", "请检查数值参数。")
+			QMessageBox.warning(self, "参数错误", "请检查数值参数。"); return
 
 		self._export_btn.setEnabled(False); self._cancel_btn.setEnabled(True)
 		self._export_thread = _ExportThread(self, Path(out), roi, ms, ma, fd, th, pp, nw)
