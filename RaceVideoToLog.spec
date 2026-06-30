@@ -62,23 +62,7 @@ binaries = [(s, d) for s, d in binaries if os.path.basename(s) not in _EXCLUDE_F
 # matplotlib（数据分析 tab）
 tmp_ret = collect_all('matplotlib')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-
-# ── 精简：移除不需要的文件 ──
-# v5_server 模型 (已从 UI 移除，省 165MB)
-# DirectML provider (仅 CUDA 需要)
-_EXCLUDE_FILES = {
-    # v5 models (replaced by v6_small)
-    'ch_PP-OCRv5_mobile_det_infer.onnx', 'ch_PP-OCRv5_mobile_rec_infer.onnx',
-    'ch_PP-OCRv5_det_server_infer.onnx', 'ch_PP-OCRv5_rec_server_infer.onnx',
-    # v3 legacy
-    'ch_PP-OCRv3_det_infer.onnx', 'ch_PP-OCRv3_rec_infer.onnx',
-    'ch_ppocr_mobile_v2.0_cls_infer.onnx',
-    # v6 extras (only small needed)
-    'PP-OCRv6_det_tiny.onnx', 'PP-OCRv6_rec_tiny.onnx',
-    'PP-OCRv6_det_medium.onnx', 'PP-OCRv6_rec_medium.onnx',
-    # Unused ONNX providers
-    'DirectML.dll', 'onnxruntime_providers_tensorrt.dll',
-}
+# 二次过滤：matplotlib 可能带回部分之前排除的文件
 datas = [(s, d) for s, d in datas if os.path.basename(s) not in _EXCLUDE_FILES]
 binaries = [(s, d) for s, d in binaries if os.path.basename(s) not in _EXCLUDE_FILES]
 
