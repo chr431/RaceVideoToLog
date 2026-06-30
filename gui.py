@@ -27,6 +27,18 @@ from ocr_engine import *  # noqa: F403, F405
 from gui_analysis import AnalysisTab
 
 
+# ═══════════════════════ 基础样式（亮色）══════════════════════
+
+_LIGHT_QSS = """
+QSpinBox::up-button, QSpinBox::down-button {
+    width: 14px; border: none; background: #e0e0e0;
+}
+QSpinBox::up-arrow, QSpinBox::down-arrow { width: 8px; height: 8px; }
+QComboBox::drop-down { width: 20px; border: none; }
+QComboBox::down-arrow { image: none; border-left: 4px solid transparent;
+    border-right: 4px solid transparent; border-top: 6px solid #555; margin-right: 4px; }
+"""
+
 # ═══════════════════════ 暗色主题 QSS ═══════════════════════
 
 _DARK_QSS = """
@@ -476,30 +488,30 @@ class RaceVideoToLogApp(QMainWindow):
 		tl.addWidget(QLabel("起始帧"), 0, 0)
 		self.frame_start_edit = QLineEdit(); self.frame_start_edit.setFixedWidth(80)
 		tl.addWidget(self.frame_start_edit, 0, 1)
-		bfs = QPushButton("设为当前"); bfs.setFixedWidth(70)
+		bfs = QPushButton("设为当前"); bfs.setFixedWidth(80)
 		bfs.clicked.connect(lambda: self.frame_start_edit.setText(str(self._slider.value())))
 		tl.addWidget(bfs, 0, 2)
 		tl.addWidget(QLabel("结束帧"), 0, 3)
 		self.frame_end_edit = QLineEdit(); self.frame_end_edit.setFixedWidth(80)
 		tl.addWidget(self.frame_end_edit, 0, 4)
-		bfe = QPushButton("设为当前"); bfe.setFixedWidth(70)
+		bfe = QPushButton("设为当前"); bfe.setFixedWidth(80)
 		bfe.clicked.connect(lambda: self.frame_end_edit.setText(str(self._slider.value())))
 		tl.addWidget(bfe, 0, 5)
 		ll.addWidget(t)
 		ll.addStretch()
 
 	def _build_right_panel(self, rl: QVBoxLayout) -> None:
-		# 识别范围（像素）— 单行四格
+		# 识别范围（像素）— 标签在上，输入框在下
 		rg = QGroupBox("识别范围（像素）")
 		rgl = QGridLayout(rg)
 		self.roi_x1 = QLineEdit(); self.roi_y1 = QLineEdit()
 		self.roi_x2 = QLineEdit(); self.roi_y2 = QLineEdit()
 		for e in [self.roi_x1, self.roi_y1, self.roi_x2, self.roi_y2]:
-			e.setFixedWidth(80)
-		rgl.addWidget(QLabel("左上 X"), 0, 0); rgl.addWidget(self.roi_x1, 0, 1)
-		rgl.addWidget(QLabel("左上 Y"), 0, 2); rgl.addWidget(self.roi_y1, 0, 3)
-		rgl.addWidget(QLabel("右下 X"), 0, 4); rgl.addWidget(self.roi_x2, 0, 5)
-		rgl.addWidget(QLabel("右下 Y"), 0, 6); rgl.addWidget(self.roi_y2, 0, 7)
+			e.setFixedWidth(90)
+		rgl.addWidget(QLabel("左上 X"), 0, 0); rgl.addWidget(self.roi_x1, 1, 0)
+		rgl.addWidget(QLabel("左上 Y"), 0, 1); rgl.addWidget(self.roi_y1, 1, 1)
+		rgl.addWidget(QLabel("右下 X"), 0, 2); rgl.addWidget(self.roi_x2, 1, 2)
+		rgl.addWidget(QLabel("右下 Y"), 0, 3); rgl.addWidget(self.roi_y2, 1, 3)
 		rl.addWidget(rg)
 
 		# 预览
@@ -573,7 +585,7 @@ class RaceVideoToLogApp(QMainWindow):
 			app.setStyleSheet(_DARK_QSS)  # type: ignore[attr-defined]
 		else:
 			from PySide6.QtWidgets import QStyleFactory
-			app.setStyleSheet("")  # type: ignore[attr-defined]
+			app.setStyleSheet(_LIGHT_QSS)  # type: ignore[attr-defined]
 			if "windowsvista" in QStyleFactory.keys():
 				app.setStyle("windowsvista")  # type: ignore[attr-defined]
 			else:
