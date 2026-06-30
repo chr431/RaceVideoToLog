@@ -13,13 +13,13 @@ import numpy as np
 
 from PySide6.QtWidgets import (
 	QApplication, QMainWindow, QWidget, QTabWidget,
-	QPushButton, QLabel, QLineEdit, QSlider, QSpinBox, QComboBox,
+	QPushButton, QLabel, QLineEdit, QSlider, QComboBox,
 	QRadioButton, QCheckBox, QGroupBox, QProgressBar,
 	QFileDialog, QMessageBox, QHBoxLayout, QVBoxLayout, QGridLayout,
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QThread
 from PySide6.QtGui import (
-	QPixmap, QImage, QPainter, QPen, QColor, QKeySequence, QShortcut,
+	QPixmap, QImage, QPainter, QPen, QColor, QFont, QPalette, QKeySequence, QShortcut,
 )
 
 import ocr_engine
@@ -40,24 +40,21 @@ QPushButton { background-color: #444; color: #f0f0f0; border: 1px solid #555;
 QPushButton:hover { background-color: #555; }
 QPushButton:pressed { background-color: #333; }
 QPushButton:disabled { background-color: #383838; color: #777; }
-QLineEdit, QSpinBox, QComboBox { background-color: #3a3a3a; color: #f0f0f0;
+QLineEdit, QComboBox { background-color: #3a3a3a; color: #f0f0f0;
  border: 1px solid #555; padding: 2px 4px; border-radius: 3px; }
-QSpinBox::up-button, QSpinBox::down-button {
- background-color: #4a4a4a; border: none; width: 14px; }
-QSpinBox::up-button:hover, QSpinBox::down-button:hover { background-color: #5a5a5a; }
-QSpinBox::up-arrow { image: url(none); width: 0; height: 0;
- border-left: 3px solid transparent; border-right: 3px solid transparent;
- border-bottom: 5px solid #ccc; }
-QSpinBox::down-arrow { image: url(none); width: 0; height: 0;
- border-left: 3px solid transparent; border-right: 3px solid transparent;
- border-top: 5px solid #ccc; }
-QComboBox::drop-down { background-color: #4a4a4a; border: none; width: 20px; }
-QComboBox::down-arrow { image: url(none); width: 0; height: 0;
- border-left: 4px solid transparent; border-right: 4px solid transparent;
- border-top: 6px solid #ccc; margin-right: 4px; }
 QComboBox QAbstractItemView { background-color: #3a3a3a; color: #f0f0f0;
  selection-background-color: #42a2da; }
-QRadioButton, QCheckBox { color: #f0f0f0; }
+QRadioButton, QCheckBox { color: #f0f0f0; padding: 2px; border-radius: 2px; }
+QRadioButton:hover, QCheckBox:hover { background-color: #3a3a3a; }
+QRadioButton::indicator, QCheckBox::indicator { width: 16px; height: 16px; }
+QRadioButton::indicator:checked {
+ background-color: #42a2da; border: 1px solid #2e8bc0; border-radius: 8px; }
+QRadioButton::indicator:unchecked {
+ background-color: #3a3a3a; border: 1px solid #555; border-radius: 8px; }
+QCheckBox::indicator:checked {
+ background-color: #42a2da; border: 1px solid #2e8bc0; border-radius: 2px; }
+QCheckBox::indicator:unchecked {
+ background-color: #3a3a3a; border: 1px solid #555; border-radius: 2px; }
 QLabel { color: #f0f0f0; background: transparent; }
 QSlider::groove:horizontal { background: #555; height: 6px; border-radius: 3px; }
 QSlider::handle:horizontal { background: #42a2da; width: 14px; height: 14px;
@@ -70,6 +67,45 @@ QTabBar::tab { background-color: #383838; color: #ccc; padding: 6px 14px;
  border: 1px solid #555; border-bottom: none; }
 QTabBar::tab:selected { background-color: #2a2a2a; color: #f0f0f0; }
 QTabBar::tab:hover { background-color: #444; }
+"""
+
+# ── 亮色主题 QSS（扁平化，纯 hex 色值）──
+_LIGHT_QSS = """
+QWidget { color: #000; }
+QPushButton { background-color: #e8e8e8; color: #000; border: 1px solid #d0d0d0;
+ padding: 4px 12px; border-radius: 3px; }
+QPushButton:hover { background-color: #ddd; }
+QPushButton:pressed { background-color: #ccc; }
+QPushButton:disabled { background-color: #f0f0f0; color: #999; }
+QPushButton:flat { border: none; }
+QLineEdit, QComboBox { background-color: #fff; color: #000;
+ border: 1px solid #c0c0c0; padding: 2px 4px; border-radius: 3px; }
+QRadioButton, QCheckBox { color: #000; padding: 2px; border-radius: 2px; }
+QRadioButton:hover, QCheckBox:hover { background-color: #e0e0e0; }
+QRadioButton::indicator, QCheckBox::indicator { width: 16px; height: 16px; }
+QRadioButton::indicator:checked {
+ background-color: #2196F3; border: 1px solid #1976D2; border-radius: 8px; }
+QRadioButton::indicator:unchecked {
+ background-color: #fff; border: 1px solid #c0c0c0; border-radius: 8px; }
+QCheckBox::indicator:checked {
+ background-color: #2196F3; border: 1px solid #1976D2; border-radius: 2px; }
+QCheckBox::indicator:unchecked {
+ background-color: #fff; border: 1px solid #c0c0c0; border-radius: 2px; }
+QGroupBox { color: #000; border: 1px solid #d0d0d0; border-radius: 4px;
+ margin-top: 8px; padding-top: 12px; }
+QGroupBox::title { color: #000; }
+QLabel { color: #000; }
+QSlider::groove:horizontal { background: #d0d0d0; height: 6px; border-radius: 3px; }
+QSlider::handle:horizontal { background: #2196F3; width: 14px; height: 14px;
+ margin: -4px 0; border-radius: 7px; }
+QProgressBar { background-color: #f0f0f0; color: #000; border: 1px solid #c0c0c0;
+ border-radius: 3px; text-align: center; }
+QProgressBar::chunk { background-color: #2196F3; border-radius: 2px; }
+QTabWidget::pane { border: 1px solid #d0d0d0; }
+QTabBar::tab { background-color: #e8e8e8; color: #333; padding: 6px 14px;
+ border: 1px solid #d0d0d0; border-bottom: none; }
+QTabBar::tab:selected { background-color: #fff; color: #000; }
+QTabBar::tab:hover { background-color: #ddd; }
 """
 
 # ═══════════════════════ 导出工作线程 ═══════════════════════
@@ -343,8 +379,10 @@ class RaceVideoToLogApp(QMainWindow):
 		tbl.addStretch()
 		self._dark = self._is_system_dark()
 		self._theme_btn = QPushButton("☀" if not self._dark else "☾")
-		self._theme_btn.setFixedSize(28, 22)
+		self._theme_btn.setFixedSize(40, 26)
 		self._theme_btn.setFlat(True)
+		f = QFont("Segoe UI Symbol"); f.setPointSize(12)
+		self._theme_btn.setFont(f)
 		self._theme_btn.setToolTip("切换亮色/暗色主题")
 		self._theme_btn.clicked.connect(self._toggle_theme)
 		tbl.addWidget(self._theme_btn)
@@ -445,25 +483,23 @@ class RaceVideoToLogApp(QMainWindow):
 		# 性能
 		p = QGroupBox("性能")
 		pl = QGridLayout(p)
-		pl.addWidget(QLabel("采样间隔"), 0, 0)
-		self.div_spin = QSpinBox(); self.div_spin.setRange(1, 10); self.div_spin.setValue(2)
-		self.div_spin.setFixedWidth(60)
-		pl.addWidget(self.div_spin, 0, 1)
-		pl.addWidget(QLabel("1/N 采集"), 0, 2)
-		pl.addWidget(QLabel("OCR 后端"), 0, 3)
-		self.backend_combo = QComboBox()
-		self.backend_combo.addItems(["自动", "CUDA", "CPU"]); self.backend_combo.setCurrentIndex(0)
-		pl.addWidget(self.backend_combo, 0, 4)
+		pl.addWidget(QLabel("采样率 1/"), 0, 0)
+		self.div_edit = QLineEdit("2"); self.div_edit.setFixedWidth(60)
+		pl.addWidget(self.div_edit, 0, 1)
+		pl.addWidget(QLabel("并行线程数"), 0, 2)
+		self.workers_edit = QLineEdit("4"); self.workers_edit.setFixedWidth(60)
+		pl.addWidget(self.workers_edit, 0, 3)
 		pl.addWidget(QLabel("OCR 高度 (px)"), 1, 0)
 		self.target_h_edit = QLineEdit("24"); self.target_h_edit.setFixedWidth(60)
 		pl.addWidget(self.target_h_edit, 1, 1)
 		pl.addWidget(QLabel("边缘填充 (px)"), 1, 2)
 		self.pad_edit = QLineEdit("0"); self.pad_edit.setFixedWidth(60)
 		pl.addWidget(self.pad_edit, 1, 3)
-		pl.addWidget(QLabel("并行线程数"), 2, 0)
-		self.workers_edit = QLineEdit("4"); self.workers_edit.setFixedWidth(60)
-		pl.addWidget(self.workers_edit, 2, 1)
-		self.debug_cb = QCheckBox("调试日志"); pl.addWidget(self.debug_cb, 2, 2, 1, 2)
+		pl.addWidget(QLabel("OCR 后端"), 2, 0)
+		self.backend_combo = QComboBox()
+		self.backend_combo.addItems(["自动", "CUDA", "CPU"]); self.backend_combo.setCurrentIndex(0)
+		pl.addWidget(self.backend_combo, 2, 1)
+		self.debug_cb = QCheckBox("调试日志"); pl.addWidget(self.debug_cb, 2, 2, 1, 3)
 		ll.addWidget(p)
 
 		# 纠错模式
@@ -475,9 +511,8 @@ class RaceVideoToLogApp(QMainWindow):
 		ml.addWidget(self.mode_auto); ml.addWidget(self.mode_baseline)
 		bf = QWidget(); bfl = QHBoxLayout(bf); bfl.setContentsMargins(20, 0, 0, 0)
 		bfl.addWidget(QLabel("抽样频率 1/"))
-		self.baseline_spin = QSpinBox(); self.baseline_spin.setRange(1, 50)
-		self.baseline_spin.setValue(10); self.baseline_spin.setFixedWidth(60)
-		bfl.addWidget(self.baseline_spin)
+		self.baseline_edit = QLineEdit("10"); self.baseline_edit.setFixedWidth(60)
+		bfl.addWidget(self.baseline_edit)
 		bfl.addWidget(QLabel("(1=全部人工)")); bfl.addStretch()
 		ml.addWidget(bf)
 		ll.addWidget(m)
@@ -498,6 +533,7 @@ class RaceVideoToLogApp(QMainWindow):
 		bfe.clicked.connect(lambda: self.frame_end_edit.setText(str(self._slider.value())))
 		tl.addWidget(bfe, 0, 5)
 		ll.addWidget(t)
+
 		ll.addStretch()
 
 	def _build_right_panel(self, rl: QVBoxLayout) -> None:
@@ -584,15 +620,49 @@ class RaceVideoToLogApp(QMainWindow):
 			app.setStyle("Fusion")  # type: ignore[attr-defined]
 			app.setStyleSheet(_DARK_QSS)  # type: ignore[attr-defined]
 		else:
-			from PySide6.QtWidgets import QStyleFactory
-			app.setStyleSheet("")  # type: ignore[attr-defined]
-			if "windowsvista" in QStyleFactory.keys():
-				app.setStyle("windowsvista")  # type: ignore[attr-defined]
-			else:
-				app.setStyle("Fusion")  # type: ignore[attr-defined]
+			app.setStyle("Fusion")  # type: ignore[attr-defined]
+			app.setStyleSheet(_LIGHT_QSS)  # type: ignore[attr-defined]
+			p = QPalette()
+			p.setColor(QPalette.ColorGroup.All, QPalette.ColorRole.Window, QColor(240, 240, 240))
+			p.setColor(QPalette.ColorGroup.All, QPalette.ColorRole.WindowText, QColor(0, 0, 0))
+			p.setColor(QPalette.ColorGroup.All, QPalette.ColorRole.Base, QColor(255, 255, 255))
+			p.setColor(QPalette.ColorGroup.All, QPalette.ColorRole.AlternateBase, QColor(245, 245, 245))
+			p.setColor(QPalette.ColorGroup.All, QPalette.ColorRole.Text, QColor(0, 0, 0))
+			p.setColor(QPalette.ColorGroup.All, QPalette.ColorRole.Button, QColor(240, 240, 240))
+			p.setColor(QPalette.ColorGroup.All, QPalette.ColorRole.ButtonText, QColor(0, 0, 0))
+			p.setColor(QPalette.ColorGroup.All, QPalette.ColorRole.Highlight, QColor(66, 162, 218))
+			p.setColor(QPalette.ColorGroup.All, QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
+			p.setColor(QPalette.ColorGroup.All, QPalette.ColorRole.BrightText, QColor(255, 0, 0))
+			p.setColor(QPalette.ColorGroup.All, QPalette.ColorRole.Light, QColor(255, 255, 255))
+			p.setColor(QPalette.ColorGroup.All, QPalette.ColorRole.Midlight, QColor(235, 235, 235))
+			p.setColor(QPalette.ColorGroup.All, QPalette.ColorRole.Mid, QColor(200, 200, 200))
+			p.setColor(QPalette.ColorGroup.All, QPalette.ColorRole.Dark, QColor(160, 160, 160))
+			p.setColor(QPalette.ColorGroup.All, QPalette.ColorRole.Shadow, QColor(105, 105, 105))
+			app.setPalette(p)  # type: ignore[attr-defined]
+			self.setPalette(p)
+		# 强制刷新所有控件样式
+		for w in app.topLevelWidgets():
+			app.style().unpolish(w)
+			app.style().polish(w)
+		# Windows 标题栏暗色同步
+		self._set_titlebar_dark(self._dark)
 		# 同步 matplotlib 画布
 		if hasattr(self, '_analysis_tab'):
 			self._analysis_tab._sync_figure_theme()
+
+	def _set_titlebar_dark(self, dark: bool) -> None:
+		import sys
+		if sys.platform != "win32":
+			return
+		try:
+			import ctypes
+			DWMWA = 20  # DWMWA_USE_IMMERSIVE_DARK_MODE on Win11
+			hwnd = int(self.winId())
+			val = ctypes.c_int(1 if dark else 0)
+			ctypes.windll.dwmapi.DwmSetWindowAttribute(
+				hwnd, DWMWA, ctypes.byref(val), ctypes.sizeof(val))
+		except Exception:
+			pass
 
 	def _toggle_theme(self) -> None:
 		self._dark = not self._dark
@@ -807,7 +877,7 @@ class RaceVideoToLogApp(QMainWindow):
 
 		try:
 			ms = float(self.max_speed_edit.text()); ma = float(self.max_accel_edit.text())
-			fd = self.div_spin.value(); th = float(self.target_h_edit.text())
+			fd = int(self.div_edit.text()); th = float(self.target_h_edit.text())
 			pp = float(self.pad_edit.text()); nw = int(self.workers_edit.text())
 		except ValueError:
 			return QMessageBox.warning(self, "参数错误", "请检查数值参数。")
