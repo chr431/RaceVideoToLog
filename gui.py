@@ -27,18 +27,6 @@ from ocr_engine import *  # noqa: F403, F405
 from gui_analysis import AnalysisTab
 
 
-# ═══════════════════════ 基础样式（亮色）══════════════════════
-
-_LIGHT_QSS = """
-QSpinBox::up-button, QSpinBox::down-button {
-    width: 14px; border: none; background: #e0e0e0;
-}
-QSpinBox::up-arrow, QSpinBox::down-arrow { width: 8px; height: 8px; }
-QComboBox::drop-down { width: 20px; border: none; }
-QComboBox::down-arrow { image: none; border-left: 4px solid transparent;
-    border-right: 4px solid transparent; border-top: 6px solid #555; margin-right: 4px; }
-"""
-
 # ═══════════════════════ 暗色主题 QSS ═══════════════════════
 
 _DARK_QSS = """
@@ -54,7 +42,19 @@ QPushButton:pressed { background-color: #333; }
 QPushButton:disabled { background-color: #383838; color: #777; }
 QLineEdit, QSpinBox, QComboBox { background-color: #3a3a3a; color: #f0f0f0;
  border: 1px solid #555; padding: 2px 4px; border-radius: 3px; }
-QComboBox::drop-down { border: none; }
+QSpinBox::up-button, QSpinBox::down-button {
+ background-color: #4a4a4a; border: none; width: 14px; }
+QSpinBox::up-button:hover, QSpinBox::down-button:hover { background-color: #5a5a5a; }
+QSpinBox::up-arrow { image: url(none); width: 0; height: 0;
+ border-left: 3px solid transparent; border-right: 3px solid transparent;
+ border-bottom: 5px solid #ccc; }
+QSpinBox::down-arrow { image: url(none); width: 0; height: 0;
+ border-left: 3px solid transparent; border-right: 3px solid transparent;
+ border-top: 5px solid #ccc; }
+QComboBox::drop-down { background-color: #4a4a4a; border: none; width: 20px; }
+QComboBox::down-arrow { image: url(none); width: 0; height: 0;
+ border-left: 4px solid transparent; border-right: 4px solid transparent;
+ border-top: 6px solid #ccc; margin-right: 4px; }
 QComboBox QAbstractItemView { background-color: #3a3a3a; color: #f0f0f0;
  selection-background-color: #42a2da; }
 QRadioButton, QCheckBox { color: #f0f0f0; }
@@ -585,7 +585,7 @@ class RaceVideoToLogApp(QMainWindow):
 			app.setStyleSheet(_DARK_QSS)  # type: ignore[attr-defined]
 		else:
 			from PySide6.QtWidgets import QStyleFactory
-			app.setStyleSheet(_LIGHT_QSS)  # type: ignore[attr-defined]
+			app.setStyleSheet("")  # type: ignore[attr-defined]
 			if "windowsvista" in QStyleFactory.keys():
 				app.setStyle("windowsvista")  # type: ignore[attr-defined]
 			else:
