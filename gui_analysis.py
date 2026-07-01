@@ -9,18 +9,18 @@ from pathlib import Path
 import numpy as np
 
 from PySide6.QtWidgets import (
-	QWidget, QPushButton, QLabel, QRadioButton, QCheckBox, QGroupBox,
-	QSlider, QFileDialog, QMessageBox, QHBoxLayout, QVBoxLayout, QGridLayout,
+	QWidget, QFileDialog, QMessageBox, QHBoxLayout, QVBoxLayout, QGridLayout,
 	QStackedWidget, QLineEdit,
 )
 from PySide6.QtCore import Qt
-from qfluentwidgets import PushButton, PrimaryPushButton, CompactSpinBox
+from qfluentwidgets import (PushButton, PrimaryPushButton, CompactSpinBox,
+	RadioButton, CheckBox, BodyLabel, CardWidget, Slider)
 
 from analysis import parse_csv, smooth_data, plot_segmented
 
 
 class AnalysisTab:
-	"""数据分析 Tab — 嵌入 QStackedWidget。"""
+	"""数据分析 Tab — 嵌入 QStackedWidget，修改自动刷新。"""
 
 	def __init__(self, stack: QStackedWidget) -> None:
 		from matplotlib.figure import Figure
@@ -41,6 +41,7 @@ class AnalysisTab:
 		self._last_mode: str | None = None
 		self._smooth_str: int = 25
 		self._span_selector = None
+		self._auto_render = False
 
 		self._build_tab()
 
@@ -56,7 +57,7 @@ class AnalysisTab:
 		cl.setContentsMargins(0, 0, 0, 0)
 
 		for i in range(3):
-			slot = QGroupBox(f"CSV {i+1}")
+			slot = CardWidget()
 			sl = QHBoxLayout(slot)
 			btn_import = PushButton("导入")
 			btn_import.clicked.connect(lambda checked, idx=i: self._import(idx))
@@ -64,30 +65,28 @@ class AnalysisTab:
 			btn_clear = PushButton("清除")
 			btn_clear.clicked.connect(lambda checked, idx=i: self._clear(idx))
 			sl.addWidget(btn_clear)
-			lbl = QLabel("未导入")
+			lbl = BodyLabel("未导入")
 			self._labels.append(lbl)
 			sl.addWidget(lbl)
 			cl.addWidget(slot, 0, i)
 
-		btn_render = PrimaryPushButton("渲染曲线")
-		btn_render.clicked.connect(self._render)
-		cl.addWidget(btn_render, 0, 3)
+
 
 		btn_export = PushButton("导出 PNG")
 		btn_export.clicked.connect(self._export_png)
-		cl.addWidget(btn_export, 0, 4)
+		cl.addWidget(btn_export, 0, 3)
 
 		# 第二行：模式 + 平滑 + 自动调整
 		row2 = QHBoxLayout()
-		self._cb_corrected = QCheckBox("显示诊断信息")
-		self._cb_corrected.toggled.connect(lambda v: setattr(self, '_show_corrected', v))
+		self._cb_corrected = CheckBox("显示诊断信息")
+		self._cb_corrected.toggled.connect(lambda v: (setattr(self, '_show_corrected', v), self._render()))
 		row2.addWidget(self._cb_corrected)
 
-		row2.addWidget(QLabel("平滑"))
-		self._smooth_slider = QSlider(Qt.Orientation.Horizontal)
+		row2.addWidget(BodyLabel("平滑"))
+		self._smooth_slider = Slider(Qt.Orientation.Horizontal)
 		self._smooth_slider.setRange(0, 100); self._smooth_slider.setValue(25)
 		self._smooth_slider.setFixedWidth(100)
-		self._smooth_slider.valueChanged.connect(lambda v: setattr(self, '_smooth_str', v))
+		self._smooth_slider.valueChanged.connect(lambda v: (setattr(self, '_smooth_str', v), self._render()))
 		row2.addWidget(self._smooth_slider)
 
 		self._smooth_spin = CompactSpinBox(); self._smooth_spin.setRange(0, 100); self._smooth_spin.setValue(25); self._smooth_spin.setFixedWidth(70)
@@ -100,8 +99,8 @@ class AnalysisTab:
 		self._smooth_slider.valueChanged.connect(self._smooth_spin.setValue)
 		row2.addWidget(self._smooth_spin)
 
-		self._rb_vt = QRadioButton("v-t"); self._rb_vx = QRadioButton("v-x")
-		self._rb_vx.setChecked(True); self._rb_dtx = QRadioButton("Δt-x")
+		self._rb_vt = RadioButton("v-t"); self._rb_vx = RadioButton("v-x")
+		self._rb_vx.setChecked(True); self._rb_dtx = RadioButton("Δt-x")
 		for mode, rb in [("v-t", self._rb_vt), ("v-x", self._rb_vx), ("dt-x", self._rb_dtx)]:
 			rb.toggled.connect(lambda checked, m=mode: self._on_mode(m) if checked else None)
 			row2.addWidget(rb)
@@ -110,7 +109,7 @@ class AnalysisTab:
 		btn_fit.clicked.connect(self._auto_fit)
 		row2.addWidget(btn_fit)
 
-		cl.addLayout(row2, 1, 0, 1, 5)
+		cl.addLayout(row2, 1, 0, 1, 4)
 		layout.addWidget(ctrl)
 
 		# ── Matplotlib 画布 ──
@@ -169,6 +168,7 @@ class AnalysisTab:
 		self._csvs[index] = None
 		self._labels[index].setText("未导入")
 		self._saved_limits.clear()
+		self._render()
 
 	# ═══════════════════ 渲染 ═══════════════════
 
@@ -186,9 +186,8 @@ class AnalysisTab:
 
 		fig.clear()
 		# 新建 axes 前设置背景色（后续 _sync_figure_theme 会同步完整主题）
-		from PySide6.QtWidgets import QApplication
-		app = QApplication.instance()
-		dark = bool(app.property("dark_mode")) if app else False
+		from qfluentwidgets import isDarkTheme
+		dark = isDarkTheme()
 		fig.set_facecolor("#2a2a2a" if dark else "#ffffff")
 		ax = fig.add_subplot(111)
 		colors = ["#2196F3", "#FF5722", "#4CAF50"]
