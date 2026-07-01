@@ -41,7 +41,6 @@ class AnalysisTab:
 		self._last_mode: str | None = None
 		self._smooth_str: int = 25
 		self._span_selector = None
-		self._auto_render = False
 
 		self._build_tab()
 
@@ -72,9 +71,10 @@ class AnalysisTab:
 
 
 
-		btn_export = PushButton("导出 PNG")
+		btn_export = PrimaryPushButton("导出 PNG")
+		btn_export.setFixedWidth(80)
 		btn_export.clicked.connect(self._export_png)
-		cl.addWidget(btn_export, 0, 3)
+		cl.addWidget(btn_export, 0, 3, Qt.AlignmentFlag.AlignRight)
 
 		# 第二行：模式 + 平滑 + 自动调整
 		row2 = QHBoxLayout()
@@ -118,6 +118,7 @@ class AnalysisTab:
 		self._canvas.setParent(tab)
 		layout.addWidget(self._canvas, 1)
 		self._sync_figure_theme()
+		self._ready = True
 
 	# ═══════════════════ 事件 ═══════════════════
 
@@ -173,6 +174,8 @@ class AnalysisTab:
 	# ═══════════════════ 渲染 ═══════════════════
 
 	def _render(self) -> None:
+		if not self._ready:
+			return
 		from matplotlib.widgets import SpanSelector
 
 		fig = self._figure
