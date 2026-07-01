@@ -12,7 +12,7 @@ import cv2
 import numpy as np
 
 from PySide6.QtWidgets import (
-	QApplication, QMainWindow, QWidget, QStackedWidget,
+	QMainWindow, QWidget, QStackedWidget,
 	QFileDialog, QMessageBox, QHBoxLayout, QVBoxLayout, QGridLayout,
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QThread
@@ -24,7 +24,7 @@ import ocr_engine
 from ocr_engine import *  # noqa: F403, F405
 from gui_analysis import AnalysisTab
 
-from qfluentwidgets import (setTheme, Theme, FluentIcon, IconWidget,
+from qfluentwidgets import (setTheme, Theme,
 	PushButton, PrimaryPushButton, LineEdit, ComboBox, CheckBox, RadioButton,
 	BodyLabel, StrongBodyLabel, CaptionLabel, CardWidget, Slider, ProgressBar, CompactSpinBox, Pivot)
 

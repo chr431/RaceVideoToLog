@@ -14,7 +14,6 @@ import cv2
 import numpy as np
 
 import matplotlib
-matplotlib.use("TkAgg")
 matplotlib.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
 matplotlib.rcParams["axes.unicode_minus"] = False
 
