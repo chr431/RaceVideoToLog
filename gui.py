@@ -26,89 +26,11 @@ import ocr_engine
 from ocr_engine import *  # noqa: F403, F405
 from gui_analysis import AnalysisTab
 
+from qfluentwidgets import setTheme, Theme, InfoBar, InfoBarPosition, PushButton,     PrimaryPushButton, LineEdit, ComboBox, CheckBox, RadioButton,     BodyLabel, StrongBodyLabel, CaptionLabel, CardWidget, Slider, ProgressBar
+from qframelesswindow import FramelessMainWindow, StandardTitleBar
 
-# ═══════════════════════ 暗色主题 QSS ═══════════════════════
 
-_DARK_QSS = """
-QWidget { color: #f0f0f0; background-color: #2a2a2a; }
-QMainWindow { background-color: #2a2a2a; }
-QGroupBox { color: #f0f0f0; border: 1px solid #555; border-radius: 4px;
- margin-top: 8px; padding-top: 12px; }
-QGroupBox::title { color: #f0f0f0; }
-QPushButton { background-color: #444; color: #f0f0f0; border: 1px solid #555;
- padding: 4px 12px; border-radius: 3px; }
-QPushButton:hover { background-color: #555; }
-QPushButton:pressed { background-color: #333; }
-QPushButton:disabled { background-color: #383838; color: #777; }
-QLineEdit, QComboBox { background-color: #3a3a3a; color: #f0f0f0;
- border: 1px solid #555; padding: 2px 4px; border-radius: 3px; }
-QComboBox QAbstractItemView { background-color: #3a3a3a; color: #f0f0f0;
- selection-background-color: #42a2da; }
-QRadioButton, QCheckBox { color: #f0f0f0; padding: 2px; border-radius: 2px; }
-QRadioButton:hover, QCheckBox:hover { background-color: #3a3a3a; }
-QRadioButton::indicator, QCheckBox::indicator { width: 16px; height: 16px; }
-QRadioButton::indicator:checked {
- background-color: #42a2da; border: 1px solid #2e8bc0; border-radius: 8px; }
-QRadioButton::indicator:unchecked {
- background-color: #3a3a3a; border: 1px solid #555; border-radius: 8px; }
-QCheckBox::indicator:checked {
- background-color: #42a2da; border: 1px solid #2e8bc0; border-radius: 2px; }
-QCheckBox::indicator:unchecked {
- background-color: #3a3a3a; border: 1px solid #555; border-radius: 2px; }
-QLabel { color: #f0f0f0; background: transparent; }
-QSlider::groove:horizontal { background: #555; height: 6px; border-radius: 3px; }
-QSlider::handle:horizontal { background: #42a2da; width: 14px; height: 14px;
- margin: -4px 0; border-radius: 7px; }
-QProgressBar { background-color: #3a3a3a; color: #f0f0f0; border: 1px solid #555;
- border-radius: 3px; text-align: center; }
-QProgressBar::chunk { background-color: #42a2da; border-radius: 2px; }
-QTabWidget::pane { border: 1px solid #555; background-color: #2a2a2a; }
-QTabBar::tab { background-color: #383838; color: #ccc; padding: 6px 14px;
- border: 1px solid #555; border-bottom: none; }
-QTabBar::tab:selected { background-color: #2a2a2a; color: #f0f0f0; }
-QTabBar::tab:hover { background-color: #444; }
-"""
 
-# ── 亮色主题 QSS（扁平化，纯 hex 色值）──
-_LIGHT_QSS = """
-QWidget { color: #000; }
-QPushButton { background-color: #e8e8e8; color: #000; border: 1px solid #d0d0d0;
- padding: 4px 12px; border-radius: 3px; }
-QPushButton:hover { background-color: #ddd; }
-QPushButton:pressed { background-color: #ccc; }
-QPushButton:disabled { background-color: #f0f0f0; color: #999; }
-QPushButton:flat { border: none; }
-QLineEdit, QComboBox { background-color: #fff; color: #000;
- border: 1px solid #c0c0c0; padding: 2px 4px; border-radius: 3px; }
-QRadioButton, QCheckBox { color: #000; padding: 2px; border-radius: 2px; }
-QRadioButton:hover, QCheckBox:hover { background-color: #e0e0e0; }
-QRadioButton::indicator, QCheckBox::indicator { width: 16px; height: 16px; }
-QRadioButton::indicator:checked {
- background-color: #2196F3; border: 1px solid #1976D2; border-radius: 8px; }
-QRadioButton::indicator:unchecked {
- background-color: #fff; border: 1px solid #c0c0c0; border-radius: 8px; }
-QCheckBox::indicator:checked {
- background-color: #2196F3; border: 1px solid #1976D2; border-radius: 2px; }
-QCheckBox::indicator:unchecked {
- background-color: #fff; border: 1px solid #c0c0c0; border-radius: 2px; }
-QGroupBox { color: #000; border: 1px solid #d0d0d0; border-radius: 4px;
- margin-top: 8px; padding-top: 12px; }
-QGroupBox::title { color: #000; }
-QLabel { color: #000; }
-QSlider::groove:horizontal { background: #d0d0d0; height: 6px; border-radius: 3px; }
-QSlider::handle:horizontal { background: #2196F3; width: 14px; height: 14px;
- margin: -4px 0; border-radius: 7px; }
-QProgressBar { background-color: #f0f0f0; color: #000; border: 1px solid #c0c0c0;
- border-radius: 3px; text-align: center; }
-QProgressBar::chunk { background-color: #2196F3; border-radius: 2px; }
-QTabWidget::pane { border: 1px solid #d0d0d0; }
-QTabBar::tab { background-color: #e8e8e8; color: #333; padding: 6px 14px;
- border: 1px solid #d0d0d0; border-bottom: none; }
-QTabBar::tab:selected { background-color: #fff; color: #000; }
-QTabBar::tab:hover { background-color: #ddd; }
-"""
-
-# ═══════════════════════ 导出工作线程 ═══════════════════════
 
 class _ExportThread(QThread):
 	"""后台执行 OCR + 纠错 + CSV 写出。
@@ -327,7 +249,7 @@ class _ExportThread(QThread):
 
 # ═══════════════════════ 主窗口 ═══════════════════════
 
-class RaceVideoToLogApp(QMainWindow):
+class RaceVideoToLogApp(FramelessMainWindow):
 	"""RaceVideoToLog PySide6 主窗口。"""
 
 	def __init__(self) -> None:
@@ -388,6 +310,10 @@ class RaceVideoToLogApp(QMainWindow):
 		tbl.addWidget(self._theme_btn)
 		root.addWidget(top_bar)
 		self._apply_theme()
+
+		# ── Frameless 标题栏 ──
+		self.setTitleBar(StandardTitleBar(self))
+		self.titleBar.raise_()
 
 		# ── TabWidget ──
 		self._tabs = QTabWidget()
@@ -603,67 +529,14 @@ class RaceVideoToLogApp(QMainWindow):
 
 	@staticmethod
 	def _is_system_dark() -> bool:
-		try:
-			hints = QApplication.styleHints()
-			if hints:
-				return hints.colorScheme() == Qt.ColorScheme.Dark
-		except Exception:
-			pass
-		return False
+		from qfluentwidgets import isDarkTheme
+		return isDarkTheme()
 
 	def _apply_theme(self) -> None:
-		app = QApplication.instance()
-		if app is None:
-			return
-		assert isinstance(app, QApplication)
-		app.setProperty("dark_mode", self._dark)
-		if self._dark:
-			app.setStyle("Fusion")  # type: ignore[attr-defined]
-			app.setStyleSheet(_DARK_QSS)  # type: ignore[attr-defined]
-		else:
-			app.setStyle("Fusion")  # type: ignore[attr-defined]
-			app.setStyleSheet(_LIGHT_QSS)  # type: ignore[attr-defined]
-			p = QPalette()
-			p.setColor(QPalette.ColorGroup.All, QPalette.ColorRole.Window, QColor(240, 240, 240))
-			p.setColor(QPalette.ColorGroup.All, QPalette.ColorRole.WindowText, QColor(0, 0, 0))
-			p.setColor(QPalette.ColorGroup.All, QPalette.ColorRole.Base, QColor(255, 255, 255))
-			p.setColor(QPalette.ColorGroup.All, QPalette.ColorRole.AlternateBase, QColor(245, 245, 245))
-			p.setColor(QPalette.ColorGroup.All, QPalette.ColorRole.Text, QColor(0, 0, 0))
-			p.setColor(QPalette.ColorGroup.All, QPalette.ColorRole.Button, QColor(240, 240, 240))
-			p.setColor(QPalette.ColorGroup.All, QPalette.ColorRole.ButtonText, QColor(0, 0, 0))
-			p.setColor(QPalette.ColorGroup.All, QPalette.ColorRole.Highlight, QColor(66, 162, 218))
-			p.setColor(QPalette.ColorGroup.All, QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
-			p.setColor(QPalette.ColorGroup.All, QPalette.ColorRole.BrightText, QColor(255, 0, 0))
-			p.setColor(QPalette.ColorGroup.All, QPalette.ColorRole.Light, QColor(255, 255, 255))
-			p.setColor(QPalette.ColorGroup.All, QPalette.ColorRole.Midlight, QColor(235, 235, 235))
-			p.setColor(QPalette.ColorGroup.All, QPalette.ColorRole.Mid, QColor(200, 200, 200))
-			p.setColor(QPalette.ColorGroup.All, QPalette.ColorRole.Dark, QColor(160, 160, 160))
-			p.setColor(QPalette.ColorGroup.All, QPalette.ColorRole.Shadow, QColor(105, 105, 105))
-			app.setPalette(p)  # type: ignore[attr-defined]
-			self.setPalette(p)
-		# 强制刷新所有控件样式
-		for w in app.topLevelWidgets():
-			app.style().unpolish(w)
-			app.style().polish(w)
-		# Windows 标题栏暗色同步
-		self._set_titlebar_dark(self._dark)
+		setTheme(Theme.DARK if self._dark else Theme.LIGHT)
 		# 同步 matplotlib 画布
 		if hasattr(self, '_analysis_tab'):
 			self._analysis_tab._sync_figure_theme()
-
-	def _set_titlebar_dark(self, dark: bool) -> None:
-		import sys
-		if sys.platform != "win32":
-			return
-		try:
-			import ctypes
-			DWMWA = 20  # DWMWA_USE_IMMERSIVE_DARK_MODE on Win11
-			hwnd = int(self.winId())
-			val = ctypes.c_int(1 if dark else 0)
-			ctypes.windll.dwmapi.DwmSetWindowAttribute(
-				hwnd, DWMWA, ctypes.byref(val), ctypes.sizeof(val))
-		except Exception:
-			pass
 
 	def _toggle_theme(self) -> None:
 		self._dark = not self._dark
@@ -818,8 +691,8 @@ class RaceVideoToLogApp(QMainWindow):
 		rp.end()
 		self._preview_label.setPixmap(result)
 
-	def resizeEvent(self, event) -> None:
-		super().resizeEvent(event)
+	def resizeEvent(self, e) -> None:
+		super().resizeEvent(e)
 		self._redraw()
 
 	def _get_roi(self) -> tuple | None:

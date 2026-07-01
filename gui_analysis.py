@@ -118,10 +118,9 @@ class AnalysisTab:
 
 	def _sync_figure_theme(self) -> None:
 		"""根据应用当前主题同步 matplotlib 画布背景色和文字颜色。"""
-		from PySide6.QtWidgets import QApplication
 		from PySide6.QtGui import QPalette, QColor
-		app = QApplication.instance()
-		dark = bool(app.property("dark_mode")) if app else False
+		from qfluentwidgets import isDarkTheme
+		dark = isDarkTheme()
 		bg = "#2a2a2a" if dark else "#ffffff"
 		fg = "#e0e0e0" if dark else "#333333"
 		if self._figure:
