@@ -35,6 +35,10 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('onnxruntime')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
+# qfluentwidgets (Fluent Design 组件库)
+tmp_ret = collect_all('qfluentwidgets')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+
 # PySide6 (Qt 6 GUI) — 只收集核心模块
 for _qt_mod in ['PySide6.QtWidgets', 'PySide6.QtCore', 'PySide6.QtGui']:
     _qt_ret = collect_all(_qt_mod)
