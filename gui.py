@@ -405,7 +405,7 @@ class RaceVideoToLogApp(QMainWindow):
 		pl = QGridLayout(perf_card)
 		pl.addWidget(StrongBodyLabel("性能"), 0, 0, 1, 4)
 		pl.addWidget(BodyLabel("采样率 1/"), 1, 0)
-		self.div_spin = CompactSpinBox(); self.div_spin.setRange(1, 10); self.div_spin.setValue(2); self.div_spin.setFixedWidth(60)
+		self.div_spin = CompactSpinBox(); self.div_spin.setRange(1, 10); self.div_spin.setValue(2); self.div_spin.setFixedWidth(70)
 		pl.addWidget(self.div_spin, 1, 1)
 		pl.addWidget(BodyLabel("并行线程数"), 1, 2)
 		self.workers_edit = LineEdit(); self.workers_edit.setText("4"); self.workers_edit.setFixedWidth(50)
@@ -433,7 +433,7 @@ class RaceVideoToLogApp(QMainWindow):
 		ml.addWidget(self.mode_auto); ml.addWidget(self.mode_baseline)
 		bf = QWidget(); bfl = QHBoxLayout(bf); bfl.setContentsMargins(20, 0, 0, 0)
 		bfl.addWidget(BodyLabel("抽样频率 1/"))
-		self.baseline_spin = CompactSpinBox(); self.baseline_spin.setRange(1, 50); self.baseline_spin.setValue(10); self.baseline_spin.setFixedWidth(60)
+		self.baseline_spin = CompactSpinBox(); self.baseline_spin.setRange(1, 50); self.baseline_spin.setValue(10); self.baseline_spin.setFixedWidth(70)
 		bfl.addWidget(self.baseline_spin)
 		bfl.addWidget(CaptionLabel("(1=全部人工)")); bfl.addStretch()
 		ml.addWidget(bf)
@@ -556,12 +556,16 @@ class RaceVideoToLogApp(QMainWindow):
 # 仅设 palette，不做 setAutoFillBackground，避免文字阴影
 		from PySide6.QtGui import QPalette, QColor
 		bg = QColor('#1f1f1f' if dark else '#f5f5f5')
+		fg = QColor('#f0f0f0' if dark else '#000000')
 		for w in (self, self.centralWidget(), getattr(self, '_tabs', None)):
 			if w is None:
 				continue
 			p = w.palette()
 			p.setColor(QPalette.ColorRole.Window, bg)
 			p.setColor(QPalette.ColorRole.Base, bg)
+			p.setColor(QPalette.ColorRole.WindowText, fg)
+			p.setColor(QPalette.ColorRole.Text, fg)
+			p.setColor(QPalette.ColorRole.ButtonText, fg)
 			w.setPalette(p)
 		# Windows 标题栏
 		import sys
