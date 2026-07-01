@@ -27,7 +27,7 @@ from gui_analysis import AnalysisTab
 from qfluentwidgets import (setTheme, Theme, InfoBar, InfoBarPosition,
 	PushButton, PrimaryPushButton, LineEdit, ComboBox, CheckBox, RadioButton,
 	BodyLabel, StrongBodyLabel, CaptionLabel, CardWidget, Slider, ProgressBar)
-from qframelesswindow import FramelessMainWindow, StandardTitleBar
+
 
 
 
@@ -249,7 +249,7 @@ class _ExportThread(QThread):
 
 # ═══════════════════════ 主窗口 ═══════════════════════
 
-class RaceVideoToLogApp(FramelessMainWindow):
+class RaceVideoToLogApp(QMainWindow):
 	"""RaceVideoToLog PySide6 主窗口。"""
 
 	def __init__(self) -> None:
@@ -292,24 +292,23 @@ class RaceVideoToLogApp(FramelessMainWindow):
 		self._dark = self._is_system_dark()
 		self._apply_theme()
 
-		# ── Frameless 标题栏 + 主题按钮 ──
-		self._title_bar = StandardTitleBar(self)
-		self._title_bar.setTitle("Race Video To Log")
-		self.setTitleBar(self._title_bar)
-		self._theme_btn = PushButton("☀" if not self._dark else "☾")
-		self._theme_btn.setFixedSize(40, 28)
-		self._theme_btn.setToolTip("切换亮色/暗色主题")
-		self._theme_btn.clicked.connect(self._toggle_theme)
-		tbl = self._title_bar.layout()
-		if tbl is not None and tbl.count() >= 4:
-			tbl.insertWidget(4, self._theme_btn)
-
 		# ── 中央内容 ──
 		central = QWidget()
 		self.setCentralWidget(central)
 		root = QVBoxLayout(central)
 		root.setContentsMargins(16, 12, 16, 10)
 		root.setSpacing(0)
+
+		# ── 顶栏：主题按钮 ──
+		top_bar = QWidget()
+		tbl = QHBoxLayout(top_bar); tbl.setContentsMargins(0, 0, 0, 4)
+		tbl.addStretch()
+		self._theme_btn = PushButton("☀" if not self._dark else "☾")
+		self._theme_btn.setFixedSize(40, 28)
+		self._theme_btn.setToolTip("切换亮色/暗色主题")
+		self._theme_btn.clicked.connect(self._toggle_theme)
+		tbl.addWidget(self._theme_btn)
+		root.addWidget(top_bar)
 
 		# ── TabWidget ──
 		self._tabs = QTabWidget()
@@ -694,8 +693,8 @@ class RaceVideoToLogApp(FramelessMainWindow):
 		rp.end()
 		self._preview_label.setPixmap(result)
 
-	def resizeEvent(self, e) -> None:
-		super().resizeEvent(e)
+	def resizeEvent(self, event) -> None:
+		super().resizeEvent(event)
 		self._redraw()
 
 	def _get_roi(self) -> tuple | None:
