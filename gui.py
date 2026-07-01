@@ -289,17 +289,11 @@ class RaceVideoToLogApp(FramelessMainWindow):
 	# ═══════════════════ 构建 UI ═══════════════════
 
 	def _build_ui(self) -> None:
-		central = QWidget()
-		self.setCentralWidget(central)
-		root = QVBoxLayout(central)
-		root.setContentsMargins(12, 12, 12, 10)
-		root.setSpacing(0)
-
-		# ── 顶栏：主题按钮（右上角固定位置）──
-		top_bar = QWidget()
-		tbl = QHBoxLayout(top_bar); tbl.setContentsMargins(0, 0, 0, 4)
-		tbl.addStretch()
 		self._dark = self._is_system_dark()
+
+		# ── Frameless 标题栏 + 主题按钮 ──
+		title_bar = StandardTitleBar(self)
+		self.setTitleBar(title_bar)
 		self._theme_btn = QPushButton("☀" if not self._dark else "☾")
 		self._theme_btn.setFixedSize(40, 26)
 		self._theme_btn.setFlat(True)
@@ -307,13 +301,18 @@ class RaceVideoToLogApp(FramelessMainWindow):
 		self._theme_btn.setFont(f)
 		self._theme_btn.setToolTip("切换亮色/暗色主题")
 		self._theme_btn.clicked.connect(self._toggle_theme)
-		tbl.addWidget(self._theme_btn)
-		root.addWidget(top_bar)
+		# 将主题按钮插入标题栏布局（窗口控制按钮左侧）
+		tbl = title_bar.layout()
+		if tbl is not None and tbl.count() > 0:
+			tbl.insertWidget(tbl.count() - 1, self._theme_btn)
 		self._apply_theme()
 
-		# ── Frameless 标题栏 ──
-		self.setTitleBar(StandardTitleBar(self))
-		self.titleBar.raise_()
+		# ── 中央内容 ──
+		central = QWidget()
+		self.setCentralWidget(central)
+		root = QVBoxLayout(central)
+		root.setContentsMargins(12, 8, 12, 10)
+		root.setSpacing(0)
 
 		# ── TabWidget ──
 		self._tabs = QTabWidget()
@@ -534,6 +533,7 @@ class RaceVideoToLogApp(FramelessMainWindow):
 
 	def _apply_theme(self) -> None:
 		setTheme(Theme.DARK if self._dark else Theme.LIGHT)
+		self.update()
 		# 同步 matplotlib 画布
 		if hasattr(self, '_analysis_tab'):
 			self._analysis_tab._sync_figure_theme()
