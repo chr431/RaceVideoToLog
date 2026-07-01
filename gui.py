@@ -301,10 +301,10 @@ class RaceVideoToLogApp(QMainWindow):
 		top_bar = QWidget()
 		tbl = QHBoxLayout(top_bar); tbl.setContentsMargins(0, 0, 0, 4)
 		tbl.addStretch()
-		self._theme_btn = IconWidget(FluentIcon.BRIGHTNESS, top_bar)
-		self._theme_btn.setFixedSize(24, 24)
+		self._theme_btn = PushButton("☀" if not self._theme_is_dark() else "☾")
+		self._theme_btn.setFixedSize(36, 28)
 		self._theme_btn.setToolTip("切换亮色/暗色主题")
-		self._theme_btn.mousePressEvent = lambda e: self._toggle_theme()
+		self._theme_btn.clicked.connect(self._toggle_theme)
 		tbl.addWidget(self._theme_btn)
 		root.addWidget(top_bar)
 
@@ -350,7 +350,7 @@ class RaceVideoToLogApp(QMainWindow):
 		layout.addLayout(hdr)
 
 		# 视频信息 Card
-		info = CardWidget()
+		info = QWidget()
 		il = QHBoxLayout(info)
 		self._dur_label = BodyLabel("-"); self._res_label = BodyLabel("-")
 		self._fps_label = BodyLabel("-"); self._codec_label = BodyLabel("-")
@@ -378,7 +378,7 @@ class RaceVideoToLogApp(QMainWindow):
 
 	def _build_left_panel(self, ll: QVBoxLayout) -> None:
 		# 速度格式 Card
-		fmt_card = CardWidget()
+		fmt_card = QWidget()
 		gl = QVBoxLayout(fmt_card)
 		gl.addWidget(StrongBodyLabel("速度格式"))
 		r = QHBoxLayout()
@@ -392,29 +392,29 @@ class RaceVideoToLogApp(QMainWindow):
 		cg = CardWidget()
 		cl = QGridLayout(cg)
 		cl.addWidget(BodyLabel("最大速度 (km/h)"), 0, 0)
-		self.max_speed_edit = LineEdit(); self.max_speed_edit.setText("400"); self.max_speed_edit.setFixedWidth(60)
+		self.max_speed_edit = LineEdit(); self.max_speed_edit.setText("400"); self.max_speed_edit.setFixedWidth(50)
 		cl.addWidget(self.max_speed_edit, 0, 1)
 		cl.addWidget(BodyLabel("最大加速度 (m/s²)"), 0, 2)
-		self.max_accel_edit = LineEdit(); self.max_accel_edit.setText("50"); self.max_accel_edit.setFixedWidth(60)
+		self.max_accel_edit = LineEdit(); self.max_accel_edit.setText("50"); self.max_accel_edit.setFixedWidth(50)
 		cl.addWidget(self.max_accel_edit, 0, 3)
 		gl.addWidget(cg)
 		ll.addWidget(fmt_card)
 
 		# 性能 Card
-		perf_card = CardWidget()
+		perf_card = QWidget()
 		pl = QGridLayout(perf_card)
 		pl.addWidget(StrongBodyLabel("性能"), 0, 0, 1, 4)
 		pl.addWidget(BodyLabel("采样率 1/"), 1, 0)
-		self.div_edit = LineEdit(); self.div_edit.setText("2"); self.div_edit.setFixedWidth(60)
+		self.div_edit = LineEdit(); self.div_edit.setText("2"); self.div_edit.setFixedWidth(50)
 		pl.addWidget(self.div_edit, 1, 1)
 		pl.addWidget(BodyLabel("并行线程数"), 1, 2)
-		self.workers_edit = LineEdit(); self.workers_edit.setText("4"); self.workers_edit.setFixedWidth(60)
+		self.workers_edit = LineEdit(); self.workers_edit.setText("4"); self.workers_edit.setFixedWidth(50)
 		pl.addWidget(self.workers_edit, 1, 3)
 		pl.addWidget(BodyLabel("OCR 高度 (px)"), 2, 0)
-		self.target_h_edit = LineEdit(); self.target_h_edit.setText("24"); self.target_h_edit.setFixedWidth(60)
+		self.target_h_edit = LineEdit(); self.target_h_edit.setText("24"); self.target_h_edit.setFixedWidth(50)
 		pl.addWidget(self.target_h_edit, 2, 1)
 		pl.addWidget(BodyLabel("边缘填充 (px)"), 2, 2)
-		self.pad_edit = LineEdit(); self.pad_edit.setText("0"); self.pad_edit.setFixedWidth(60)
+		self.pad_edit = LineEdit(); self.pad_edit.setText("0"); self.pad_edit.setFixedWidth(50)
 		pl.addWidget(self.pad_edit, 2, 3)
 		pl.addWidget(BodyLabel("OCR 后端"), 3, 0)
 		self.backend_combo = ComboBox()
@@ -424,7 +424,7 @@ class RaceVideoToLogApp(QMainWindow):
 		ll.addWidget(perf_card)
 
 		# 纠错模式 Card
-		mode_card = CardWidget()
+		mode_card = QWidget()
 		ml = QVBoxLayout(mode_card)
 		ml.addWidget(StrongBodyLabel("纠错模式"))
 		self.mode_auto = RadioButton("自动锚点纠错（全自动，推荐）")
@@ -433,26 +433,26 @@ class RaceVideoToLogApp(QMainWindow):
 		ml.addWidget(self.mode_auto); ml.addWidget(self.mode_baseline)
 		bf = QWidget(); bfl = QHBoxLayout(bf); bfl.setContentsMargins(20, 0, 0, 0)
 		bfl.addWidget(BodyLabel("抽样频率 1/"))
-		self.baseline_edit = LineEdit(); self.baseline_edit.setText("10"); self.baseline_edit.setFixedWidth(60)
+		self.baseline_edit = LineEdit(); self.baseline_edit.setText("10"); self.baseline_edit.setFixedWidth(50)
 		bfl.addWidget(self.baseline_edit)
 		bfl.addWidget(CaptionLabel("(1=全部人工)")); bfl.addStretch()
 		ml.addWidget(bf)
 		ll.addWidget(mode_card)
 
 		# 时间轴范围 Card
-		time_card = CardWidget()
+		time_card = QWidget()
 		tl = QGridLayout(time_card)
 		tl.addWidget(StrongBodyLabel("时间轴范围"), 0, 0, 1, 6)
 		tl.addWidget(BodyLabel("起始帧"), 1, 0)
-		self.frame_start_edit = LineEdit(); self.frame_start_edit.setFixedWidth(80)
+		self.frame_start_edit = LineEdit(); self.frame_start_edit.setFixedWidth(72)
 		tl.addWidget(self.frame_start_edit, 1, 1)
-		bfs = PushButton("设为当前"); bfs.setFixedWidth(80)
+		bfs = PushButton("设为当前"); bfs.setFixedWidth(72)
 		bfs.clicked.connect(lambda: self.frame_start_edit.setText(str(self._slider.value())))
 		tl.addWidget(bfs, 1, 2)
 		tl.addWidget(BodyLabel("结束帧"), 1, 3)
-		self.frame_end_edit = LineEdit(); self.frame_end_edit.setFixedWidth(80)
+		self.frame_end_edit = LineEdit(); self.frame_end_edit.setFixedWidth(72)
 		tl.addWidget(self.frame_end_edit, 1, 4)
-		bfe = PushButton("设为当前"); bfe.setFixedWidth(80)
+		bfe = PushButton("设为当前"); bfe.setFixedWidth(72)
 		bfe.clicked.connect(lambda: self.frame_end_edit.setText(str(self._slider.value())))
 		tl.addWidget(bfe, 1, 5)
 		ll.addWidget(time_card)
@@ -461,13 +461,13 @@ class RaceVideoToLogApp(QMainWindow):
 
 	def _build_right_panel(self, rl: QVBoxLayout) -> None:
 		# 识别范围 Card
-		roi_card = CardWidget()
+		roi_card = QWidget()
 		rgl = QGridLayout(roi_card)
 		rgl.addWidget(StrongBodyLabel("识别范围（像素）"), 0, 0, 1, 4)
 		self.roi_x1 = LineEdit(); self.roi_y1 = LineEdit()
 		self.roi_x2 = LineEdit(); self.roi_y2 = LineEdit()
 		for e in [self.roi_x1, self.roi_y1, self.roi_x2, self.roi_y2]:
-			e.setFixedWidth(90)
+			e.setFixedWidth(80)
 		rgl.addWidget(CaptionLabel("左上 X"), 1, 0); rgl.addWidget(self.roi_x1, 2, 0)
 		rgl.addWidget(CaptionLabel("左上 Y"), 1, 1); rgl.addWidget(self.roi_y1, 2, 1)
 		rgl.addWidget(CaptionLabel("右下 X"), 1, 2); rgl.addWidget(self.roi_x2, 2, 2)
@@ -475,7 +475,7 @@ class RaceVideoToLogApp(QMainWindow):
 		rl.addWidget(roi_card)
 
 		# 预览 Card
-		pv = CardWidget()
+		pv = QWidget()
 		pvl = QVBoxLayout(pv)
 		pvl.addWidget(StrongBodyLabel("识别范围预览"))
 		self._preview_label = BodyLabel()
@@ -493,7 +493,7 @@ class RaceVideoToLogApp(QMainWindow):
 		self._slider.setRange(0, 1); self._slider.setValue(0)
 		self._slider.valueChanged.connect(self._on_slider)
 		sr.addWidget(self._slider, 1)
-		self._frame_label = CaptionLabel("#0"); self._frame_label.setFixedWidth(60)
+		self._frame_label = CaptionLabel("#0"); self._frame_label.setFixedWidth(50)
 		sr.addWidget(self._frame_label)
 		pvl.addLayout(sr)
 		rl.addWidget(pv, 1)
@@ -538,6 +538,7 @@ class RaceVideoToLogApp(QMainWindow):
 		else:
 			setTheme(Theme.DARK)
 		self._sync_titlebar()
+		self._update_theme_icon()
 		# 同步 matplotlib 画布
 		if hasattr(self, '_analysis_tab'):
 			self._analysis_tab._sync_figure_theme()
@@ -566,6 +567,13 @@ class RaceVideoToLogApp(QMainWindow):
 					hwnd, 20, ctypes.byref(val), ctypes.sizeof(val))
 			except Exception:
 				pass
+
+	def _theme_is_dark(self) -> bool:
+		from qfluentwidgets import isDarkTheme
+		return isDarkTheme()
+
+	def _update_theme_icon(self) -> None:
+		self._theme_btn.setText("☀" if not self._theme_is_dark() else "☾")
 
 	def _toggle_theme(self) -> None:
 		self._apply_theme()
