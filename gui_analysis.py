@@ -72,7 +72,7 @@ class AnalysisTab:
 
 
 		btn_export = PrimaryPushButton("导出 PNG")
-		btn_export.setFixedWidth(80)
+		btn_export.setFixedWidth(96)
 		btn_export.clicked.connect(self._export_png)
 		cl.addWidget(btn_export, 0, 3, Qt.AlignmentFlag.AlignRight)
 
@@ -164,6 +164,7 @@ class AnalysisTab:
 			self._csvs[index] = path
 			self._labels[index].setText(Path(path).name)
 			self._saved_limits.clear()
+			self._render()
 
 	def _clear(self, index: int) -> None:
 		self._csvs[index] = None
