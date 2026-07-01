@@ -91,6 +91,11 @@ class AnalysisTab:
 		row2.addWidget(self._smooth_slider)
 
 		self._smooth_spin = CompactSpinBox(); self._smooth_spin.setRange(0, 100); self._smooth_spin.setValue(25); self._smooth_spin.setFixedWidth(60)
+		try:
+			self._smooth_spin.compactSpinButton.clicked.disconnect()
+		except Exception:
+			pass
+		self._smooth_spin._showFlyout = lambda: None
 		self._smooth_spin.valueChanged.connect(self._smooth_slider.setValue)
 		self._smooth_slider.valueChanged.connect(self._smooth_spin.setValue)
 		row2.addWidget(self._smooth_spin)

@@ -406,6 +406,7 @@ class RaceVideoToLogApp(QMainWindow):
 		pl.addWidget(StrongBodyLabel("性能"), 0, 0, 1, 4)
 		pl.addWidget(BodyLabel("采样率 1/"), 1, 0)
 		self.div_spin = CompactSpinBox(); self.div_spin.setRange(1, 10); self.div_spin.setValue(2); self.div_spin.setFixedWidth(70)
+		self._disable_spin_flyout(self.div_spin)
 		pl.addWidget(self.div_spin, 1, 1)
 		pl.addWidget(BodyLabel("并行线程数"), 1, 2)
 		self.workers_edit = LineEdit(); self.workers_edit.setText("4"); self.workers_edit.setFixedWidth(50)
@@ -434,6 +435,7 @@ class RaceVideoToLogApp(QMainWindow):
 		bf = QWidget(); bfl = QHBoxLayout(bf); bfl.setContentsMargins(20, 0, 0, 0)
 		bfl.addWidget(BodyLabel("抽样频率 1/"))
 		self.baseline_spin = CompactSpinBox(); self.baseline_spin.setRange(1, 50); self.baseline_spin.setValue(10); self.baseline_spin.setFixedWidth(70)
+		self._disable_spin_flyout(self.baseline_spin)
 		bfl.addWidget(self.baseline_spin)
 		bfl.addWidget(CaptionLabel("(1=全部人工)")); bfl.addStretch()
 		ml.addWidget(bf)
@@ -531,6 +533,13 @@ class RaceVideoToLogApp(QMainWindow):
 		from qfluentwidgets import qconfig, Theme
 		return qconfig.theme == Theme.DARK
 
+	def _disable_spin_flyout(self, spin) -> None:
+		try:
+			spin.compactSpinButton.clicked.disconnect()
+		except Exception:
+			pass
+		spin._showFlyout = lambda: None
+
 	@staticmethod
 	def _make_static_card(parent=None):
 		w = CardWidget(parent)
@@ -557,7 +566,12 @@ class RaceVideoToLogApp(QMainWindow):
 		from PySide6.QtGui import QPalette, QColor
 		bg = QColor('#1f1f1f' if dark else '#f5f5f5')
 		fg = QColor('#f0f0f0' if dark else '#000000')
-		for w in (self, self.centralWidget(), getattr(self, '_tabs', None)):
+		widgets = [self, self.centralWidget()]
+		tabs = getattr(self, '_tabs', None)
+		if tabs is not None:
+			widgets.append(tabs)
+			widgets.append(tabs.tabBar())
+		for w in widgets:
 			if w is None:
 				continue
 			p = w.palette()
