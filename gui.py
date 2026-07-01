@@ -309,8 +309,12 @@ class RaceVideoToLogApp(QMainWindow):
 		root.addWidget(top_bar)
 
 		# ── Fluent Pivot Tab 切换 ──
+		pivot_row = QWidget()
+		prl = QHBoxLayout(pivot_row); prl.setContentsMargins(0, 0, 0, 0)
 		self._tab_pivot = Pivot(self)
-		root.addWidget(self._tab_pivot)
+		prl.addWidget(self._tab_pivot)
+		prl.addStretch()
+		root.addWidget(pivot_row)
 		self._tab_stack = QStackedWidget()
 		root.addWidget(self._tab_stack)
 

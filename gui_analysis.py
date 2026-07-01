@@ -90,7 +90,7 @@ class AnalysisTab:
 		self._smooth_slider.valueChanged.connect(lambda v: setattr(self, '_smooth_str', v))
 		row2.addWidget(self._smooth_slider)
 
-		self._smooth_spin = CompactSpinBox(); self._smooth_spin.setRange(0, 100); self._smooth_spin.setValue(25); self._smooth_spin.setFixedWidth(60)
+		self._smooth_spin = CompactSpinBox(); self._smooth_spin.setRange(0, 100); self._smooth_spin.setValue(25); self._smooth_spin.setFixedWidth(70)
 		try:
 			self._smooth_spin.compactSpinButton.clicked.disconnect()
 		except Exception:
