@@ -545,15 +545,16 @@ class RaceVideoToLogApp(QMainWindow):
 	def _sync_titlebar(self) -> None:
 		from qfluentwidgets import isDarkTheme
 		dark = isDarkTheme()
-		# 仅设 palette Window 色，不做 setAutoFillBackground，避免文字阴影
-		cw = self.centralWidget()
-		if cw is not None:
-			from PySide6.QtGui import QPalette, QColor
-			bg = QColor('#1f1f1f' if dark else '#f5f5f5')
-			p = cw.palette()
+		# 仅设 palette，不做 setAutoFillBackground，避免文字阴影
+		from PySide6.QtGui import QPalette, QColor
+		bg = QColor('#1f1f1f' if dark else '#f5f5f5')
+		for w in (self, self.centralWidget(), getattr(self, '_tabs', None)):
+			if w is None:
+				continue
+			p = w.palette()
 			p.setColor(QPalette.ColorRole.Window, bg)
 			p.setColor(QPalette.ColorRole.Base, bg)
-			cw.setPalette(p)
+			w.setPalette(p)
 		# Windows 标题栏
 		import sys
 		if sys.platform == 'win32':
