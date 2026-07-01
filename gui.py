@@ -546,8 +546,12 @@ class RaceVideoToLogApp(QMainWindow):
 		from qfluentwidgets import isDarkTheme
 		dark = isDarkTheme()
 		bg = '#1f1f1f' if dark else '#f5f5f5'
-		self.setStyleSheet(f'QMainWindow {{ background-color: {bg}; }}')
-		self.centralWidget().setStyleSheet(f'QWidget {{ background-color: {bg}; }}')
+		from PySide6.QtGui import QPalette, QColor
+		for w in (self, self.centralWidget()):
+			p = w.palette()
+			p.setColor(QPalette.ColorRole.Window, QColor(bg))
+			w.setPalette(p)
+			w.setAutoFillBackground(True)
 		# Windows title bar
 		import sys
 		if sys.platform == 'win32':
