@@ -17,14 +17,14 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QThread
 from PySide6.QtGui import (
-	QPixmap, QImage, QPainter, QPen, QColor, QFont, QKeySequence, QShortcut,
+	QPixmap, QImage, QPainter, QPen, QColor, QKeySequence, QShortcut,
 )
 
 import ocr_engine
 from ocr_engine import *  # noqa: F403, F405
 from gui_analysis import AnalysisTab
 
-from qfluentwidgets import (setTheme, Theme, InfoBar, InfoBarPosition,
+from qfluentwidgets import (setTheme, Theme, FluentIcon, IconWidget,
 	PushButton, PrimaryPushButton, LineEdit, ComboBox, CheckBox, RadioButton,
 	BodyLabel, StrongBodyLabel, CaptionLabel, CardWidget, Slider, ProgressBar)
 
@@ -296,17 +296,17 @@ class RaceVideoToLogApp(QMainWindow):
 		central = QWidget()
 		self.setCentralWidget(central)
 		root = QVBoxLayout(central)
-		root.setContentsMargins(16, 12, 16, 10)
+		root.setContentsMargins(12, 8, 12, 6)
 		root.setSpacing(0)
 
 		# ── 顶栏：主题按钮 ──
 		top_bar = QWidget()
 		tbl = QHBoxLayout(top_bar); tbl.setContentsMargins(0, 0, 0, 4)
 		tbl.addStretch()
-		self._theme_btn = PushButton("☀" if not self._dark else "☾")
-		self._theme_btn.setFixedSize(40, 28)
+		self._theme_btn = IconWidget(FluentIcon.BRIGHTNESS, top_bar)
+		self._theme_btn.setFixedSize(24, 24)
 		self._theme_btn.setToolTip("切换亮色/暗色主题")
-		self._theme_btn.clicked.connect(self._toggle_theme)
+		self._theme_btn.mousePressEvent = lambda e: self._toggle_theme()
 		tbl.addWidget(self._theme_btn)
 		root.addWidget(top_bar)
 
@@ -367,7 +367,7 @@ class RaceVideoToLogApp(QMainWindow):
 
 		# 左侧面板
 		left = QWidget(); left.setFixedWidth(450)
-		ll = QVBoxLayout(left); ll.setContentsMargins(0, 0, 0, 0); ll.setSpacing(8)
+		ll = QVBoxLayout(left); ll.setContentsMargins(0, 0, 0, 0); ll.setSpacing(6)
 		self._build_left_panel(ll)
 		main_w.addWidget(left)
 
@@ -483,7 +483,7 @@ class RaceVideoToLogApp(QMainWindow):
 		self._preview_label = BodyLabel()
 		self._preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 		self._preview_label.setMinimumSize(400, 300)
-		self._preview_label.setStyleSheet("background-color: #151515; border-radius: 4px;")
+		self._preview_label.setStyleSheet("background-color: #111; border-radius: 6px;")
 		self._preview_label.setMouseTracking(True)
 		self._preview_label.mousePressEvent = self._on_pv_press    # type: ignore[method-assign]
 		self._preview_label.mouseMoveEvent = self._on_pv_move       # type: ignore[method-assign]
@@ -531,7 +531,10 @@ class RaceVideoToLogApp(QMainWindow):
 	@staticmethod
 	def _is_system_dark() -> bool:
 		from qfluentwidgets import isDarkTheme
-		return isDarkTheme()
+		try:
+			return isDarkTheme()
+		except Exception:
+			return False
 
 	def _apply_theme(self) -> None:
 		setTheme(Theme.DARK if self._dark else Theme.LIGHT)
@@ -542,7 +545,6 @@ class RaceVideoToLogApp(QMainWindow):
 
 	def _toggle_theme(self) -> None:
 		self._dark = not self._dark
-		self._theme_btn.setText("☀" if not self._dark else "☾")
 		self._apply_theme()
 
 	# ═══════════════════ 视频导入 ═══════════════════
