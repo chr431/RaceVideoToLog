@@ -452,7 +452,7 @@ class RaceVideoToLogApp(QMainWindow):
 		tl.addWidget(BodyLabel("结束帧"), 1, 3)
 		self.frame_end_edit = LineEdit(); self.frame_end_edit.setFixedWidth(72)
 		tl.addWidget(self.frame_end_edit, 1, 4)
-		bfe = PushButton("设为当前"); bfe.setFixedWidth(72)
+		bfe = PushButton("设为当前"); bfe.setFixedWidth(90)
 		bfe.clicked.connect(lambda: self.frame_end_edit.setText(str(self._slider.value())))
 		tl.addWidget(bfe, 1, 5)
 		ll.addWidget(time_card)
