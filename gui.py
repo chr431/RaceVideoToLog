@@ -350,8 +350,7 @@ class RaceVideoToLogApp(QMainWindow):
 		layout.addLayout(hdr)
 
 		# 视频信息 Card
-		info = QWidget()
-		info.setObjectName("info")
+		info = self._make_static_card()
 		il = QHBoxLayout(info)
 		self._dur_label = BodyLabel("-"); self._res_label = BodyLabel("-")
 		self._fps_label = BodyLabel("-"); self._codec_label = BodyLabel("-")
@@ -379,8 +378,7 @@ class RaceVideoToLogApp(QMainWindow):
 
 	def _build_left_panel(self, ll: QVBoxLayout) -> None:
 		# 速度格式 Card
-		fmt_card = QWidget()
-		fmt_card.setObjectName("fmt_card")
+		fmt_card = self._make_static_card()
 		gl = QVBoxLayout(fmt_card)
 		gl.addWidget(StrongBodyLabel("速度格式"))
 		r = QHBoxLayout()
@@ -391,8 +389,7 @@ class RaceVideoToLogApp(QMainWindow):
 		gl.addLayout(r)
 		gl.addWidget(CaptionLabel("输出统一转换为 km/h。"))
 
-		cg = QWidget()
-		cg.setObjectName("cg")
+		cg = self._make_static_card()
 		cl = QGridLayout(cg)
 		cl.addWidget(BodyLabel("最大速度 (km/h)"), 0, 0)
 		self.max_speed_edit = LineEdit(); self.max_speed_edit.setText("400"); self.max_speed_edit.setFixedWidth(50)
@@ -404,8 +401,7 @@ class RaceVideoToLogApp(QMainWindow):
 		ll.addWidget(fmt_card)
 
 		# 性能 Card
-		perf_card = QWidget()
-		perf_card.setObjectName("perf_card")
+		perf_card = self._make_static_card()
 		pl = QGridLayout(perf_card)
 		pl.addWidget(StrongBodyLabel("性能"), 0, 0, 1, 4)
 		pl.addWidget(BodyLabel("采样率 1/"), 1, 0)
@@ -428,8 +424,7 @@ class RaceVideoToLogApp(QMainWindow):
 		ll.addWidget(perf_card)
 
 		# 纠错模式 Card
-		mode_card = QWidget()
-		mode_card.setObjectName("mode_card")
+		mode_card = self._make_static_card()
 		ml = QVBoxLayout(mode_card)
 		ml.addWidget(StrongBodyLabel("纠错模式"))
 		self.mode_auto = RadioButton("自动锚点纠错（全自动，推荐）")
@@ -445,8 +440,7 @@ class RaceVideoToLogApp(QMainWindow):
 		ll.addWidget(mode_card)
 
 		# 时间轴范围 Card
-		time_card = QWidget()
-		time_card.setObjectName("time_card")
+		time_card = self._make_static_card()
 		tl = QGridLayout(time_card)
 		tl.addWidget(StrongBodyLabel("时间轴范围"), 0, 0, 1, 6)
 		tl.addWidget(BodyLabel("起始帧"), 1, 0)
@@ -467,8 +461,7 @@ class RaceVideoToLogApp(QMainWindow):
 
 	def _build_right_panel(self, rl: QVBoxLayout) -> None:
 		# 识别范围 Card
-		roi_card = QWidget()
-		roi_card.setObjectName("roi_card")
+		roi_card = self._make_static_card()
 		rgl = QGridLayout(roi_card)
 		rgl.addWidget(StrongBodyLabel("识别范围（像素）"), 0, 0, 1, 4)
 		self.roi_x1 = LineEdit(); self.roi_y1 = LineEdit()
@@ -482,8 +475,7 @@ class RaceVideoToLogApp(QMainWindow):
 		rl.addWidget(roi_card)
 
 		# 预览 Card
-		pv = QWidget()
-		pv.setObjectName("pv")
+		pv = self._make_static_card()
 		pvl = QVBoxLayout(pv)
 		pvl.addWidget(StrongBodyLabel("识别范围预览"))
 		self._preview_label = BodyLabel()
@@ -539,6 +531,12 @@ class RaceVideoToLogApp(QMainWindow):
 		from qfluentwidgets import qconfig, Theme
 		return qconfig.theme == Theme.DARK
 
+	@staticmethod
+	def _make_static_card(parent=None):
+		w = CardWidget(parent)
+		w._startElevateAni = lambda s, e: None  # 禁用 hover 抬升动画
+		return w
+
 	def _apply_theme(self) -> None:
 		from qfluentwidgets import qconfig, Theme, isDarkTheme
 		if qconfig.theme == Theme.DARK:
@@ -554,17 +552,7 @@ class RaceVideoToLogApp(QMainWindow):
 	def _sync_titlebar(self) -> None:
 		from qfluentwidgets import isDarkTheme
 		dark = isDarkTheme()
-		# 为 QWidget 容器恢复卡片外观（背景+圆角）
-		card_qss = ('background-color: rgba(255,255,255,0.06); border-radius: 8px;'
-			if dark else 'background-color: rgba(0,0,0,0.03); border-radius: 8px;')
-		for name in ('info', 'fmt_card', 'perf_card', 'mode_card', 'time_card',
-			'roi_card', 'pv', 'cg'):
-			w = getattr(self, f'_{name}', None)
-			if w is None:
-				w = self.findChild(QWidget, name)
-			if w is not None:
-				w.setStyleSheet(card_qss)
-		# 仅设 palette，不做 setAutoFillBackground，避免文字阴影
+# 仅设 palette，不做 setAutoFillBackground，避免文字阴影
 		from PySide6.QtGui import QPalette, QColor
 		bg = QColor('#1f1f1f' if dark else '#f5f5f5')
 		for w in (self, self.centralWidget(), getattr(self, '_tabs', None)):
