@@ -26,7 +26,7 @@ from gui_analysis import AnalysisTab
 
 from qfluentwidgets import (setTheme, Theme, FluentIcon, IconWidget,
 	PushButton, PrimaryPushButton, LineEdit, ComboBox, CheckBox, RadioButton,
-	BodyLabel, StrongBodyLabel, CaptionLabel, CardWidget, Slider, ProgressBar, SpinBox)
+	BodyLabel, StrongBodyLabel, CaptionLabel, CardWidget, Slider, ProgressBar, CompactSpinBox)
 
 
 
@@ -405,7 +405,7 @@ class RaceVideoToLogApp(QMainWindow):
 		pl = QGridLayout(perf_card)
 		pl.addWidget(StrongBodyLabel("性能"), 0, 0, 1, 4)
 		pl.addWidget(BodyLabel("采样率 1/"), 1, 0)
-		self.div_spin = SpinBox(); self.div_spin.setRange(1, 10); self.div_spin.setValue(2); self.div_spin.setFixedWidth(60)
+		self.div_spin = CompactSpinBox(); self.div_spin.setRange(1, 10); self.div_spin.setValue(2); self.div_spin.setFixedWidth(60)
 		pl.addWidget(self.div_spin, 1, 1)
 		pl.addWidget(BodyLabel("并行线程数"), 1, 2)
 		self.workers_edit = LineEdit(); self.workers_edit.setText("4"); self.workers_edit.setFixedWidth(50)
@@ -433,7 +433,7 @@ class RaceVideoToLogApp(QMainWindow):
 		ml.addWidget(self.mode_auto); ml.addWidget(self.mode_baseline)
 		bf = QWidget(); bfl = QHBoxLayout(bf); bfl.setContentsMargins(20, 0, 0, 0)
 		bfl.addWidget(BodyLabel("抽样频率 1/"))
-		self.baseline_spin = SpinBox(); self.baseline_spin.setRange(1, 50); self.baseline_spin.setValue(10); self.baseline_spin.setFixedWidth(60)
+		self.baseline_spin = CompactSpinBox(); self.baseline_spin.setRange(1, 50); self.baseline_spin.setValue(10); self.baseline_spin.setFixedWidth(60)
 		bfl.addWidget(self.baseline_spin)
 		bfl.addWidget(CaptionLabel("(1=全部人工)")); bfl.addStretch()
 		ml.addWidget(bf)

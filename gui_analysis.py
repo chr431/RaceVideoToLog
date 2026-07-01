@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 	QTabWidget, QLineEdit,
 )
 from PySide6.QtCore import Qt
-from qfluentwidgets import PushButton, PrimaryPushButton, SpinBox
+from qfluentwidgets import PushButton, PrimaryPushButton, CompactSpinBox
 
 from analysis import parse_csv, smooth_data, plot_segmented
 
@@ -90,7 +90,7 @@ class AnalysisTab:
 		self._smooth_slider.valueChanged.connect(lambda v: setattr(self, '_smooth_str', v))
 		row2.addWidget(self._smooth_slider)
 
-		self._smooth_spin = SpinBox(); self._smooth_spin.setRange(0, 100); self._smooth_spin.setValue(25); self._smooth_spin.setFixedWidth(60)
+		self._smooth_spin = CompactSpinBox(); self._smooth_spin.setRange(0, 100); self._smooth_spin.setValue(25); self._smooth_spin.setFixedWidth(60)
 		self._smooth_spin.valueChanged.connect(self._smooth_slider.setValue)
 		self._smooth_slider.valueChanged.connect(self._smooth_spin.setValue)
 		row2.addWidget(self._smooth_spin)
