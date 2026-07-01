@@ -102,7 +102,7 @@ class AnalysisTab:
 		self._rb_vt = RadioButton("v-t"); self._rb_vx = RadioButton("v-x")
 		self._rb_vx.setChecked(True); self._rb_dtx = RadioButton("Δt-x")
 		for mode, rb in [("v-t", self._rb_vt), ("v-x", self._rb_vx), ("dt-x", self._rb_dtx)]:
-			rb.toggled.connect(lambda checked, m=mode: self._on_mode(m) if checked else None)
+			rb.toggled.connect(lambda checked, m=mode: (self._on_mode(m), self._render()) if checked else None)
 			row2.addWidget(rb)
 
 		btn_fit = PushButton("自动调整")
