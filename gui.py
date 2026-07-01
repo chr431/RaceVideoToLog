@@ -26,7 +26,7 @@ from gui_analysis import AnalysisTab
 
 from qfluentwidgets import (setTheme, Theme, FluentIcon, IconWidget,
 	PushButton, PrimaryPushButton, LineEdit, ComboBox, CheckBox, RadioButton,
-	BodyLabel, StrongBodyLabel, CaptionLabel, CardWidget, Slider, ProgressBar)
+	BodyLabel, StrongBodyLabel, CaptionLabel, CardWidget, Slider, ProgressBar, SpinBox)
 
 
 
@@ -405,8 +405,8 @@ class RaceVideoToLogApp(QMainWindow):
 		pl = QGridLayout(perf_card)
 		pl.addWidget(StrongBodyLabel("性能"), 0, 0, 1, 4)
 		pl.addWidget(BodyLabel("采样率 1/"), 1, 0)
-		self.div_edit = LineEdit(); self.div_edit.setText("2"); self.div_edit.setFixedWidth(50)
-		pl.addWidget(self.div_edit, 1, 1)
+		self.div_spin = SpinBox(); self.div_spin.setRange(1, 10); self.div_spin.setValue(2); self.div_spin.setFixedWidth(60)
+		pl.addWidget(self.div_spin, 1, 1)
 		pl.addWidget(BodyLabel("并行线程数"), 1, 2)
 		self.workers_edit = LineEdit(); self.workers_edit.setText("4"); self.workers_edit.setFixedWidth(50)
 		pl.addWidget(self.workers_edit, 1, 3)
@@ -433,8 +433,8 @@ class RaceVideoToLogApp(QMainWindow):
 		ml.addWidget(self.mode_auto); ml.addWidget(self.mode_baseline)
 		bf = QWidget(); bfl = QHBoxLayout(bf); bfl.setContentsMargins(20, 0, 0, 0)
 		bfl.addWidget(BodyLabel("抽样频率 1/"))
-		self.baseline_edit = LineEdit(); self.baseline_edit.setText("10"); self.baseline_edit.setFixedWidth(50)
-		bfl.addWidget(self.baseline_edit)
+		self.baseline_spin = SpinBox(); self.baseline_spin.setRange(1, 50); self.baseline_spin.setValue(10); self.baseline_spin.setFixedWidth(60)
+		bfl.addWidget(self.baseline_spin)
 		bfl.addWidget(CaptionLabel("(1=全部人工)")); bfl.addStretch()
 		ml.addWidget(bf)
 		ll.addWidget(mode_card)
@@ -446,7 +446,7 @@ class RaceVideoToLogApp(QMainWindow):
 		tl.addWidget(BodyLabel("起始帧"), 1, 0)
 		self.frame_start_edit = LineEdit(); self.frame_start_edit.setFixedWidth(72)
 		tl.addWidget(self.frame_start_edit, 1, 1)
-		bfs = PushButton("设为当前"); bfs.setFixedWidth(72)
+		bfs = PushButton("设为当前"); bfs.setFixedWidth(90)
 		bfs.clicked.connect(lambda: self.frame_start_edit.setText(str(self._slider.value())))
 		tl.addWidget(bfs, 1, 2)
 		tl.addWidget(BodyLabel("结束帧"), 1, 3)
@@ -534,7 +534,8 @@ class RaceVideoToLogApp(QMainWindow):
 	@staticmethod
 	def _make_static_card(parent=None):
 		w = CardWidget(parent)
-		w._startElevateAni = lambda s, e: None  # 禁用 hover 抬升动画
+		w.enterEvent = lambda e: None   # 完全禁用 hover
+		w.leaveEvent = lambda e: None
 		return w
 
 	def _apply_theme(self) -> None:
@@ -792,7 +793,7 @@ class RaceVideoToLogApp(QMainWindow):
 
 		try:
 			ms = float(self.max_speed_edit.text()); ma = float(self.max_accel_edit.text())
-			fd = int(self.div_edit.text()); th = float(self.target_h_edit.text())
+			fd = self.div_spin.value(); th = float(self.target_h_edit.text())
 			pp = float(self.pad_edit.text()); nw = int(self.workers_edit.text())
 		except ValueError:
 			QMessageBox.warning(self, "参数错误", "请检查数值参数。"); return

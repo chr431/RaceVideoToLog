@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 	QTabWidget, QLineEdit,
 )
 from PySide6.QtCore import Qt
-from qfluentwidgets import PushButton, PrimaryPushButton
+from qfluentwidgets import PushButton, PrimaryPushButton, SpinBox
 
 from analysis import parse_csv, smooth_data, plot_segmented
 
@@ -90,10 +90,10 @@ class AnalysisTab:
 		self._smooth_slider.valueChanged.connect(lambda v: setattr(self, '_smooth_str', v))
 		row2.addWidget(self._smooth_slider)
 
-		self._smooth_edit = QLineEdit("25"); self._smooth_edit.setFixedWidth(50)
-		self._smooth_edit.editingFinished.connect(self._on_smooth_edit_done)
-		self._smooth_slider.valueChanged.connect(lambda v: self._smooth_edit.setText(str(v)))
-		row2.addWidget(self._smooth_edit)
+		self._smooth_spin = SpinBox(); self._smooth_spin.setRange(0, 100); self._smooth_spin.setValue(25); self._smooth_spin.setFixedWidth(60)
+		self._smooth_spin.valueChanged.connect(self._smooth_slider.setValue)
+		self._smooth_slider.valueChanged.connect(self._smooth_spin.setValue)
+		row2.addWidget(self._smooth_spin)
 
 		self._rb_vt = QRadioButton("v-t"); self._rb_vx = QRadioButton("v-x")
 		self._rb_vx.setChecked(True); self._rb_dtx = QRadioButton("Δt-x")
@@ -150,16 +150,6 @@ class AnalysisTab:
 
 	def _on_mode(self, mode: str) -> None:
 		self._chart_mode = mode
-
-	def _on_smooth_edit_done(self) -> None:
-		"""用户完成编辑平滑值后同步到滑块。"""
-		try:
-			v = int(self._smooth_edit.text())
-			v = max(0, min(100, v))
-			self._smooth_slider.setValue(v)
-			self._smooth_str = v
-		except ValueError:
-			self._smooth_edit.setText(str(self._smooth_str))
 
 	def _import(self, index: int) -> None:
 		path, _ = QFileDialog.getOpenFileName(
