@@ -312,6 +312,7 @@ class RaceVideoToLogApp(QMainWindow):
 		pivot_row = QWidget()
 		prl = QHBoxLayout(pivot_row); prl.setContentsMargins(0, 0, 0, 0)
 		self._tab_pivot = Pivot(self)
+		self._tab_pivot.setFixedWidth(160)
 		prl.addWidget(self._tab_pivot)
 		prl.addStretch()
 		root.addWidget(pivot_row)
