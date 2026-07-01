@@ -12,7 +12,7 @@ import cv2
 import numpy as np
 
 from PySide6.QtWidgets import (
-	QApplication, QMainWindow, QWidget, QTabWidget,
+	QApplication, QMainWindow, QWidget, QStackedWidget,
 	QFileDialog, QMessageBox, QHBoxLayout, QVBoxLayout, QGridLayout,
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QThread
@@ -26,7 +26,7 @@ from gui_analysis import AnalysisTab
 
 from qfluentwidgets import (setTheme, Theme, FluentIcon, IconWidget,
 	PushButton, PrimaryPushButton, LineEdit, ComboBox, CheckBox, RadioButton,
-	BodyLabel, StrongBodyLabel, CaptionLabel, CardWidget, Slider, ProgressBar, CompactSpinBox)
+	BodyLabel, StrongBodyLabel, CaptionLabel, CardWidget, Slider, ProgressBar, CompactSpinBox, Pivot)
 
 
 
@@ -308,17 +308,23 @@ class RaceVideoToLogApp(QMainWindow):
 		tbl.addWidget(self._theme_btn)
 		root.addWidget(top_bar)
 
-		# ── TabWidget ──
-		self._tabs = QTabWidget()
-		root.addWidget(self._tabs)
+		# ── Fluent Pivot Tab 切换 ──
+		self._tab_pivot = Pivot(self)
+		root.addWidget(self._tab_pivot)
+		self._tab_stack = QStackedWidget()
+		root.addWidget(self._tab_stack)
 
-		# ── Tab 1: OCR 处理 ──
+		# Tab 1: OCR 处理
 		self._ocr_tab = QWidget()
-		self._tabs.addTab(self._ocr_tab, "OCR 处理")
+		self._tab_stack.addWidget(self._ocr_tab)
 		self._build_ocr_tab()
+		self._tab_pivot.addItem('ocr', 'OCR 处理', lambda: self._tab_stack.setCurrentIndex(0))
 
-		# ── Tab 2: 数据分析 ──
-		self._analysis_tab = AnalysisTab(self._tabs)
+		# Tab 2: 数据分析
+		self._analysis_tab = AnalysisTab(self._tab_stack)
+		self._tab_pivot.addItem('analysis', '数据分析', lambda: self._tab_stack.setCurrentIndex(1))
+		self._tab_pivot.setCurrentItem('ocr')
+		self._tab_pivot.currentItemChanged.connect(self._on_pivot)
 
 		# ── 底部状态栏 ──
 		self._footer = QWidget()
@@ -512,7 +518,7 @@ class RaceVideoToLogApp(QMainWindow):
 		self.mode_auto.clicked.connect(lambda: self._on_mode("auto"))
 		self.mode_baseline.clicked.connect(lambda: self._on_mode("baseline"))
 		self.backend_combo.currentIndexChanged.connect(self._on_backend)
-		self._tabs.currentChanged.connect(self._on_tab)
+
 		self.debug_cb.toggled.connect(lambda v: setattr(self, '_debug_log', v))
 
 	def _add_shortcuts(self) -> None:
@@ -567,10 +573,9 @@ class RaceVideoToLogApp(QMainWindow):
 		bg = QColor('#1f1f1f' if dark else '#f5f5f5')
 		fg = QColor('#f0f0f0' if dark else '#000000')
 		widgets = [self, self.centralWidget()]
-		tabs = getattr(self, '_tabs', None)
+		tabs = getattr(self, '_tab_stack', None)
 		if tabs is not None:
 			widgets.append(tabs)
-			widgets.append(tabs.tabBar())
 		for w in widgets:
 			if w is None:
 				continue
@@ -846,8 +851,8 @@ class RaceVideoToLogApp(QMainWindow):
 		self._export_btn.setEnabled(True); self._cancel_btn.setEnabled(False)
 		self._export_thread = None; self._release_engines()
 
-	def _on_tab(self, index: int) -> None:
-		if index == 1:
+	def _on_pivot(self, key: str) -> None:
+		if key == 'analysis':
 			self._footer.hide()
 		else:
 			self._footer.show()

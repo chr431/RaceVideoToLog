@@ -11,7 +11,7 @@ import numpy as np
 from PySide6.QtWidgets import (
 	QWidget, QPushButton, QLabel, QRadioButton, QCheckBox, QGroupBox,
 	QSlider, QFileDialog, QMessageBox, QHBoxLayout, QVBoxLayout, QGridLayout,
-	QTabWidget, QLineEdit,
+	QStackedWidget, QLineEdit,
 )
 from PySide6.QtCore import Qt
 from qfluentwidgets import PushButton, PrimaryPushButton, CompactSpinBox
@@ -20,15 +20,15 @@ from analysis import parse_csv, smooth_data, plot_segmented
 
 
 class AnalysisTab:
-	"""数据分析 Tab — 由主窗口 QTabWidget 调用 addTab() 嵌入。"""
+	"""数据分析 Tab — 嵌入 QStackedWidget。"""
 
-	def __init__(self, tabs: QTabWidget) -> None:
+	def __init__(self, stack: QStackedWidget) -> None:
 		from matplotlib.figure import Figure
 		from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 		self._Figure = Figure
 		self._FigureCanvas = FigureCanvasQTAgg
 
-		self._tabs = tabs
+		self._stack = stack
 
 		# 状态
 		self._csvs: list[str | None] = [None, None, None]
@@ -46,7 +46,7 @@ class AnalysisTab:
 
 	def _build_tab(self) -> None:
 		tab = QWidget()
-		self._tabs.addTab(tab, "数据分析")
+		self._stack.addWidget(tab)
 		layout = QVBoxLayout(tab)
 		layout.setContentsMargins(12, 10, 12, 6)
 
@@ -158,7 +158,7 @@ class AnalysisTab:
 
 	def _import(self, index: int) -> None:
 		path, _ = QFileDialog.getOpenFileName(
-			self._tabs, f"选择 CSV {index + 1}", "",
+			self._stack, f"选择 CSV {index + 1}", "",
 			"CSV 文件 (*.csv);;所有文件 (*.*)")
 		if path:
 			self._csvs[index] = path
@@ -206,7 +206,7 @@ class AnalysisTab:
 
 		if is_dtx:
 			if not self._csvs[0] or not self._csvs[1]:
-				QMessageBox.warning(self._tabs, "数据不足",
+				QMessageBox.warning(self._stack, "数据不足",
 					"Δt-x 需要 CSV 1 和 CSV 2 均已导入。")
 				return
 			t1, d1, s1, _ = parse_csv(self._csvs[0])
@@ -241,7 +241,7 @@ class AnalysisTab:
 					ax.plot([], [], color=colors[i], linewidth=0.8, label=name)
 					has_data = True
 				except Exception as e:
-					QMessageBox.critical(self._tabs, "解析失败",
+					QMessageBox.critical(self._stack, "解析失败",
 						f"{Path(csv_path).name}: {e}")
 					return
 
@@ -374,10 +374,10 @@ class AnalysisTab:
 	def _export_png(self) -> None:
 		fig = self._figure
 		if fig is None or not fig.axes:
-			QMessageBox.warning(self._tabs, "无数据", "请先渲染曲线。")
+			QMessageBox.warning(self._stack, "无数据", "请先渲染曲线。")
 			return
 		path, _ = QFileDialog.getSaveFileName(
-			self._tabs, "导出 PNG", "", "PNG 图片 (*.png)")
+			self._stack, "导出 PNG", "", "PNG 图片 (*.png)")
 		if path:
 			fig.savefig(path, dpi=150, bbox_inches="tight")
-			QMessageBox.information(self._tabs, "导出完成", f"已保存: {path}")
+			QMessageBox.information(self._stack, "导出完成", f"已保存: {path}")
