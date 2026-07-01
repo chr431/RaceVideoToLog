@@ -41,9 +41,10 @@ def main() -> None:
 		run_analysis_headless(args)
 	else:
 		from PySide6.QtWidgets import QApplication
+		from qfluentwidgets import setTheme, Theme
 		from gui import RaceVideoToLogApp
 		app = QApplication(sys.argv)
-		app.setStyle("Fusion")
+		setTheme(Theme.AUTO)
 		window = RaceVideoToLogApp()
 		window.show()
 		sys.exit(app.exec())

@@ -289,7 +289,6 @@ class RaceVideoToLogApp(QMainWindow):
 	# ═══════════════════ 构建 UI ═══════════════════
 
 	def _build_ui(self) -> None:
-		self._dark = self._is_system_dark()
 		self._apply_theme()
 
 		# ── 中央内容 ──
@@ -529,22 +528,21 @@ class RaceVideoToLogApp(QMainWindow):
 	# ═══════════════════ 主题切换 ═══════════════════
 
 	@staticmethod
-	def _is_system_dark() -> bool:
-		from qfluentwidgets import isDarkTheme
-		try:
-			return isDarkTheme()
-		except Exception:
-			return False
+	def _is_dark() -> bool:
+		from qfluentwidgets import qconfig, Theme
+		return qconfig.theme == Theme.DARK
 
 	def _apply_theme(self) -> None:
-		setTheme(Theme.DARK if self._dark else Theme.LIGHT)
-		self.update()
+		from qfluentwidgets import qconfig, Theme
+		if qconfig.theme == Theme.DARK:
+			setTheme(Theme.LIGHT)
+		else:
+			setTheme(Theme.DARK)
 		# 同步 matplotlib 画布
 		if hasattr(self, '_analysis_tab'):
 			self._analysis_tab._sync_figure_theme()
 
 	def _toggle_theme(self) -> None:
-		self._dark = not self._dark
 		self._apply_theme()
 
 	# ═══════════════════ 视频导入 ═══════════════════
