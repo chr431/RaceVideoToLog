@@ -292,7 +292,7 @@ class RaceVideoToLogApp(QMainWindow):
 		# ── 中央内容 ──
 		central = QWidget()
 		self.setCentralWidget(central)
-		self._update_background()
+		self._sync_titlebar()
 		root = QVBoxLayout(central)
 		root.setContentsMargins(12, 8, 12, 6)
 		root.setSpacing(0)
@@ -537,33 +537,24 @@ class RaceVideoToLogApp(QMainWindow):
 			setTheme(Theme.LIGHT)
 		else:
 			setTheme(Theme.DARK)
-		self._update_background()
+		self._sync_titlebar()
 		# 同步 matplotlib 画布
 		if hasattr(self, '_analysis_tab'):
 			self._analysis_tab._sync_figure_theme()
 
-	def _update_background(self) -> None:
-		from qfluentwidgets import isDarkTheme
-		dark = isDarkTheme()
-		bg = '#1f1f1f' if dark else '#f5f5f5'
-		from PySide6.QtGui import QPalette, QColor
-		for w in (self, self.centralWidget()):
-			p = w.palette()
-			p.setColor(QPalette.ColorRole.Window, QColor(bg))
-			w.setPalette(p)
-			w.setAutoFillBackground(True)
-		# Windows title bar
+	def _sync_titlebar(self) -> None:
 		import sys
-		if sys.platform == 'win32':
-			try:
-				import ctypes
-				hwnd = int(self.winId())
-				DWMWA = 20
-				val = ctypes.c_int(1 if dark else 0)
-				ctypes.windll.dwmapi.DwmSetWindowAttribute(
-					hwnd, DWMWA, ctypes.byref(val), ctypes.sizeof(val))
-			except Exception:
-				pass
+		if sys.platform != 'win32':
+			return
+		try:
+			from qfluentwidgets import isDarkTheme
+			import ctypes
+			hwnd = int(self.winId())
+			val = ctypes.c_int(1 if isDarkTheme() else 0)
+			ctypes.windll.dwmapi.DwmSetWindowAttribute(
+				hwnd, 20, ctypes.byref(val), ctypes.sizeof(val))
+		except Exception:
+			pass
 
 	def _toggle_theme(self) -> None:
 		self._apply_theme()
