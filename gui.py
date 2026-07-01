@@ -543,18 +543,28 @@ class RaceVideoToLogApp(QMainWindow):
 			self._analysis_tab._sync_figure_theme()
 
 	def _sync_titlebar(self) -> None:
+		from qfluentwidgets import isDarkTheme
+		dark = isDarkTheme()
+		# 仅设 palette Window 色，不做 setAutoFillBackground，避免文字阴影
+		cw = self.centralWidget()
+		if cw is not None:
+			from PySide6.QtGui import QPalette, QColor
+			bg = QColor('#1f1f1f' if dark else '#f5f5f5')
+			p = cw.palette()
+			p.setColor(QPalette.ColorRole.Window, bg)
+			p.setColor(QPalette.ColorRole.Base, bg)
+			cw.setPalette(p)
+		# Windows 标题栏
 		import sys
-		if sys.platform != 'win32':
-			return
-		try:
-			from qfluentwidgets import isDarkTheme
-			import ctypes
-			hwnd = int(self.winId())
-			val = ctypes.c_int(1 if isDarkTheme() else 0)
-			ctypes.windll.dwmapi.DwmSetWindowAttribute(
-				hwnd, 20, ctypes.byref(val), ctypes.sizeof(val))
-		except Exception:
-			pass
+		if sys.platform == 'win32':
+			try:
+				import ctypes
+				hwnd = int(self.winId())
+				val = ctypes.c_int(1 if dark else 0)
+				ctypes.windll.dwmapi.DwmSetWindowAttribute(
+					hwnd, 20, ctypes.byref(val), ctypes.sizeof(val))
+			except Exception:
+				pass
 
 	def _toggle_theme(self) -> None:
 		self._apply_theme()
