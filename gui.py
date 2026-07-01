@@ -301,10 +301,11 @@ class RaceVideoToLogApp(FramelessMainWindow):
 		self._theme_btn.setFont(f)
 		self._theme_btn.setToolTip("切换亮色/暗色主题")
 		self._theme_btn.clicked.connect(self._toggle_theme)
-		# 将主题按钮插入标题栏布局（窗口控制按钮左侧）
+		# 标题栏布局: [spacer, icon, title, spacer, Min, Max, Close]
+		# 主题按钮插入 index 4（窗口控制按钮左侧）
 		tbl = title_bar.layout()
-		if tbl is not None and tbl.count() > 0:
-			tbl.insertWidget(tbl.count() - 1, self._theme_btn)
+		if tbl is not None and tbl.count() >= 4:
+			tbl.insertWidget(4, self._theme_btn)
 		self._apply_theme()
 
 		# ── 中央内容 ──
