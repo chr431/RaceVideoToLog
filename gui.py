@@ -300,6 +300,9 @@ class RaceVideoToLogApp(QMainWindow):
 		# ── 顶栏：主题按钮 ──
 		top_bar = QWidget()
 		tbl = QHBoxLayout(top_bar); tbl.setContentsMargins(0, 0, 0, 4)
+		self._tab_pivot = Pivot(self)
+		self._tab_pivot.setFixedWidth(160)
+		tbl.addWidget(self._tab_pivot)
 		tbl.addStretch()
 		self._theme_btn = PushButton("☀" if not self._theme_is_dark() else "☾")
 		self._theme_btn.setFixedSize(36, 28)
@@ -307,15 +310,6 @@ class RaceVideoToLogApp(QMainWindow):
 		self._theme_btn.clicked.connect(self._toggle_theme)
 		tbl.addWidget(self._theme_btn)
 		root.addWidget(top_bar)
-
-		# ── Fluent Pivot Tab 切换 ──
-		pivot_row = QWidget()
-		prl = QHBoxLayout(pivot_row); prl.setContentsMargins(0, 0, 0, 0)
-		self._tab_pivot = Pivot(self)
-		self._tab_pivot.setFixedWidth(160)
-		prl.addWidget(self._tab_pivot)
-		prl.addStretch()
-		root.addWidget(pivot_row)
 		self._tab_stack = QStackedWidget()
 		root.addWidget(self._tab_stack)
 
