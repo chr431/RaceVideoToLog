@@ -164,12 +164,14 @@ class AnalysisTab:
 			self._csvs[index] = path
 			self._labels[index].setText(Path(path).name)
 			self._saved_limits.clear()
+			self._last_mode = None
 			self._render()
 
 	def _clear(self, index: int) -> None:
 		self._csvs[index] = None
 		self._labels[index].setText("未导入")
 		self._saved_limits.clear()
+		self._last_mode = None
 		self._render()
 
 	# ═══════════════════ 渲染 ═══════════════════
@@ -182,6 +184,10 @@ class AnalysisTab:
 		fig = self._figure
 		canvas = self._canvas
 		if fig is None or canvas is None:
+			return
+
+		# 无 CSV 数据时不碰 figure，保留旧图
+		if not any(self._csvs):
 			return
 
 		if fig.axes and self._last_mode and self._last_mode != "dt-x":
