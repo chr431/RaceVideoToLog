@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 	QTabWidget, QLineEdit,
 )
 from PySide6.QtCore import Qt
+from qfluentwidgets import PushButton, PrimaryPushButton
 
 from analysis import parse_csv, smooth_data, plot_segmented
 
@@ -57,10 +58,10 @@ class AnalysisTab:
 		for i in range(3):
 			slot = QGroupBox(f"CSV {i+1}")
 			sl = QHBoxLayout(slot)
-			btn_import = QPushButton("导入")
+			btn_import = PushButton("导入")
 			btn_import.clicked.connect(lambda checked, idx=i: self._import(idx))
 			sl.addWidget(btn_import)
-			btn_clear = QPushButton("清除")
+			btn_clear = PushButton("清除")
 			btn_clear.clicked.connect(lambda checked, idx=i: self._clear(idx))
 			sl.addWidget(btn_clear)
 			lbl = QLabel("未导入")
@@ -68,11 +69,11 @@ class AnalysisTab:
 			sl.addWidget(lbl)
 			cl.addWidget(slot, 0, i)
 
-		btn_render = QPushButton("渲染曲线")
+		btn_render = PrimaryPushButton("渲染曲线")
 		btn_render.clicked.connect(self._render)
 		cl.addWidget(btn_render, 0, 3)
 
-		btn_export = QPushButton("导出 PNG")
+		btn_export = PushButton("导出 PNG")
 		btn_export.clicked.connect(self._export_png)
 		cl.addWidget(btn_export, 0, 4)
 
@@ -100,7 +101,7 @@ class AnalysisTab:
 			rb.toggled.connect(lambda checked, m=mode: self._on_mode(m) if checked else None)
 			row2.addWidget(rb)
 
-		btn_fit = QPushButton("自动调整")
+		btn_fit = PushButton("自动调整")
 		btn_fit.clicked.connect(self._auto_fit)
 		row2.addWidget(btn_fit)
 
