@@ -471,10 +471,12 @@ class RaceVideoToLogApp(QMainWindow):
 		roi_card = self._make_static_card()
 		rgl = QGridLayout(roi_card)
 		rgl.addWidget(StrongBodyLabel("识别范围（像素）"), 0, 0, 1, 4)
-		self.roi_x1 = LineEdit(); self.roi_y1 = LineEdit()
-		self.roi_x2 = LineEdit(); self.roi_y2 = LineEdit()
-		for e in [self.roi_x1, self.roi_y1, self.roi_x2, self.roi_y2]:
-			e.setFixedWidth(80)
+		self.roi_x1 = CompactSpinBox(); self.roi_y1 = CompactSpinBox()
+		self.roi_x2 = CompactSpinBox(); self.roi_y2 = CompactSpinBox()
+		for s in [self.roi_x1, self.roi_y1, self.roi_x2, self.roi_y2]:
+			s.setRange(0, 9999); s.setFixedWidth(80)
+			s.valueChanged.connect(lambda v, spin=s: self._on_roi_spin(spin))
+			self._disable_spin_flyout(s)
 		rgl.addWidget(CaptionLabel("左上 X"), 1, 0); rgl.addWidget(self.roi_x1, 2, 0)
 		rgl.addWidget(CaptionLabel("左上 Y"), 1, 1); rgl.addWidget(self.roi_y1, 2, 1)
 		rgl.addWidget(CaptionLabel("右下 X"), 1, 2); rgl.addWidget(self.roi_x2, 2, 2)
@@ -666,8 +668,8 @@ class RaceVideoToLogApp(QMainWindow):
 		if not self.metadata or self.first_frame_qimg is None: return
 		x, y = self._to_video(event.position().x(), event.position().y())
 		self._drag_active = True; self._drag_start = (x, y)
-		for e, v in [(self.roi_x1, x), (self.roi_y1, y), (self.roi_x2, x), (self.roi_y2, y)]:
-			e.setText(str(v))
+		for s, v in [(self.roi_x1, x), (self.roi_y1, y), (self.roi_x2, x), (self.roi_y2, y)]:
+			s.blockSignals(True); s.setValue(v); s.blockSignals(False)
 
 	def _on_pv_move(self, event) -> None:
 		if not self._drag_active or not self.metadata: return
