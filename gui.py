@@ -914,9 +914,11 @@ class RaceVideoToLogApp(QMainWindow):
 		except ValueError:
 			ms = 400.0
 		dlg = ReviewDialog(self, self._review_rows, self._review_observations,
-			self._review_confidences, self._review_segments, ms)
+			self._review_raw_frames, self._review_confidences,
+			self._review_segments, ms)
 		if dlg.exec() == QDialog.DialogCode.Accepted:
 			corrections = dlg.get_corrections()
+			self._review_confirmed = dlg.get_confirmed()
 			try:
 				self._continue_with_manual_anchors(corrections)
 			except Exception as e:
@@ -941,6 +943,15 @@ class RaceVideoToLogApp(QMainWindow):
 				rows[fi][2] = v
 				rows[fi][3] = 2
 				anchor_indices.add(fi)
+		# 确认正确的段: 所有帧 flag=2
+		for seg_start in getattr(self, "_review_confirmed", set()):
+			for seg in self._review_segments:
+				if seg["start"] == seg_start:
+					for fi in range(seg["start"], seg["end"] + 1):
+						if fi not in corrections and 0 <= fi < len(rows):
+							rows[fi][3] = 2
+							anchor_indices.add(fi)
+					break
 
 		from correction import correct_with_anchors
 		rows = correct_with_anchors(rows, observations, raw_frames, ocr,
