@@ -473,15 +473,8 @@ class RaceVideoToLogApp(QMainWindow):
 		ml.addWidget(StrongBodyLabel("纠错模式"))
 		self.mode_auto = RadioButton("自动锚点纠错（全自动，推荐）")
 		self.mode_auto.setChecked(True)
-		self.mode_baseline = RadioButton("人工基准标注")
+		self.mode_baseline = RadioButton("人工辅助纠错")
 		ml.addWidget(self.mode_auto); ml.addWidget(self.mode_baseline)
-		bf = QWidget(); bfl = QHBoxLayout(bf); bfl.setContentsMargins(20, 0, 0, 0)
-		bfl.addWidget(BodyLabel("抽样频率 1/"))
-		self.baseline_spin = CompactSpinBox(); self.baseline_spin.setRange(1, 50); self.baseline_spin.setValue(10); self.baseline_spin.setFixedWidth(70)
-		self._disable_spin_flyout(self.baseline_spin)
-		bfl.addWidget(self.baseline_spin)
-		bfl.addWidget(CaptionLabel("(1=全部人工)")); bfl.addStretch()
-		ml.addWidget(bf)
 		ll.addWidget(mode_card)
 
 		# 时间轴范围 Card
