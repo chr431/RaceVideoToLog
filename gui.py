@@ -887,9 +887,10 @@ class RaceVideoToLogApp(QMainWindow):
 
 	def _on_review_needed(self, rows: list, observations: list,
 			confidences: list[dict], segments: list[dict]) -> None:
+		self._review_rows = rows
+		self._review_observations = observations
 		self._review_confidences = confidences
 		self._review_segments = segments
-		self._finish_export()
 
 	def _on_done(self, mode: str) -> None:
 		if mode == "review":
