@@ -471,14 +471,17 @@ class RaceVideoToLogApp(QMainWindow):
 		roi_card = self._make_static_card()
 		rgl = QGridLayout(roi_card)
 		rgl.addWidget(StrongBodyLabel("识别范围（像素）"), 0, 0, 1, 4)
-		self.roi_x1 = LineEdit(); self.roi_y1 = LineEdit()
-		self.roi_x2 = LineEdit(); self.roi_y2 = LineEdit()
-		for e in [self.roi_x1, self.roi_y1, self.roi_x2, self.roi_y2]:
-			e.setFixedWidth(80)
+		self.roi_x1 = CompactSpinBox(); self.roi_y1 = CompactSpinBox()
+		self.roi_x2 = CompactSpinBox(); self.roi_y2 = CompactSpinBox()
+		for s in [self.roi_x1, self.roi_y1, self.roi_x2, self.roi_y2]:
+			s.setRange(0, 9999); s.setFixedWidth(80)
+			s.valueChanged.connect(lambda v, spin=s: self._on_roi_spin(spin))
+			self._disable_spin_flyout(s)
 		rgl.addWidget(CaptionLabel("左上 X"), 1, 0); rgl.addWidget(self.roi_x1, 2, 0)
 		rgl.addWidget(CaptionLabel("左上 Y"), 1, 1); rgl.addWidget(self.roi_y1, 2, 1)
 		rgl.addWidget(CaptionLabel("右下 X"), 1, 2); rgl.addWidget(self.roi_x2, 2, 2)
 		rgl.addWidget(CaptionLabel("右下 Y"), 1, 3); rgl.addWidget(self.roi_y2, 2, 3)
+		rgl.addWidget(CaptionLabel("← 在预览画面上拖拽选择识别范围"), 3, 0, 1, 4)
 		rl.addWidget(roi_card)
 
 		# 预览 Card
@@ -490,6 +493,7 @@ class RaceVideoToLogApp(QMainWindow):
 		self._preview_label.setMinimumSize(400, 300)
 		self._preview_label.setStyleSheet("background-color: #111; border-radius: 6px;")
 		self._preview_label.setMouseTracking(True)
+		self._preview_label.setCursor(Qt.CursorShape.CrossCursor)
 		self._preview_label.mousePressEvent = self._on_pv_press    # type: ignore[method-assign]
 		self._preview_label.mouseMoveEvent = self._on_pv_move       # type: ignore[method-assign]
 		self._preview_label.mouseReleaseEvent = self._on_pv_release # type: ignore[method-assign]
@@ -655,6 +659,8 @@ class RaceVideoToLogApp(QMainWindow):
 		self._slider.setRange(0, fc - 1); self._slider.setValue(0)
 		self._frame_label.setText(f"#{0}/{fc}")
 		self._show_frame(0)
+		for s, m in [(self.roi_x1, w), (self.roi_y1, h), (self.roi_x2, w), (self.roi_y2, h)]:
+			s.setMaximum(m - 1)
 
 	# ═══════════════════ 预览 ═══════════════════
 
@@ -662,16 +668,27 @@ class RaceVideoToLogApp(QMainWindow):
 		if not self.metadata or self.first_frame_qimg is None: return
 		x, y = self._to_video(event.position().x(), event.position().y())
 		self._drag_active = True; self._drag_start = (x, y)
-		for e, v in [(self.roi_x1, x), (self.roi_y1, y), (self.roi_x2, x), (self.roi_y2, y)]:
-			e.setText(str(v))
+		for s, v in [(self.roi_x1, x), (self.roi_y1, y), (self.roi_x2, x), (self.roi_y2, y)]:
+			s.blockSignals(True); s.setValue(v); s.blockSignals(False)
 
 	def _on_pv_move(self, event) -> None:
 		if not self._drag_active or not self.metadata: return
 		x, y = self._to_video(event.position().x(), event.position().y())
 		x1 = min(self._drag_start[0], x); y1 = min(self._drag_start[1], y)
 		x2 = max(self._drag_start[0], x); y2 = max(self._drag_start[1], y)
-		self.roi_x1.setText(str(x1)); self.roi_y1.setText(str(y1))
-		self.roi_x2.setText(str(x2)); self.roi_y2.setText(str(y2))
+		for s, v in [(self.roi_x1, x1), (self.roi_y1, y1), (self.roi_x2, x2), (self.roi_y2, y2)]:
+				s.blockSignals(True); s.setValue(v); s.blockSignals(False)
+		self._redraw()
+
+	def _on_roi_spin(self, spin) -> None:
+		if spin is self.roi_x1 and self.roi_x1.value() > self.roi_x2.value() - 1:
+			spin.blockSignals(True); spin.setValue(self.roi_x2.value() - 1); spin.blockSignals(False)
+		elif spin is self.roi_x2 and self.roi_x2.value() < self.roi_x1.value() + 1:
+			spin.blockSignals(True); spin.setValue(self.roi_x1.value() + 1); spin.blockSignals(False)
+		elif spin is self.roi_y1 and self.roi_y1.value() > self.roi_y2.value() - 1:
+			spin.blockSignals(True); spin.setValue(self.roi_y2.value() - 1); spin.blockSignals(False)
+		elif spin is self.roi_y2 and self.roi_y2.value() < self.roi_y1.value() + 1:
+			spin.blockSignals(True); spin.setValue(self.roi_y1.value() + 1); spin.blockSignals(False)
 		self._redraw()
 
 	def _on_pv_release(self, event) -> None:
@@ -745,8 +762,9 @@ class RaceVideoToLogApp(QMainWindow):
 			painter = QPainter(scaled)
 			x1, y1, x2, y2 = roi
 			painter.setPen(QPen(QColor("#ff5050"), max(2, int(scale * 2))))
-			painter.drawRect(int(x1 * scale), int(y1 * scale),
-				int((x2 - x1) * scale), int((y2 - y1) * scale))
+			l = int(x1 * scale); t = int(y1 * scale)
+			r = int(x2 * scale); b = int(y2 * scale)
+			painter.drawRect(l, t, r - l, b - t)
 			painter.end()
 
 		result = QPixmap(pw, ph); result.fill(QColor("#151515"))
@@ -761,8 +779,8 @@ class RaceVideoToLogApp(QMainWindow):
 
 	def _get_roi(self) -> tuple | None:
 		try:
-			x1 = int(self.roi_x1.text()); y1 = int(self.roi_y1.text())
-			x2 = int(self.roi_x2.text()); y2 = int(self.roi_y2.text())
+			x1 = self.roi_x1.value(); y1 = self.roi_y1.value()
+			x2 = self.roi_x2.value(); y2 = self.roi_y2.value()
 		except ValueError: return None
 		if self.metadata:
 			x1, x2 = sorted((max(0, min(self.metadata.width - 1, x1)),
