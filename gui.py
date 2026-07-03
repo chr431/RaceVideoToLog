@@ -681,6 +681,14 @@ class RaceVideoToLogApp(QMainWindow):
 		self._redraw()
 
 	def _on_roi_spin(self, spin) -> None:
+		if spin is self.roi_x1 and self.roi_x1.value() > self.roi_x2.value() - 1:
+			spin.blockSignals(True); spin.setValue(self.roi_x2.value() - 1); spin.blockSignals(False)
+		elif spin is self.roi_x2 and self.roi_x2.value() < self.roi_x1.value() + 1:
+			spin.blockSignals(True); spin.setValue(self.roi_x1.value() + 1); spin.blockSignals(False)
+		elif spin is self.roi_y1 and self.roi_y1.value() > self.roi_y2.value() - 1:
+			spin.blockSignals(True); spin.setValue(self.roi_y2.value() - 1); spin.blockSignals(False)
+		elif spin is self.roi_y2 and self.roi_y2.value() < self.roi_y1.value() + 1:
+			spin.blockSignals(True); spin.setValue(self.roi_y1.value() + 1); spin.blockSignals(False)
 		self._redraw()
 
 	def _on_pv_release(self, event) -> None:
