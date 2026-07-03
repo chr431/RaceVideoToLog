@@ -155,7 +155,7 @@ class ReviewDialog(QDialog):
         root.addWidget(splitter, 1)
 
         if self._segments:
-            self._list.setCurrentRow(0)
+            QTimer.singleShot(100, lambda: self._list.setCurrentRow(0))
 
     def _create_chart(self):
         from matplotlib.figure import Figure
@@ -244,7 +244,8 @@ class ReviewDialog(QDialog):
                 qimg = QImage(rgb.data, w, h, ch * w, QImage.Format.Format_RGB888)
                 # Scale to fit
                 pm = QPixmap.fromImage(qimg)
-                scaled = pm.scaled(self._img_label.width() - 8, self._img_label.height() - 8,
+                lw = max(50, self._img_label.width() - 8); lh = max(50, self._img_label.height() - 8)
+                scaled = pm.scaled(lw, lh,
                                    Qt.AspectRatioMode.KeepAspectRatio,
                                    Qt.TransformationMode.SmoothTransformation)
                 self._img_label.setPixmap(scaled)
