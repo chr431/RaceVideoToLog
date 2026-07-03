@@ -892,9 +892,13 @@ class RaceVideoToLogApp(QMainWindow):
 		self._finish_export()
 
 	def _on_done(self, mode: str) -> None:
-		self._finish_export()
-		self._status_label.setText("自动锚点完成 — 结果已保存。" if mode == "auto"
-			else "人工基准完成 — 结果已保存。")
+		if mode == "review":
+			self._export_btn.setEnabled(True); self._cancel_btn.setEnabled(False)
+			self._export_thread = None
+			self._show_review_dialog()
+		else:
+			self._finish_export()
+			self._status_label.setText("自动锚点完成 — 结果已保存。")
 
 	def _on_error(self, err: str) -> None:
 		self._finish_export(); QMessageBox.critical(self, "导出失败", err)
