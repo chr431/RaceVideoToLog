@@ -88,7 +88,7 @@ class ReviewDialog(QDialog):
         il.addWidget(CaptionLabel("当前帧原始图像（ROI 裁剪区域）"))
         self._img_label = QLabel("选择帧后显示")
         self._img_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._img_label.setMinimumSize(200, 100)
+        self._img_label.setMinimumSize(250, 60)
         self._img_label.setStyleSheet("background-color: #111; border-radius: 4px;")
         il.addWidget(self._img_label, 1)
         bottom_row.addWidget(img_card, 1)
@@ -254,7 +254,7 @@ class ReviewDialog(QDialog):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         if hasattr(self, '_frame_spin'):
-            self._show_frame_image(self._frame_spin.value())
+            if hasattr(self, '_current_frame'): self._show_frame_image(self._current_frame)
 
     def _add_segment_item(self, seg: dict) -> None:
         text = (f"帧 {seg['start']}-{seg['end']} ({seg['count']}帧)  "
@@ -340,4 +340,4 @@ class ReviewDialog(QDialog):
         return dict(self._corrections)
 
     def get_confirmed(self) -> set[int]:
-        return set(self._confirmed)
+        return set(self._confirmed)	        # 修正控件
