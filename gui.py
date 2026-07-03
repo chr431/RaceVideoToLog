@@ -657,6 +657,8 @@ class RaceVideoToLogApp(QMainWindow):
 		self._slider.setRange(0, fc - 1); self._slider.setValue(0)
 		self._frame_label.setText(f"#{0}/{fc}")
 		self._show_frame(0)
+		for s, m in [(self.roi_x1, w), (self.roi_y1, h), (self.roi_x2, w), (self.roi_y2, h)]:
+			s.setMaximum(m - 1)
 
 	# ═══════════════════ 预览 ═══════════════════
 
@@ -672,8 +674,11 @@ class RaceVideoToLogApp(QMainWindow):
 		x, y = self._to_video(event.position().x(), event.position().y())
 		x1 = min(self._drag_start[0], x); y1 = min(self._drag_start[1], y)
 		x2 = max(self._drag_start[0], x); y2 = max(self._drag_start[1], y)
-		self.roi_x1.setText(str(x1)); self.roi_y1.setText(str(y1))
-		self.roi_x2.setText(str(x2)); self.roi_y2.setText(str(y2))
+		for s, v in [(self.roi_x1, x1), (self.roi_y1, y1), (self.roi_x2, x2), (self.roi_y2, y2)]:
+				s.blockSignals(True); s.setValue(v); s.blockSignals(False)
+		self._redraw()
+
+	def _on_roi_spin(self, spin) -> None:
 		self._redraw()
 
 	def _on_pv_release(self, event) -> None:
@@ -763,8 +768,8 @@ class RaceVideoToLogApp(QMainWindow):
 
 	def _get_roi(self) -> tuple | None:
 		try:
-			x1 = int(self.roi_x1.text()); y1 = int(self.roi_y1.text())
-			x2 = int(self.roi_x2.text()); y2 = int(self.roi_y2.text())
+			x1 = self.roi_x1.value(); y1 = self.roi_y1.value()
+			x2 = self.roi_x2.value(); y2 = self.roi_y2.value()
 		except ValueError: return None
 		if self.metadata:
 			x1, x2 = sorted((max(0, min(self.metadata.width - 1, x1)),
