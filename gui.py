@@ -23,6 +23,7 @@ from PySide6.QtGui import (
 import ocr_engine
 from ocr_engine import *  # noqa: F403, F405
 from gui_analysis import AnalysisTab
+from gui_review import ReviewDialog
 
 from qfluentwidgets import (setTheme, Theme,
 	PushButton, PrimaryPushButton, LineEdit, ComboBox, CheckBox, RadioButton,
@@ -38,7 +39,8 @@ class _ExportThread(QThread):
 	通过 Qt Signals 与 GUI 线程通信。
 	"""
 	_progress = Signal(str, float)   # (message, pct 0–100)
-	_finished = Signal(str)           # mode: "auto" | "baseline"
+	_finished = Signal(str)           # mode: "auto" | "baseline" | "review"
+	_review_data = Signal(list, list, list, list)  # rows, obs, conf, segs
 	_error = Signal(str)              # error message
 	_cancelled = Signal()
 
@@ -78,8 +80,7 @@ class _ExportThread(QThread):
 			if mode == "auto":
 				self._run_auto_anchor(observations, raw_frames, ocr, total_frames)
 			else:
-				self._error.emit("人工基准模式暂未迁移到 PySide6。")
-				return
+				self._run_focused_review(observations, raw_frames, ocr, total_frames)
 		except _CancelExport:
 			self._cancelled.emit()
 		except Exception as exc:
@@ -201,6 +202,43 @@ class _ExportThread(QThread):
 
 		self._emit_progress("完成", 100.0)
 		self._finished.emit("auto")
+
+	def _run_focused_review(self, observations: list, raw_frames: list,
+			ocr: "RapidOCR", total_frames: int) -> None:
+		self._emit_progress("正在自动识别可靠锚点...", 20.0)
+		anchor_indices = auto_select_anchors(observations, self._max_speed_kmh,
+			max_accel_mps2=self._max_accel_mps2)
+		if len(anchor_indices) < 3:
+			self._error.emit("自动锚点选择失败：未找到足够的可靠帧。")
+			return
+
+		rows = []
+		for i, obs in enumerate(observations):
+			rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh,
+				2 if i in anchor_indices else 0])
+
+		self._emit_progress("正在初次纠错...", 40.0)
+		from correction import correct_with_anchors, compute_confidence, find_problem_segments
+		def _prog(done: int, total: int) -> None:
+			pct = done / max(total, 1)
+			self._emit_progress(f"物理纠错: {done}/{total} 帧", 40.0 + pct * 20.0)
+		rows = correct_with_anchors(rows, observations, raw_frames, ocr,
+			self._max_speed_kmh, self._max_accel_mps2, anchor_indices,
+			progress_fn=_prog)
+
+		self._emit_progress("计算置信度...", 70.0)
+		confidences = compute_confidence(rows, observations,
+			self._max_speed_kmh, self._max_accel_mps2)
+		segments = find_problem_segments(confidences)
+
+		self._emit_progress(f"发现 {len(segments)} 个问题段，等待人工审核...", 75.0)
+		self._review_data.emit(rows, observations, confidences, segments)
+		self.app._review_rows = rows
+		self.app._review_observations = observations
+		self.app._review_raw_frames = raw_frames
+		self.app._review_ocr = ocr
+		self.app._review_anchor_indices = anchor_indices
+		self._finished.emit("review")
 
 	def _write_csv(self, rows: list) -> None:
 		assert self.app.video_path is not None
@@ -842,6 +880,7 @@ class RaceVideoToLogApp(QMainWindow):
 		self._export_thread = _ExportThread(self, Path(out), roi, ms, ma, fd, th, pp, nw)
 		self._export_thread._progress.connect(self._on_progress)
 		self._export_thread._finished.connect(self._on_done)
+		self._export_thread._review_data.connect(self._on_review_needed)
 		self._export_thread._error.connect(self._on_error)
 		self._export_thread._cancelled.connect(self._on_cancel)
 		self._export_thread.start()
@@ -852,6 +891,12 @@ class RaceVideoToLogApp(QMainWindow):
 
 	def _on_progress(self, msg: str, pct: float) -> None:
 		self._status_label.setText(msg); self._progress_bar.setValue(int(pct))
+
+	def _on_review_needed(self, rows: list, observations: list,
+			confidences: list[dict], segments: list[dict]) -> None:
+		self._review_confidences = confidences
+		self._review_segments = segments
+		self._finish_export()
 
 	def _on_done(self, mode: str) -> None:
 		self._finish_export()
@@ -864,17 +909,74 @@ class RaceVideoToLogApp(QMainWindow):
 	def _on_cancel(self) -> None:
 		self._finish_export(); self._status_label.setText("已取消。")
 
+	def _show_review_dialog(self) -> None:
+		try:
+			ms = float(self.max_speed_edit.text())
+		except ValueError:
+			ms = 400.0
+		dlg = ReviewDialog(self, self._review_rows, self._review_observations,
+			self._review_confidences, self._review_segments, ms)
+		if dlg.exec() == QDialog.DialogCode.Accepted:
+			corrections = dlg.get_corrections()
+			self._continue_with_manual_anchors(corrections)
+
+	def _continue_with_manual_anchors(self, corrections: dict[int, float]) -> None:
+		rows = self._review_rows
+		observations = self._review_observations
+		raw_frames = self._review_raw_frames
+		ocr = self._review_ocr
+		anchor_indices = set(self._review_anchor_indices)
+		try:
+			ms = float(self.max_speed_edit.text())
+			ma = float(self.max_accel_edit.text())
+		except ValueError:
+			ms = 400.0; ma = 50.0
+
+		for fi, v in corrections.items():
+			if 0 <= fi < len(rows):
+				rows[fi][2] = v
+				rows[fi][3] = 2
+				anchor_indices.add(fi)
+
+		from correction import correct_with_anchors
+		rows = correct_with_anchors(rows, observations, raw_frames, ocr,
+			ms, ma, anchor_indices)
+
+		dist = 0.0; prev_t = prev_v = None
+		for r in rows:
+			v = r[2] / 3.6
+			if prev_t is not None and prev_v is not None:
+				dt = r[0] - prev_t
+				if dt > 0: dist += (prev_v + v) * 0.5 * dt
+			prev_t, prev_v = r[0], v; r[1] = dist
+
+		assert self.video_path is not None
+		out_path = self.video_path.parent / f"{self.video_path.stem}_log.csv"
+		import csv
+		vhash = compute_video_hash(self.video_path)
+		roi = self._get_roi()
+		with out_path.open("w", newline="", encoding="utf-8-sig") as fh:
+			fh.write("# RaceVideoToLog")
+			fh.write("\\n")
+			fh.write(f"# video_hash={vhash}, video={self.video_path.name}")
+			fh.write("\\n")
+			if roi:
+				fh.write(f"# roi={roi[0]},{roi[1]},{roi[2]},{roi[3]}, format={self.speed_format}")
+				fh.write("\\n")
+			fh.write(f"# max_speed={ms}, max_accel={ma}, manual_anchor=1")
+			fh.write("\\n")
+			w = csv.writer(fh)
+			for r in rows:
+				w.writerow([f"{r[0]:.2f}", f"{r[1]:.2f}", f"{r[2]:.2f}", str(r[3])])
+		self._status_label.setText(f"人工审核完成 — {len(corrections)} 帧已修正，结果已保存。")
+
 	def _finish_export(self) -> None:
 		self._export_btn.setEnabled(True); self._cancel_btn.setEnabled(False)
 		self._export_thread = None; self._release_engines()
-
 	def _on_pivot(self, key: str) -> None:
-		if key == 'analysis':
+		if key == "analysis":
 			self._footer.hide()
 		else:
 			self._footer.show()
 
-	def closeEvent(self, event) -> None:
-		if self._preview_cap is not None: self._preview_cap.release()
-		self._release_engines()
-		super().closeEvent(event)
+
