@@ -762,8 +762,9 @@ class RaceVideoToLogApp(QMainWindow):
 			painter = QPainter(scaled)
 			x1, y1, x2, y2 = roi
 			painter.setPen(QPen(QColor("#ff5050"), max(2, int(scale * 2))))
-			painter.drawRect(int(x1 * scale), int(y1 * scale),
-				int((x2 - x1) * scale), int((y2 - y1) * scale))
+			l = int(x1 * scale); t = int(y1 * scale)
+			r = int(x2 * scale); b = int(y2 * scale)
+			painter.drawRect(l, t, r - l, b - t)
 			painter.end()
 
 		result = QPixmap(pw, ph); result.fill(QColor("#151515"))
