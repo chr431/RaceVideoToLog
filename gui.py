@@ -966,6 +966,7 @@ class RaceVideoToLogApp(QMainWindow):
 			w = csv.writer(fh)
 			for r in rows:
 				w.writerow([f"{r[0]:.2f}", f"{r[1]:.2f}", f"{r[2]:.2f}", str(r[3])])
+		self._progress_bar.setValue(100)
 		self._status_label.setText(f"人工审核完成 — {len(corrections)} 帧已修正，结果已保存。")
 
 	def _finish_export(self) -> None:
