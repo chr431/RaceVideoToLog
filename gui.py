@@ -479,6 +479,7 @@ class RaceVideoToLogApp(QMainWindow):
 		rgl.addWidget(CaptionLabel("左上 Y"), 1, 1); rgl.addWidget(self.roi_y1, 2, 1)
 		rgl.addWidget(CaptionLabel("右下 X"), 1, 2); rgl.addWidget(self.roi_x2, 2, 2)
 		rgl.addWidget(CaptionLabel("右下 Y"), 1, 3); rgl.addWidget(self.roi_y2, 2, 3)
+		rgl.addWidget(CaptionLabel("← 在预览画面上拖拽选择识别范围"), 3, 0, 1, 4)
 		rl.addWidget(roi_card)
 
 		# 预览 Card
@@ -490,6 +491,7 @@ class RaceVideoToLogApp(QMainWindow):
 		self._preview_label.setMinimumSize(400, 300)
 		self._preview_label.setStyleSheet("background-color: #111; border-radius: 6px;")
 		self._preview_label.setMouseTracking(True)
+		self._preview_label.setCursor(Qt.CursorShape.CrossCursor)
 		self._preview_label.mousePressEvent = self._on_pv_press    # type: ignore[method-assign]
 		self._preview_label.mouseMoveEvent = self._on_pv_move       # type: ignore[method-assign]
 		self._preview_label.mouseReleaseEvent = self._on_pv_release # type: ignore[method-assign]
