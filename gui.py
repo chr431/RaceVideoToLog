@@ -13,7 +13,7 @@ import numpy as np
 
 from PySide6.QtWidgets import (
 	QMainWindow, QWidget, QStackedWidget,
-	QFileDialog, QMessageBox, QHBoxLayout, QVBoxLayout, QGridLayout,
+	QDialog, QFileDialog, QMessageBox, QHBoxLayout, QVBoxLayout, QGridLayout,
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QThread
 from PySide6.QtGui import (
@@ -238,6 +238,7 @@ class _ExportThread(QThread):
 		self.app._review_raw_frames = raw_frames
 		self.app._review_ocr = ocr
 		self.app._review_anchor_indices = anchor_indices
+		self.app._review_output_path = self._output_path
 		self._finished.emit("review")
 
 	def _write_csv(self, rows: list) -> None:
@@ -916,7 +917,12 @@ class RaceVideoToLogApp(QMainWindow):
 			self._review_confidences, self._review_segments, ms)
 		if dlg.exec() == QDialog.DialogCode.Accepted:
 			corrections = dlg.get_corrections()
-			self._continue_with_manual_anchors(corrections)
+			try:
+				self._continue_with_manual_anchors(corrections)
+			except Exception as e:
+				self._progress_bar.setValue(0)
+				self._status_label.setText(f"审核失败: {e}")
+				import traceback; traceback.print_exc()
 
 	def _continue_with_manual_anchors(self, corrections: dict[int, float]) -> None:
 		rows = self._review_rows
@@ -949,7 +955,7 @@ class RaceVideoToLogApp(QMainWindow):
 			prev_t, prev_v = r[0], v; r[1] = dist
 
 		assert self.video_path is not None
-		out_path = self.video_path.parent / f"{self.video_path.stem}_log.csv"
+		out_path = getattr(self, "_review_output_path", self.video_path.parent / f"{self.video_path.stem}_log.csv")
 		import csv
 		vhash = compute_video_hash(self.video_path)
 		roi = self._get_roi()
