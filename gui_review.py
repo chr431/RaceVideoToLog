@@ -171,11 +171,12 @@ class ReviewDialog(QDialog):
         ax.set_facecolor(bg)
 
         self._chart_params = {'dark': dark, 'bg': bg, 'fg': fg}
-        self._redraw_chart(ax, fig)
-        fig.tight_layout()
 
         canvas = FigureCanvasQTAgg(fig)
         canvas.setParent(self)
+        self._canvas = canvas
+        self._redraw_chart(ax, fig)
+        fig.tight_layout()
         return fig, ax, canvas
 
     def _redraw_chart(self, ax=None, fig=None) -> None:
