@@ -226,7 +226,7 @@ def _detect_errors(rows: list, anchors: set, times: list, max_speed_kmh: float, 
 
 def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR", error_set: set,
                 anchors: set, times: list, max_speed_kmh: float, max_accel_mps2: float,
-                progress_fn: "Callable | None" = None) -> int:
+                progress_fn: "Callable | None" = None, num_workers: int = 1) -> int:
 	"""阶段 2+3：对每个 error 帧重 OCR 获取备选，选最优值填入。"""
 	fixed = 0
 	progress_done = 0
