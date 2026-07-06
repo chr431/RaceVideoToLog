@@ -624,9 +624,6 @@ class RaceVideoToLogApp(QMainWindow):
 
 	# ═══════════════════ 主题切换 ═══════════════════
 
-	@staticmethod
-
-
 	def _disable_spin_flyout(self, spin) -> None:
 		try:
 			spin.compactSpinButton.clicked.disconnect()
