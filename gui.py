@@ -625,9 +625,7 @@ class RaceVideoToLogApp(QMainWindow):
 	# ═══════════════════ 主题切换 ═══════════════════
 
 	@staticmethod
-	def _is_dark() -> bool:
-		from qfluentwidgets import qconfig, Theme
-		return qconfig.theme == Theme.DARK
+
 
 	def _disable_spin_flyout(self, spin) -> None:
 		try:
