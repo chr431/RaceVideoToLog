@@ -355,6 +355,17 @@ class RaceVideoToLogApp(QMainWindow):
 		self.speed_format: str = "km/h"
 		self._debug_log: bool = False
 
+		# 人工审核暂存
+		self._review_rows: list = []
+		self._review_observations: list = []
+		self._review_raw_frames: list = []
+		self._review_ocr: RapidOCR | None = None
+		self._review_anchor_indices: set = set()
+		self._review_output_path: Path | None = None
+		self._review_confidences: list[dict] = []
+		self._review_segments: list[dict] = []
+		self._review_confirmed: set = set()
+
 		# 预览
 		self._preview_pm: QPixmap | None = None
 		self._drag_active: bool = False
