@@ -6,12 +6,12 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QWidget, QLabel,
-    QListWidget, QListWidgetItem, QSpinBox, QMessageBox, QSplitter,
+    QListWidget, QListWidgetItem, QMessageBox, QSplitter,
 )
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QPixmap, QImage
+from PySide6.QtGui import QPixmap, QImage, QPalette, QColor
 from qfluentwidgets import (BodyLabel, StrongBodyLabel, CaptionLabel,
-    PrimaryPushButton, PushButton, CardWidget)
+    PrimaryPushButton, PushButton, CardWidget, CompactSpinBox, isDarkTheme, qconfig)
 
 import cv2
 import numpy as np
@@ -36,8 +36,21 @@ class ReviewDialog(QDialog):
         self._max_speed = max_speed
         self._corrections: dict[int, float] = {}
         self._confirmed: set[int] = set()
+        self._current_frame: int = 0
 
         self._build_ui()
+        qconfig.themeChanged.connect(self._on_theme_changed)
+
+    def _on_theme_changed(self) -> None:
+        """主题切换时刷新图表和对话框背景。"""
+        dark = isDarkTheme()
+        bg = QColor("#1f1f1f" if dark else "#f5f5f5")
+        p = self.palette()
+        p.setColor(QPalette.ColorRole.Window, bg)
+        p.setColor(QPalette.ColorRole.Base, bg)
+        self.setPalette(p)
+        if hasattr(self, '_figure'):
+            self._redraw_chart()
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
@@ -97,6 +110,13 @@ class ReviewDialog(QDialog):
         ctrl_card = CardWidget()
         ctrl = QVBoxLayout(ctrl_card); ctrl.setContentsMargins(8, 8, 8, 4)
 
+        cf_row = QHBoxLayout()
+        cf_row.addWidget(BodyLabel("当前帧: "))
+        self._frame_label = BodyLabel("—")
+        cf_row.addWidget(self._frame_label)
+        cf_row.addStretch()
+        ctrl.addLayout(cf_row)
+
         self._suggested_widget = QWidget()
         sl = QHBoxLayout(self._suggested_widget)
         sl.setContentsMargins(0, 0, 0, 0)
@@ -108,13 +128,8 @@ class ReviewDialog(QDialog):
 
         ctrl.addSpacing(4)
         cr = QHBoxLayout()
-        cr.addWidget(BodyLabel("帧 #"))
-        self._frame_spin = QSpinBox()
-        self._frame_spin.setRange(0, len(self._rows) - 1)
-        self._frame_spin.setFixedWidth(90)
-        cr.addWidget(self._frame_spin)
-        cr.addWidget(BodyLabel("速度"))
-        self._speed_spin = QSpinBox()
+        cr.addWidget(BodyLabel("修正速度"))
+        self._speed_spin = CompactSpinBox()
         self._speed_spin.setRange(0, int(self._max_speed))
         self._speed_spin.setFixedWidth(90)
         cr.addWidget(self._speed_spin)
