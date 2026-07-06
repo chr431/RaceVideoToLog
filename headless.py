@@ -158,7 +158,7 @@ def run_headless(args: argparse.Namespace) -> None:
 		fh.write(f"# RaceVideoToLog\n")
 		fh.write(f"# video_hash={vhash}, video={video_path.name}\n")
 		fh.write(f"# roi={region[0]},{region[1]},{region[2]},{region[3]}, format={args.format}\n")
-		fh.write(f"# max_speed={args.max_speed}, max_accel={args.max_accel}, div={args.div}, target_h={args.target_h}, pad={args.pad}, backend={backend_actual}, model={args.ocr_model}, workers={args.workers}, frame_start={args.frame_start or ''}, frame_end={args.frame_end or ''}\n")
+		fh.write(f"# max_speed={args.max_speed}, max_accel={args.max_accel}, div={args.div}, target_h={args.target_h}, pad={args.pad}, backend={backend_actual}, model={args.ocr_model}, workers={args.buffer}, frame_start={args.frame_start or ''}, frame_end={args.frame_end or ''}\n")
 		w = csv.writer(fh)
 		for r in rows_data:
 			w.writerow([f"{r[0]:.2f}", f"{r[1]:.2f}", f"{r[2]:.2f}", str(r[3])])

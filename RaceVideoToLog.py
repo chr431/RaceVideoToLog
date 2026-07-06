@@ -23,7 +23,7 @@ def main() -> None:
 	parser.add_argument("--max-accel", type=float, default=50)
 	parser.add_argument("--target-h", type=int, default=24)
 	parser.add_argument("--pad", type=int, default=0)
-	parser.add_argument("--workers", type=int, default=4)
+	parser.add_argument("--buffer", type=int, default=4)
 	parser.add_argument("--backend", choices=["auto","cuda","cpu"], default="auto")
 	parser.add_argument("--ocr-model", choices=["v6_small"], default="v6_small")
 	parser.add_argument("-o", "--output", type=str)
