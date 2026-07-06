@@ -38,6 +38,7 @@ class ReviewDialog(QDialog):
         self._corrections: dict[int, float] = {}
         self._confirmed: set[int] = set()
         self._current_frame: int = 0
+        self._confirmed_segments: dict[int, dict[int, float]] = {}  # seg_start -> saved corrections
 
         self._build_ui()
         self._register_theme_callbacks()
@@ -154,9 +155,9 @@ class ReviewDialog(QDialog):
         btn_add.setFixedWidth(100)
         btn_add.clicked.connect(self._add_correction)
         btn_row.addWidget(btn_add)
-        btn_confirm = PushButton("此段正确")
-        btn_confirm.setFixedWidth(100)
-        btn_confirm.clicked.connect(self._confirm_segment)
+        self._btn_confirm = PushButton("此段正确")
+        self._btn_confirm.setFixedWidth(100)
+        self._btn_confirm.clicked.connect(self._confirm_segment)
         btn_row.addWidget(btn_confirm)
         btn_row.addStretch()
         ctrl.addLayout(btn_row)
@@ -182,7 +183,7 @@ class ReviewDialog(QDialog):
         root.addWidget(splitter, 1)
 
         if self._segments:
-            QTimer.singleShot(100, lambda: self._list.setCurrentRow(0))
+            QTimer.singleShot(200, lambda: self._list.setCurrentRow(0))
 
     def _create_chart(self):
         from matplotlib.figure import Figure
@@ -225,7 +226,8 @@ class ReviewDialog(QDialog):
             cur_seg = self._list.item(cur_row).data(Qt.ItemDataRole.UserRole)
 
         # 全曲线（极淡灰）
-        ax.plot(times, speeds, color="#cccccc", linewidth=0.4, alpha=0.5, zorder=0)
+        bg_gray = "#444444" if not dark else "#cccccc"
+        ax.plot(times, speeds, color=bg_gray, linewidth=0.4, alpha=0.5, zorder=0)
 
         # 各问题段着色
         for seg in self._segments:
@@ -321,6 +323,11 @@ class ReviewDialog(QDialog):
         self._speed_spin.setValue(avg_val)
         self._update_corr_label()
         self._redraw_chart()
+        seg_start = seg['start']
+        if seg_start in self._confirmed_segments:
+            self._btn_confirm.setText("取消确认")
+        else:
+            self._btn_confirm.setText("此段正确")
 
     def _quick_correct(self, fi: int, val: float) -> None:
         self._current_frame = fi; self._frame_label.setText(f"#{fi}")
@@ -333,6 +340,11 @@ class ReviewDialog(QDialog):
         self._corrections[fi] = float(speed)
         self._update_corr_label()
         self._redraw_chart()
+        seg_start = seg['start']
+        if seg_start in self._confirmed_segments:
+            self._btn_confirm.setText("取消确认")
+        else:
+            self._btn_confirm.setText("此段正确")
         self._show_frame_image(fi)
 
     def _update_corr_label(self) -> None:
@@ -347,16 +359,38 @@ class ReviewDialog(QDialog):
         if row < 0:
             return
         seg = self._list.item(row).data(Qt.ItemDataRole.UserRole)
-        self._confirmed.add(seg['start'])
-        item = self._list.item(row)
-        item.setForeground(Qt.GlobalColor.gray)
-        item.setText(item.text() + " ✓")
-        self._redraw_chart()
-        for r in range(row + 1, self._list.count()):
-            s = self._list.item(r).data(Qt.ItemDataRole.UserRole)
-            if s['start'] not in self._confirmed:
-                self._list.setCurrentRow(r)
-                return
+        seg_start = seg['start']
+        if seg_start in self._confirmed_segments:
+            # Cancel confirmation: restore saved corrections
+            saved = self._confirmed_segments.pop(seg_start)
+            self._corrections.update(saved)
+            self._confirmed.discard(seg_start)
+            item = self._list.item(row)
+            item.setForeground(Qt.GlobalColor.black if not hasattr(self, '_is_dark') else Qt.GlobalColor.white)
+            item.setText(item.text().replace(" ✓", ""))
+            self._btn_confirm.setText("此段正确")
+            self._update_corr_label()
+            self._redraw_chart()
+        else:
+            # Confirm: save current corrections for this segment, remove them
+            saved = {}
+            for fi in range(seg_start, seg['end'] + 1):
+                if fi in self._corrections:
+                    saved[fi] = self._corrections.pop(fi)
+            self._confirmed_segments[seg_start] = saved
+            self._confirmed.add(seg_start)
+            item = self._list.item(row)
+            item.setForeground(Qt.GlobalColor.gray)
+            item.setText(item.text() + " ✓")
+            self._btn_confirm.setText("取消确认")
+            self._update_corr_label()
+            self._redraw_chart()
+            # Move to next unconfirmed
+            for r in range(row + 1, self._list.count()):
+                s = self._list.item(r).data(Qt.ItemDataRole.UserRole)
+                if s['start'] not in self._confirmed:
+                    self._list.setCurrentRow(r)
+                    return
 
     def _finish(self) -> None:
         if not self._corrections and not self._confirmed:
