@@ -269,8 +269,8 @@ class ReviewDialog(QDialog):
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        if hasattr(self, '_frame_spin'):
-            if hasattr(self, '_current_frame'): self._show_frame_image(self._current_frame)
+        if hasattr(self, '_current_frame'):
+            self._show_frame_image(self._current_frame)
 
     def _add_segment_item(self, seg: dict) -> None:
         text = (f"帧 {seg['start']}-{seg['end']} ({seg['count']}帧)  "
@@ -302,7 +302,7 @@ class ReviewDialog(QDialog):
             self._suggested_btns.append(btn)
         self._suggested_widget.show()
 
-        self._frame_spin.setValue(seg['start'])
+        self._current_frame = seg['start']; self._frame_label.setText(f"#{seg['start']}")
         self._show_frame_image(seg['start'])
         seg_vals = [self._rows[i][2] for i in range(seg['start'], seg['end'] + 1)]
         avg_val = int(sum(seg_vals) / max(len(seg_vals), 1))
@@ -311,12 +311,12 @@ class ReviewDialog(QDialog):
         self._redraw_chart()
 
     def _quick_correct(self, fi: int, val: float) -> None:
-        self._frame_spin.setValue(fi)
+        self._current_frame = fi; self._frame_label.setText(f"#{fi}")
         self._speed_spin.setValue(int(val))
         self._show_frame_image(fi)
 
     def _add_correction(self) -> None:
-        fi = self._frame_spin.value()
+        fi = getattr(self, "_current_frame", 0)
         speed = self._speed_spin.value()
         self._corrections[fi] = float(speed)
         self._update_corr_label()
