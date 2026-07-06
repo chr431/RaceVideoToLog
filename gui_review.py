@@ -42,13 +42,27 @@ class ReviewDialog(QDialog):
         qconfig.themeChanged.connect(self._on_theme_changed)
 
     def _on_theme_changed(self) -> None:
-        """主题切换时刷新图表和对话框背景。"""
+        """主题切换时刷新所有控件颜色。"""
         dark = isDarkTheme()
         bg = QColor("#1f1f1f" if dark else "#f5f5f5")
+        fg = QColor("#f0f0f0" if dark else "#000000")
+        btn_bg = QColor("#3a3a3a" if dark else "#e8e8e8")
+        img_bg = "#111" if dark else "#e0e0e0"
+
+        # 对话框 + 列表
         p = self.palette()
-        p.setColor(QPalette.ColorRole.Window, bg)
-        p.setColor(QPalette.ColorRole.Base, bg)
+        for role, color in [(QPalette.ColorRole.Window, bg), (QPalette.ColorRole.Base, btn_bg),
+                            (QPalette.ColorRole.WindowText, fg), (QPalette.ColorRole.Text, fg),
+                            (QPalette.ColorRole.Button, btn_bg), (QPalette.ColorRole.ButtonText, fg)]:
+            p.setColor(role, color)
         self.setPalette(p)
+        self._list.setPalette(p)
+
+        # 图像预览背景
+        self._img_label.setStyleSheet(
+            f"background-color: {img_bg}; border-radius: 4px;")
+
+        # 图表
         if hasattr(self, '_figure'):
             self._redraw_chart()
 
@@ -171,6 +185,7 @@ class ReviewDialog(QDialog):
 
         if self._segments:
             QTimer.singleShot(100, lambda: self._list.setCurrentRow(0))
+        self._on_theme_changed()
 
     def _create_chart(self):
         from matplotlib.figure import Figure
@@ -200,10 +215,10 @@ class ReviewDialog(QDialog):
         if fig is None:
             fig = self._figure
         ax.clear()
-        p = getattr(self, '_chart_params', {})
-        dark = p.get('dark', False)
-        bg = p.get('bg', '#ffffff')
-        fg = p.get('fg', '#333333')
+        dark = isDarkTheme()
+        bg = "#2a2a2a" if dark else "#ffffff"
+        fg = "#e0e0e0" if dark else "#333333"
+        self._chart_params = {'dark': dark, 'bg': bg, 'fg': fg}
 
         times = [r[0] for r in self._rows]
         speeds = [r[2] for r in self._rows]
