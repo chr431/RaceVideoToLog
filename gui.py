@@ -415,6 +415,7 @@ class RaceVideoToLogApp(QMainWindow):
 
 		# Tab 2: 数据分析
 		self._analysis_tab = AnalysisTab(self._tab_stack)
+		ThemeManager.register(lambda dark: self._analysis_tab._sync_figure_theme())
 		self._tab_pivot.addItem('analysis', '数据分析', lambda: self._tab_stack.setCurrentIndex(1))
 		self._tab_pivot.setCurrentItem('ocr')
 		self._tab_pivot.currentItemChanged.connect(self._on_pivot)
