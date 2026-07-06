@@ -186,7 +186,7 @@ class _ExportThread(QThread):
 			self._emit_progress(f"物理纠错: {done}/{total} 帧", 60.0 + pct * 30.0)
 		rows = correct_with_anchors(rows, observations, raw_frames, ocr,
 			self._max_speed_kmh, self._max_accel_mps2, anchor_indices,
-			progress_fn=_prog)
+			progress_fn=_prog, num_workers=self._num_workers)
 
 		# 积分距离
 		dist = 0.0; prev_t = prev_v = None
@@ -224,7 +224,7 @@ class _ExportThread(QThread):
 			self._emit_progress(f"物理纠错: {done}/{total} 帧", 40.0 + pct * 20.0)
 		rows = correct_with_anchors(rows, observations, raw_frames, ocr,
 			self._max_speed_kmh, self._max_accel_mps2, anchor_indices,
-			progress_fn=_prog)
+			progress_fn=_prog, num_workers=self._num_workers)
 
 		self._emit_progress("计算置信度...", 70.0)
 		confidences = compute_confidence(rows, observations,
@@ -955,7 +955,7 @@ class RaceVideoToLogApp(QMainWindow):
 
 		from correction import correct_with_anchors
 		rows = correct_with_anchors(rows, observations, raw_frames, ocr,
-			ms, ma, anchor_indices)
+			ms, ma, anchor_indices, num_workers=max(1, int(getattr(self, "workers_edit", type("obj", (), {"text": lambda: "4"})()).text() or "4")))
 
 		dist = 0.0; prev_t = prev_v = None
 		for r in rows:
