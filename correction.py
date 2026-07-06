@@ -62,16 +62,26 @@ def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: 
 			log_fn(f"  Stage 4 round {rnd}: {len(error_set)} errors, fixed {fixed}")
 
 	# ── 阶段 5：迭代填充直到收敛（处理级联效应）──
-	fill_pass = 0
-	while fill_pass < 10:
+	if skip_fill:
 		error_set = _detect_errors(rows, anchors, times, max_speed_kmh, max_accel_mps2)
-		if not error_set:
-			break
-		_fill_unrecoverable(rows, anchors, error_set, times, max_speed_kmh, max_accel_mps2,
-		                    progress_fn=progress_fn)
+		for i in error_set:
+			if i not in anchors and rows[i][3] < 2:
+				rows[i][3] = 3
 		if log_fn:
-			log_fn(f"  Stage 5 pass {fill_pass+1}: filled {len(error_set)} unrecoverable frames")
-		fill_pass += 1
+			log_fn(f"  Stage 5: {len(error_set)} frames flagged for manual review")
+	else:
+		fill_pass = 0
+		while fill_pass < 10:
+			error_set = _detect_errors(rows, anchors, times, max_speed_kmh, max_accel_mps2)
+			if not error_set:
+				break
+			_fill_unrecoverable(rows, anchors, error_set, times, max_speed_kmh, max_accel_mps2,
+			                    progress_fn=progress_fn)
+			if log_fn:
+				log_fn(f"  Stage 5 pass {fill_pass+1}: filled {len(error_set)} unrecoverable frames")
+			fill_pass += 1
+
+	return rows
 
 	return rows
 
