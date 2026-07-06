@@ -193,3 +193,835 @@ class _ExportThread(QThread):
 			raise errors[0]
 		return observations
 
+
+	def _run_auto_anchor(self, observations: list, raw_frames: list,
+			ocr: "RapidOCR", total_frames: int) -> None:
+		self._emit_progress("正在自动识别可靠锚点...", 40.0)
+		anchor_indices = auto_select_anchors(observations, self._max_speed_kmh,
+			max_accel_mps2=self._max_accel_mps2)
+		if len(anchor_indices) < 3:
+			self._error.emit("自动锚点选择失败：未找到足够的可靠帧。")
+			return
+
+		rows = []
+		for i, obs in enumerate(observations):
+			rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh,
+				2 if i in anchor_indices else 0])
+
+		self._emit_progress("正在纠错...", 60.0)
+		from correction import correct_with_anchors
+		def _prog(done: int, total: int) -> None:
+			pct = done / max(total, 1)
+			self._emit_progress(f"物理纠错: {done}/{total} 帧", 60.0 + pct * 30.0)
+		rows = correct_with_anchors(rows, observations, raw_frames, ocr,
+			self._max_speed_kmh, self._max_accel_mps2, anchor_indices,
+			progress_fn=_prog)
+
+		# 积分距离
+		dist = 0.0; prev_t = prev_v = None
+		for r in rows:
+			v = r[2] / 3.6
+			if prev_t is not None and prev_v is not None:
+				dt = r[0] - prev_t
+				if dt > 0: dist += (prev_v + v) * 0.5 * dt
+			prev_t, prev_v = r[0], v; r[1] = dist
+
+		# 写出 CSV
+		self._write_csv(rows)
+
+		self._emit_progress("完成", 100.0)
+		self._finished.emit("auto")
+
+	def _run_focused_review(self, observations: list, raw_frames: list,
+			ocr: "RapidOCR", total_frames: int) -> None:
+		self._emit_progress("正在自动识别可靠锚点...", 20.0)
+		anchor_indices = auto_select_anchors(observations, self._max_speed_kmh,
+			max_accel_mps2=self._max_accel_mps2)
+		if len(anchor_indices) < 3:
+			self._error.emit("自动锚点选择失败：未找到足够的可靠帧。")
+			return
+
+		rows = []
+		for i, obs in enumerate(observations):
+			rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh,
+				2 if i in anchor_indices else 0])
+
+		self._emit_progress("正在初次纠错...", 40.0)
+		from correction import correct_with_anchors, compute_confidence, find_problem_segments
+		def _prog(done: int, total: int) -> None:
+			pct = done / max(total, 1)
+			self._emit_progress(f"物理纠错: {done}/{total} 帧", 40.0 + pct * 20.0)
+		rows = correct_with_anchors(rows, observations, raw_frames, ocr,
+			self._max_speed_kmh, self._max_accel_mps2, anchor_indices,
+			progress_fn=_prog)
+
+		self._emit_progress("计算置信度...", 70.0)
+		confidences = compute_confidence(rows, observations,
+			self._max_speed_kmh, self._max_accel_mps2)
+		segments = find_problem_segments(confidences)
+
+		self._emit_progress(f"发现 {len(segments)} 个问题段，等待人工审核...", 75.0)
+		self._review_data.emit(rows, observations, confidences, segments)
+		self.app._review_rows = rows
+		self.app._review_observations = observations
+		self.app._review_raw_frames = raw_frames
+		self.app._review_ocr = ocr
+		self.app._review_anchor_indices = anchor_indices
+		self.app._review_output_path = self._output_path
+		self._finished.emit("review")
+
+	def _write_csv(self, rows: list) -> None:
+		assert self.app.video_path is not None
+		vhash = compute_video_hash(self.app.video_path)
+		with self._output_path.open("w", newline="", encoding="utf-8-sig") as fh:
+			fh.write("# RaceVideoToLog\n")
+			fh.write(f"# video_hash={vhash}, video={self.app.video_path.name}\n")
+			r = self._region
+			fh.write(f"# roi={r[0]},{r[1]},{r[2]},{r[3]}, format={self.app.speed_format}\n")
+			fh.write(f"# max_speed={self._max_speed_kmh}, max_accel={self._max_accel_mps2}, "
+				f"div={self._frame_div}, target_h={self._target_h}, pad={self._pad_px}, "
+				f"backend={ocr_engine._gpu_backend}, model=v6_small, "
+				f"buffer={self._buffer_size}, "
+				f"frame_start={self.app.frame_start_edit.text() or ''}, "
+				f"frame_end={self.app.frame_end_edit.text() or ''}, auto_anchor=1\n")
+			w = csv.writer(fh)
+			for r in rows:
+				w.writerow([f"{r[0]:.2f}", f"{r[1]:.2f}", f"{r[2]:.2f}", str(r[3])])
+
+	# ── 预处理 ──
+
+	@staticmethod
+	def _preprocess(crop: np.ndarray, target_h: float, pad_px: float) -> np.ndarray:
+		gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+		return _ExportThread._finish(gray, target_h, pad_px)
+
+	@staticmethod
+	def _preprocess_fb(crop: np.ndarray, target_h: float, pad_px: float) -> np.ndarray:
+		gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+		_, gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+		return _ExportThread._finish(gray, target_h, pad_px)
+
+	@staticmethod
+	def _finish(gray: np.ndarray, target_h: float, pad_px: float) -> np.ndarray:
+		h, w = gray.shape[:2]
+		th = max(8.0, float(target_h))
+		scale = th / float(h) if h > 0 else 1.0
+		if abs(scale - 1.0) > 0.02:
+			gray = cv2.resize(gray, (max(1, int(w * scale)), int(th)))
+		pad_int = int(pad_px)
+		if pad_int > 0:
+			gray = cv2.copyMakeBorder(gray, pad_int, pad_int, pad_int, pad_int,
+				cv2.BORDER_REPLICATE)
+		return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+
+
+# ═══════════════════════ 主窗口 ═══════════════════════
+
+class RaceVideoToLogApp(QMainWindow):
+	"""RaceVideoToLog PySide6 主窗口。"""
+
+	def __init__(self) -> None:
+		super().__init__()
+		self.setWindowTitle("Race Video To Log")
+		self.resize(1500, 920)
+		self.setMinimumSize(1100, 760)
+
+		# ── 状态变量 ──
+		self.video_path: Path | None = None
+		self.metadata: VideoMetadata | None = None
+		self.first_frame_bgr: np.ndarray | None = None
+		self.first_frame_qimg: QImage | None = None
+		self._preview_cap: cv2.VideoCapture | None = None
+		self._preview_frame_no: int = 0
+		self._throttle_timer: QTimer | None = None
+		self.ocr_engine: RapidOCR | None = None
+		self.ocr_engines: list[RapidOCR] = []
+
+		self._export_thread: _ExportThread | None = None
+		self.correction_mode: str = "auto"
+		self.speed_format: str = "km/h"
+		self._debug_log: bool = False
+
+		# 预览
+		self._preview_pm: QPixmap | None = None
+		self._drag_active: bool = False
+		self._drag_start: tuple = (0, 0)
+		self._preview_scale: float = 1.0
+		self._preview_ox: float = 0.0
+		self._preview_oy: float = 0.0
+
+		self._build_ui()
+		self._connect_signals()
+		self._add_shortcuts()
+
+	# ═══════════════════ 构建 UI ═══════════════════
+
+	def _build_ui(self) -> None:
+		# ── 中央内容 ──
+		central = QWidget()
+		self.setCentralWidget(central)
+		self._sync_titlebar()
+		root = QVBoxLayout(central)
+		root.setContentsMargins(12, 8, 12, 6)
+		root.setSpacing(0)
+
+		# ── 顶栏：主题按钮 ──
+		top_bar = QWidget()
+		tbl = QHBoxLayout(top_bar); tbl.setContentsMargins(0, 0, 0, 4)
+		self._tab_pivot = Pivot(self)
+		self._tab_pivot.setFixedWidth(160)
+		tbl.addWidget(self._tab_pivot)
+		tbl.addStretch()
+		self._theme_btn = PushButton("☀" if not self._theme_is_dark() else "☾")
+		self._theme_btn.setFixedSize(36, 28)
+		self._theme_btn.setToolTip("切换亮色/暗色主题")
+		self._theme_btn.clicked.connect(self._toggle_theme)
+		tbl.addWidget(self._theme_btn)
+		root.addWidget(top_bar)
+		self._tab_stack = QStackedWidget()
+		root.addWidget(self._tab_stack)
+
+		# Tab 1: OCR 处理
+		self._ocr_tab = QWidget()
+		self._tab_stack.addWidget(self._ocr_tab)
+		self._build_ocr_tab()
+		self._tab_pivot.addItem('ocr', 'OCR 处理', lambda: self._tab_stack.setCurrentIndex(0))
+
+		# Tab 2: 数据分析
+		self._analysis_tab = AnalysisTab(self._tab_stack)
+		self._tab_pivot.addItem('analysis', '数据分析', lambda: self._tab_stack.setCurrentIndex(1))
+		self._tab_pivot.setCurrentItem('ocr')
+		self._tab_pivot.currentItemChanged.connect(self._on_pivot)
+
+		# ── 底部状态栏 ──
+		self._footer = QWidget()
+		fl = QVBoxLayout(self._footer); fl.setContentsMargins(0, 6, 0, 0)
+		self._status_label = BodyLabel("请选择视频并设置识别范围。")
+		self._progress_bar = ProgressBar()
+		self._progress_bar.setRange(0, 100); self._progress_bar.setValue(0)
+		self._progress_bar.setTextVisible(True)
+		fl.addWidget(self._status_label)
+		fl.addWidget(self._progress_bar)
+		root.addWidget(self._footer)
+
+	def _build_ocr_tab(self) -> None:
+		layout = QVBoxLayout(self._ocr_tab)
+		layout.setContentsMargins(0, 6, 0, 0); layout.setSpacing(8)
+
+		# Header
+		hdr = QHBoxLayout()
+		self._import_btn = PushButton("导入视频")
+		hdr.addWidget(self._import_btn)
+		self._file_label = BodyLabel("未导入视频")
+		self._file_label.setWordWrap(True)
+		hdr.addWidget(self._file_label, 1)
+		self._export_btn = PrimaryPushButton("导出 CSV")
+		hdr.addWidget(self._export_btn)
+		self._cancel_btn = PushButton("取消")
+		self._cancel_btn.setEnabled(False)
+		hdr.addWidget(self._cancel_btn)
+		layout.addLayout(hdr)
+
+		# 视频信息 Card
+		info = self._make_static_card()
+		il = QHBoxLayout(info)
+		self._dur_label = BodyLabel("-"); self._res_label = BodyLabel("-")
+		self._fps_label = BodyLabel("-"); self._codec_label = BodyLabel("-")
+		for t, l in [("时长", self._dur_label), ("分辨率", self._res_label),
+				("帧率", self._fps_label), ("编码", self._codec_label)]:
+			w = QWidget(); wl = QVBoxLayout(w); wl.setContentsMargins(0, 0, 0, 0)
+			wl.addWidget(CaptionLabel(t)); wl.addWidget(l); il.addWidget(w)
+		layout.addWidget(info)
+
+		# 主内容
+		main_w = QHBoxLayout(); main_w.setSpacing(12)
+
+		# 左侧面板
+		left = QWidget(); left.setFixedWidth(450)
+		ll = QVBoxLayout(left); ll.setContentsMargins(0, 0, 0, 0); ll.setSpacing(6)
+		self._build_left_panel(ll)
+		main_w.addWidget(left)
+
+		# 右侧 = 识别范围 + 预览
+		right = QVBoxLayout(); right.setSpacing(8)
+		self._build_right_panel(right)
+		main_w.addLayout(right, 1)
+
+		layout.addLayout(main_w, 1)
+
+	def _build_left_panel(self, ll: QVBoxLayout) -> None:
+		# 速度格式 Card
+		fmt_card = self._make_static_card()
+		gl = QVBoxLayout(fmt_card)
+		gl.addWidget(StrongBodyLabel("速度格式"))
+		r = QHBoxLayout()
+		self._fmt_ms = RadioButton("m/s"); self._fmt_kmh = RadioButton("km/h")
+		self._fmt_kmh.setChecked(True); self._fmt_mph = RadioButton("mile/h")
+		r.addWidget(self._fmt_ms); r.addWidget(self._fmt_kmh)
+		r.addWidget(self._fmt_mph); r.addStretch()
+		gl.addLayout(r)
+		gl.addWidget(CaptionLabel("输出统一转换为 km/h。"))
+
+		cg = self._make_static_card()
+		cl = QGridLayout(cg)
+		cl.addWidget(BodyLabel("最大速度 (km/h)"), 0, 0)
+		self.max_speed_edit = LineEdit(); self.max_speed_edit.setText("400"); self.max_speed_edit.setFixedWidth(50)
+		cl.addWidget(self.max_speed_edit, 0, 1)
+		cl.addWidget(BodyLabel("最大加速度 (m/s²)"), 0, 2)
+		self.max_accel_edit = LineEdit(); self.max_accel_edit.setText("50"); self.max_accel_edit.setFixedWidth(50)
+		cl.addWidget(self.max_accel_edit, 0, 3)
+		gl.addWidget(cg)
+		ll.addWidget(fmt_card)
+
+		# 性能 Card
+		perf_card = self._make_static_card()
+		pl = QGridLayout(perf_card)
+		pl.addWidget(StrongBodyLabel("性能"), 0, 0, 1, 4)
+		pl.addWidget(BodyLabel("采样率 1/"), 1, 0)
+		self.div_spin = CompactSpinBox(); self.div_spin.setRange(1, 10); self.div_spin.setValue(2); self.div_spin.setFixedWidth(70)
+		self._disable_spin_flyout(self.div_spin)
+		pl.addWidget(self.div_spin, 1, 1)
+		pl.addWidget(BodyLabel("并行线程数"), 1, 2)
+		self.buffer_edit = LineEdit(); self.buffer_edit.setText("1"); self.buffer_edit.setFixedWidth(50)
+		pl.addWidget(self.buffer_edit, 1, 3)
+		pl.addWidget(BodyLabel("OCR 高度 (px)"), 2, 0)
+		self.target_h_edit = LineEdit(); self.target_h_edit.setText("24"); self.target_h_edit.setFixedWidth(50)
+		pl.addWidget(self.target_h_edit, 2, 1)
+		pl.addWidget(BodyLabel("边缘填充 (px)"), 2, 2)
+		self.pad_edit = LineEdit(); self.pad_edit.setText("0"); self.pad_edit.setFixedWidth(50)
+		pl.addWidget(self.pad_edit, 2, 3)
+		pl.addWidget(BodyLabel("OCR 后端"), 3, 0)
+		self.backend_combo = ComboBox()
+		self.backend_combo.addItems(["自动", "CUDA", "CPU"]); self.backend_combo.setCurrentIndex(0)
+		pl.addWidget(self.backend_combo, 3, 1)
+		self.debug_cb = CheckBox("调试日志"); pl.addWidget(self.debug_cb, 3, 2, 1, 2)
+		ll.addWidget(perf_card)
+
+		# 纠错模式 Card
+		mode_card = self._make_static_card()
+		ml = QVBoxLayout(mode_card)
+		ml.addWidget(StrongBodyLabel("纠错模式"))
+		self.mode_auto = RadioButton("自动锚点纠错（全自动，推荐）")
+		self.mode_auto.setChecked(True)
+		self.mode_baseline = RadioButton("人工辅助纠错")
+		ml.addWidget(self.mode_auto); ml.addWidget(self.mode_baseline)
+		ll.addWidget(mode_card)
+
+		# 时间轴范围 Card
+		time_card = self._make_static_card()
+		tl = QGridLayout(time_card)
+		tl.addWidget(StrongBodyLabel("时间轴范围"), 0, 0, 1, 6)
+		tl.addWidget(BodyLabel("起始帧"), 1, 0)
+		self.frame_start_edit = LineEdit(); self.frame_start_edit.setFixedWidth(72)
+		tl.addWidget(self.frame_start_edit, 1, 1)
+		bfs = PushButton("设为当前"); bfs.setFixedWidth(90)
+		bfs.clicked.connect(lambda: self.frame_start_edit.setText(str(self._slider.value())))
+		tl.addWidget(bfs, 1, 2)
+		tl.addWidget(BodyLabel("结束帧"), 1, 3)
+		self.frame_end_edit = LineEdit(); self.frame_end_edit.setFixedWidth(72)
+		tl.addWidget(self.frame_end_edit, 1, 4)
+		bfe = PushButton("设为当前"); bfe.setFixedWidth(90)
+		bfe.clicked.connect(lambda: self.frame_end_edit.setText(str(self._slider.value())))
+		tl.addWidget(bfe, 1, 5)
+		ll.addWidget(time_card)
+
+		ll.addStretch()
+
+	def _build_right_panel(self, rl: QVBoxLayout) -> None:
+		# 识别范围 Card
+		roi_card = self._make_static_card()
+		rgl = QGridLayout(roi_card)
+		rgl.addWidget(StrongBodyLabel("识别范围（像素）"), 0, 0, 1, 4)
+		self.roi_x1 = CompactSpinBox(); self.roi_y1 = CompactSpinBox()
+		self.roi_x2 = CompactSpinBox(); self.roi_y2 = CompactSpinBox()
+		for s in [self.roi_x1, self.roi_y1, self.roi_x2, self.roi_y2]:
+			s.setRange(0, 9999); s.setFixedWidth(80)
+			s.valueChanged.connect(lambda v, spin=s: self._on_roi_spin(spin))
+			self._disable_spin_flyout(s)
+		rgl.addWidget(CaptionLabel("左上 X"), 1, 0); rgl.addWidget(self.roi_x1, 2, 0)
+		rgl.addWidget(CaptionLabel("左上 Y"), 1, 1); rgl.addWidget(self.roi_y1, 2, 1)
+		rgl.addWidget(CaptionLabel("右下 X"), 1, 2); rgl.addWidget(self.roi_x2, 2, 2)
+		rgl.addWidget(CaptionLabel("右下 Y"), 1, 3); rgl.addWidget(self.roi_y2, 2, 3)
+		rgl.addWidget(CaptionLabel("← 在预览画面上拖拽选择识别范围"), 3, 0, 1, 4)
+		rl.addWidget(roi_card)
+
+		# 预览 Card
+		pv = self._make_static_card()
+		pvl = QVBoxLayout(pv)
+		pvl.addWidget(StrongBodyLabel("识别范围预览"))
+		self._preview_label = BodyLabel()
+		self._preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+		self._preview_label.setMinimumSize(400, 300)
+		self._preview_label.setStyleSheet("background-color: #111; border-radius: 6px;")
+		self._preview_label.setMouseTracking(True)
+		self._preview_label.setCursor(Qt.CursorShape.CrossCursor)
+		self._preview_label.mousePressEvent = self._on_pv_press    # type: ignore[method-assign]
+		self._preview_label.mouseMoveEvent = self._on_pv_move       # type: ignore[method-assign]
+		self._preview_label.mouseReleaseEvent = self._on_pv_release # type: ignore[method-assign]
+		pvl.addWidget(self._preview_label, 1)
+
+		sr = QHBoxLayout()
+		self._slider = Slider(Qt.Orientation.Horizontal)
+		self._slider.setRange(0, 1); self._slider.setValue(0)
+		self._slider.valueChanged.connect(self._on_slider)
+		sr.addWidget(self._slider, 1)
+		self._frame_label = CaptionLabel("#0"); self._frame_label.setFixedWidth(50)
+		sr.addWidget(self._frame_label)
+		pvl.addLayout(sr)
+		rl.addWidget(pv, 1)
+
+	# ═══════════════════ 信号连接 + 快捷键 ═══════════════════
+
+	def _connect_signals(self) -> None:
+		self._import_btn.clicked.connect(self._import_video)
+		self._export_btn.clicked.connect(self._export_csv)
+		self._cancel_btn.clicked.connect(self._cancel_export)
+		self._fmt_ms.clicked.connect(lambda: self._on_fmt("m/s"))
+		self._fmt_kmh.clicked.connect(lambda: self._on_fmt("km/h"))
+		self._fmt_mph.clicked.connect(lambda: self._on_fmt("mile/h"))
+		self.mode_auto.clicked.connect(lambda: self._on_mode("auto"))
+		self.mode_baseline.clicked.connect(lambda: self._on_mode("baseline"))
+		self.backend_combo.currentIndexChanged.connect(self._on_backend)
+
+		self.debug_cb.toggled.connect(lambda v: setattr(self, '_debug_log', v))
+
+	def _add_shortcuts(self) -> None:
+		QShortcut(QKeySequence(Qt.Key.Key_Left), self, lambda: self._step(-1))
+		QShortcut(QKeySequence(Qt.Key.Key_Right), self, lambda: self._step(1))
+		QShortcut(QKeySequence(Qt.Key.Key_Up), self, lambda: self._step(10))
+		QShortcut(QKeySequence(Qt.Key.Key_Down), self, lambda: self._step(-10))
+
+	def _on_fmt(self, fmt: str) -> None: self.speed_format = fmt
+	def _on_mode(self, mode: str) -> None: self.correction_mode = mode
+	def _log(self, msg: str) -> None:
+		if self._debug_log: print(f"[DEBUG] {msg}", flush=True)
+
+	# ═══════════════════ 主题切换 ═══════════════════
+
+	@staticmethod
+	def _is_dark() -> bool:
+		from qfluentwidgets import qconfig, Theme
+		return qconfig.theme == Theme.DARK
+
+	def _disable_spin_flyout(self, spin) -> None:
+		try:
+			spin.compactSpinButton.clicked.disconnect()
+		except Exception:
+			pass
+		spin._showFlyout = lambda: None
+
+	@staticmethod
+	def _make_static_card(parent=None):
+		w = CardWidget(parent)
+		w.enterEvent = lambda e: None   # 完全禁用 hover
+		w.leaveEvent = lambda e: None
+		return w
+
+	def _apply_theme(self) -> None:
+		from qfluentwidgets import qconfig, Theme, isDarkTheme
+		if qconfig.theme == Theme.DARK:
+			setTheme(Theme.LIGHT)
+		else:
+			setTheme(Theme.DARK)
+		self._sync_titlebar()
+		self._update_theme_icon()
+		# 同步 matplotlib 画布
+		if hasattr(self, '_analysis_tab'):
+			self._analysis_tab._sync_figure_theme()
+
+	def _sync_titlebar(self) -> None:
+		from qfluentwidgets import isDarkTheme
+		dark = isDarkTheme()
+# 仅设 palette，不做 setAutoFillBackground，避免文字阴影
+		from PySide6.QtGui import QPalette, QColor
+		bg = QColor('#1f1f1f' if dark else '#f5f5f5')
+		fg = QColor('#f0f0f0' if dark else '#000000')
+		widgets = [self, self.centralWidget()]
+		tabs = getattr(self, '_tab_stack', None)
+		if tabs is not None:
+			widgets.append(tabs)
+		for w in widgets:
+			if w is None:
+				continue
+			p = w.palette()
+			p.setColor(QPalette.ColorRole.Window, bg)
+			p.setColor(QPalette.ColorRole.Base, bg)
+			p.setColor(QPalette.ColorRole.WindowText, fg)
+			p.setColor(QPalette.ColorRole.Text, fg)
+			p.setColor(QPalette.ColorRole.ButtonText, fg)
+			w.setPalette(p)
+		# Windows 标题栏
+		import sys
+		if sys.platform == 'win32':
+			try:
+				import ctypes
+				hwnd = int(self.winId())
+				val = ctypes.c_int(1 if dark else 0)
+				ctypes.windll.dwmapi.DwmSetWindowAttribute(
+					hwnd, 20, ctypes.byref(val), ctypes.sizeof(val))
+			except Exception:
+				pass
+
+	def _theme_is_dark(self) -> bool:
+		from qfluentwidgets import isDarkTheme
+		return isDarkTheme()
+
+	def _update_theme_icon(self) -> None:
+		self._theme_btn.setText("☀" if not self._theme_is_dark() else "☾")
+
+	def _toggle_theme(self) -> None:
+		self._apply_theme()
+
+	# ═══════════════════ 视频导入 ═══════════════════
+
+	def _import_video(self) -> None:
+		path, _ = QFileDialog.getOpenFileName(self, "选择需要处理的视频", "",
+			"视频文件 (*.mp4 *.mkv *.avi *.mov *.m4v *.wmv *.flv *.webm);;所有文件 (*.*)")
+		if not path: return
+		try: self._load_video(Path(path))
+		except Exception as e:
+			QMessageBox.critical(self, "导入失败", str(e))
+			self._status_label.setText("导入失败。")
+
+	def _load_video(self, path: Path) -> None:
+		cap = cv2.VideoCapture(str(path))
+		if not cap.isOpened(): raise RuntimeError("无法打开视频文件。")
+
+		fc = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+		fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+		w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+		h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+		fourcc = cap.get(cv2.CAP_PROP_FOURCC) or 0.0
+		dur = fc / fps if fps > 0 else 0.0
+
+		ok, frame = cap.read()
+		if not ok or frame is None:
+			cap.release(); raise RuntimeError("无法读取视频第一帧。")
+
+		if self._preview_cap is not None: self._preview_cap.release()
+		self._preview_cap = cap; self._preview_frame_no = 0
+
+		self.video_path = path
+		self.metadata = VideoMetadata(path=path, duration_sec=dur, width=w, height=h,
+			fps=fps, codec=codec_from_fourcc(fourcc), frame_count=fc)
+		self.first_frame_bgr = frame
+
+		rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+		hh, ww, ch = rgb.shape
+		self.first_frame_qimg = QImage(rgb.data, ww, hh, ch * ww,
+			QImage.Format.Format_RGB888).copy()
+
+		self._file_label.setText(str(path))
+		self._dur_label.setText(format_duration(dur))
+		self._res_label.setText(f"{w} x {h}")
+		self._fps_label.setText(f"{fps:.3f}" if fps > 0 else "Unknown")
+		self._codec_label.setText(self.metadata.codec)
+		self._status_label.setText("视频已载入，请输入识别范围并预览。")
+		self._slider.setRange(0, fc - 1); self._slider.setValue(0)
+		self._frame_label.setText(f"#{0}/{fc}")
+		self._show_frame(0)
+		for s, m in [(self.roi_x1, w), (self.roi_y1, h), (self.roi_x2, w), (self.roi_y2, h)]:
+			s.setMaximum(m - 1)
+
+	# ═══════════════════ 预览 ═══════════════════
+
+	def _on_pv_press(self, event) -> None:
+		if not self.metadata or self.first_frame_qimg is None: return
+		x, y = self._to_video(event.position().x(), event.position().y())
+		self._drag_active = True; self._drag_start = (x, y)
+		for s, v in [(self.roi_x1, x), (self.roi_y1, y), (self.roi_x2, x), (self.roi_y2, y)]:
+			s.blockSignals(True); s.setValue(v); s.blockSignals(False)
+
+	def _on_pv_move(self, event) -> None:
+		if not self._drag_active or not self.metadata: return
+		x, y = self._to_video(event.position().x(), event.position().y())
+		x1 = min(self._drag_start[0], x); y1 = min(self._drag_start[1], y)
+		x2 = max(self._drag_start[0], x); y2 = max(self._drag_start[1], y)
+		for s, v in [(self.roi_x1, x1), (self.roi_y1, y1), (self.roi_x2, x2), (self.roi_y2, y2)]:
+				s.blockSignals(True); s.setValue(v); s.blockSignals(False)
+		self._redraw()
+
+	def _on_roi_spin(self, spin) -> None:
+		if spin is self.roi_x1 and self.roi_x1.value() > self.roi_x2.value() - 1:
+			spin.blockSignals(True); spin.setValue(self.roi_x2.value() - 1); spin.blockSignals(False)
+		elif spin is self.roi_x2 and self.roi_x2.value() < self.roi_x1.value() + 1:
+			spin.blockSignals(True); spin.setValue(self.roi_x1.value() + 1); spin.blockSignals(False)
+		elif spin is self.roi_y1 and self.roi_y1.value() > self.roi_y2.value() - 1:
+			spin.blockSignals(True); spin.setValue(self.roi_y2.value() - 1); spin.blockSignals(False)
+		elif spin is self.roi_y2 and self.roi_y2.value() < self.roi_y1.value() + 1:
+			spin.blockSignals(True); spin.setValue(self.roi_y1.value() + 1); spin.blockSignals(False)
+		self._redraw()
+
+	def _on_pv_release(self, event) -> None:
+		self._drag_active = False
+
+	def _to_video(self, wx: float, wy: float) -> tuple[int, int]:
+		if not self.metadata or self._preview_scale <= 0: return 0, 0
+		x = (wx - self._preview_ox) / self._preview_scale
+		y = (wy - self._preview_oy) / self._preview_scale
+		return (max(0, min(self.metadata.width - 1, int(x))),
+			max(0, min(self.metadata.height - 1, int(y))))
+
+	def _show_frame(self, frame_no: int) -> None:
+		pm = None
+		if frame_no > 0 and self._preview_cap is not None and self._seek(frame_no):
+			ok, frame = self._preview_cap.retrieve()
+			if ok and frame is not None:
+				rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+				h, w, ch = rgb.shape
+				qimg = QImage(rgb.data, w, h, ch * w, QImage.Format.Format_RGB888).copy()
+				pm = QPixmap.fromImage(qimg)
+		if pm is None and self.first_frame_qimg is not None:
+			pm = QPixmap.fromImage(self.first_frame_qimg)
+		if pm is not None:
+			self._preview_pm = pm
+			self._redraw()
+
+	def _seek(self, target: int) -> bool:
+		cap = self._preview_cap
+		if cap is None: return False
+		diff = target - self._preview_frame_no
+		if 0 < diff <= 30:
+			for _ in range(diff):
+				if not cap.grab(): return False
+			self._preview_frame_no = target; return True
+		cap.set(cv2.CAP_PROP_POS_FRAMES, target)
+		self._preview_frame_no = target; return True
+
+	def _on_slider(self, value: int) -> None:
+		if self.metadata:
+			self._frame_label.setText(f"#{value}/{self.metadata.frame_count}")
+		if self._throttle_timer:
+			self._throttle_timer.stop()
+		self._throttle_timer = QTimer(self)
+		self._throttle_timer.setSingleShot(True)
+		self._throttle_timer.timeout.connect(lambda: self._show_frame(value))
+		self._throttle_timer.start(30)
+
+	def _step(self, delta: int) -> None:
+		if not self.metadata: return
+		v = max(0, min(self.metadata.frame_count - 1, self._slider.value() + delta))
+		self._slider.setValue(v)
+
+	def _redraw(self) -> None:
+		if self._preview_pm is None: return
+		ls = self._preview_label.size()
+		pw, ph = ls.width(), ls.height()
+		if pw <= 0 or ph <= 0: return
+
+		pm = self._preview_pm
+		scale = min(pw / pm.width(), ph / pm.height())
+		dw = max(1, int(pm.width() * scale)); dh = max(1, int(pm.height() * scale))
+		scaled = pm.scaled(dw, dh, Qt.AspectRatioMode.KeepAspectRatio,
+			Qt.TransformationMode.SmoothTransformation)
+		self._preview_scale = scale
+		self._preview_ox = (pw - dw) / 2.0; self._preview_oy = (ph - dh) / 2.0
+
+		# ROI 框
+		roi = self._get_roi()
+		if roi is not None:
+			painter = QPainter(scaled)
+			x1, y1, x2, y2 = roi
+			painter.setPen(QPen(QColor("#ff5050"), max(2, int(scale * 2))))
+			l = int(x1 * scale); t = int(y1 * scale)
+			r = int(x2 * scale); b = int(y2 * scale)
+			painter.drawRect(l, t, r - l, b - t)
+			painter.end()
+
+		result = QPixmap(pw, ph); result.fill(QColor("#151515"))
+		rp = QPainter(result)
+		rp.drawPixmap(int(self._preview_ox), int(self._preview_oy), scaled)
+		rp.end()
+		self._preview_label.setPixmap(result)
+
+	def resizeEvent(self, event) -> None:
+		super().resizeEvent(event)
+		self._redraw()
+
+	def _get_roi(self) -> tuple | None:
+		try:
+			x1 = self.roi_x1.value(); y1 = self.roi_y1.value()
+			x2 = self.roi_x2.value(); y2 = self.roi_y2.value()
+		except ValueError: return None
+		if self.metadata:
+			x1, x2 = sorted((max(0, min(self.metadata.width - 1, x1)),
+				max(0, min(self.metadata.width - 1, x2))))
+			y1, y2 = sorted((max(0, min(self.metadata.height - 1, y1)),
+				max(0, min(self.metadata.height - 1, y2))))
+		return (x1, y1, x2, y2)
+
+	# ═══════════════════ OCR 引擎 ═══════════════════
+
+	def _on_backend(self, _idx: int) -> None:
+		_reset_backend(); self._release_engines()
+		keys = ["auto", "cuda", "cpu"]; key = keys[self.backend_combo.currentIndex()]
+		actual = _select_backend(key)
+		if key == "cuda" and actual != "CUDA":
+			QMessageBox.warning(self, "后端不可用", f"CUDA 不可用。\n已回退为 {actual}。")
+		self._status_label.setText(f"OCR 后端: {'CUDA (GPU)' if actual == 'CUDA' else 'CPU'}")
+
+	def get_ocr_engine(self) -> "RapidOCR":
+		if self.ocr_engine is None: self.ocr_engine = self._create_ocr()
+		return self.ocr_engine
+
+	def _create_ocr(self) -> "RapidOCR":
+		_reset_backend()
+		keys = ["auto", "cuda", "cpu"]; key = keys[self.backend_combo.currentIndex()]
+		_select_backend(key)
+		kw = _get_model_kwargs("v6_small")
+		return RapidOCR(**(kw or {}))
+
+	def _release_engines(self) -> None:
+		for e in ([self.ocr_engine] if self.ocr_engine else []) + self.ocr_engines:
+			try: del e
+			except Exception: pass
+		self.ocr_engine = None; self.ocr_engines.clear()
+		import gc; gc.collect()
+
+	# ═══════════════════ 导出 ═══════════════════
+
+	def _export_csv(self) -> None:
+		if self.video_path is None or self.metadata is None:
+			QMessageBox.warning(self, "未导入视频", "请先导入视频。"); return
+		roi = self._get_roi()
+		if roi is None:
+			QMessageBox.warning(self, "识别范围不完整", "请先填写或拖拽选择识别范围。"); return
+
+		out, _ = QFileDialog.getSaveFileName(self, "保存 CSV",
+			str(self.video_path.parent / f"{self.video_path.stem}_log.csv"),
+			"CSV 文件 (*.csv)")
+		if not out: return
+
+		try:
+			ms = float(self.max_speed_edit.text()); ma = float(self.max_accel_edit.text())
+			fd = self.div_spin.value(); th = float(self.target_h_edit.text())
+			pp = float(self.pad_edit.text()); nw = int(self.buffer_edit.text())
+		except ValueError:
+			QMessageBox.warning(self, "参数错误", "请检查数值参数。"); return
+
+		self._export_btn.setEnabled(False); self._cancel_btn.setEnabled(True)
+		self._export_thread = _ExportThread(self, Path(out), roi, ms, ma, fd, th, pp, nw)
+		self._export_thread._progress.connect(self._on_progress)
+		self._export_thread._finished.connect(self._on_done)
+		self._export_thread._review_data.connect(self._on_review_needed)
+		self._export_thread._error.connect(self._on_error)
+		self._export_thread._cancelled.connect(self._on_cancel)
+		self._export_thread.start()
+
+	def _cancel_export(self) -> None:
+		if self._export_thread: self._export_thread._cancel_flag = True
+		self._cancel_btn.setEnabled(False); self._status_label.setText("正在取消...")
+
+	def _on_progress(self, msg: str, pct: float) -> None:
+		self._status_label.setText(msg); self._progress_bar.setValue(int(pct))
+
+	def _on_review_needed(self, rows: list, observations: list,
+			confidences: list[dict], segments: list[dict]) -> None:
+		self._review_rows = rows
+		self._review_observations = observations
+		self._review_confidences = confidences
+		self._review_segments = segments
+
+	def _on_done(self, mode: str) -> None:
+		if mode == "review":
+			self._export_btn.setEnabled(True); self._cancel_btn.setEnabled(False)
+			self._export_thread = None
+			self._show_review_dialog()
+		else:
+			self._finish_export()
+			self._status_label.setText("自动锚点完成 — 结果已保存。")
+
+	def _on_error(self, err: str) -> None:
+		self._finish_export(); QMessageBox.critical(self, "导出失败", err)
+
+	def _on_cancel(self) -> None:
+		self._finish_export(); self._status_label.setText("已取消。")
+
+	def _show_review_dialog(self) -> None:
+		try:
+			ms = float(self.max_speed_edit.text())
+		except ValueError:
+			ms = 400.0
+		dlg = ReviewDialog(self, self._review_rows, self._review_observations,
+			self._review_raw_frames, self._review_confidences,
+			self._review_segments, ms)
+		if dlg.exec() == QDialog.DialogCode.Accepted:
+			corrections = dlg.get_corrections()
+			self._review_confirmed = dlg.get_confirmed()
+			try:
+				self._continue_with_manual_anchors(corrections)
+			except Exception as e:
+				self._progress_bar.setValue(0)
+				self._status_label.setText(f"审核失败: {e}")
+				import traceback; traceback.print_exc()
+
+	def _continue_with_manual_anchors(self, corrections: dict[int, float]) -> None:
+		rows = self._review_rows
+		observations = self._review_observations
+		raw_frames = self._review_raw_frames
+		ocr = self._review_ocr
+		anchor_indices = set(self._review_anchor_indices)
+		try:
+			ms = float(self.max_speed_edit.text())
+			ma = float(self.max_accel_edit.text())
+		except ValueError:
+			ms = 400.0; ma = 50.0
+
+		for fi, v in corrections.items():
+			if 0 <= fi < len(rows):
+				rows[fi][2] = v
+				rows[fi][3] = 2
+				anchor_indices.add(fi)
+		# 确认正确的段: 所有帧 flag=2
+		for seg_start in getattr(self, "_review_confirmed", set()):
+			for seg in self._review_segments:
+				if seg["start"] == seg_start:
+					for fi in range(seg["start"], seg["end"] + 1):
+						if fi not in corrections and 0 <= fi < len(rows):
+							rows[fi][3] = 2
+							anchor_indices.add(fi)
+					break
+
+		from correction import correct_with_anchors
+		rows = correct_with_anchors(rows, observations, raw_frames, ocr,
+			ms, ma, anchor_indices, skip_fill=True)
+
+		dist = 0.0; prev_t = prev_v = None
+		for r in rows:
+			v = r[2] / 3.6
+			if prev_t is not None and prev_v is not None:
+				dt = r[0] - prev_t
+				if dt > 0: dist += (prev_v + v) * 0.5 * dt
+			prev_t, prev_v = r[0], v; r[1] = dist
+
+		assert self.video_path is not None
+		out_path = getattr(self, "_review_output_path", self.video_path.parent / f"{self.video_path.stem}_log.csv")
+		import csv
+		vhash = compute_video_hash(self.video_path)
+		roi = self._get_roi()
+		with out_path.open("w", newline="", encoding="utf-8-sig") as fh:
+			fh.write("# RaceVideoToLog")
+			fh.write("\\n")
+			fh.write(f"# video_hash={vhash}, video={self.video_path.name}")
+			fh.write("\\n")
+			if roi:
+				fh.write(f"# roi={roi[0]},{roi[1]},{roi[2]},{roi[3]}, format={self.speed_format}")
+				fh.write("\\n")
+			fh.write(f"# max_speed={ms}, max_accel={ma}, manual_anchor=1")
+			fh.write("\\n")
+			w = csv.writer(fh)
+			for r in rows:
+				w.writerow([f"{r[0]:.2f}", f"{r[1]:.2f}", f"{r[2]:.2f}", str(r[3])])
+		self._progress_bar.setValue(100)
+		self._status_label.setText(f"人工审核完成 — {len(corrections)} 帧已修正，结果已保存。")
+
+	def _finish_export(self) -> None:
+		self._export_btn.setEnabled(True); self._cancel_btn.setEnabled(False)
+		self._export_thread = None; self._release_engines()
+	def _on_pivot(self, key: str) -> None:
+		if key == "analysis":
+			self._footer.hide()
+		else:
+			self._footer.show()
+
+
