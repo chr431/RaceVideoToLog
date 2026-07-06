@@ -15,7 +15,6 @@ def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: 
                          max_speed_kmh: float, max_accel_mps2: float, anchor_indices: set,
                          log_fn: "Callable | None" = None,
                          progress_fn: "Callable | None" = None,
-                         num_workers: int = 1,
                          skip_fill: bool = False) -> list:
 	"""5 阶段物理约束纠错流水线。
 
@@ -57,7 +56,7 @@ def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: 
 			break
 		fixed = _fix_errors(rows, observations, raw_frames, ocr, error_set,
 		                    anchors, times, max_speed_kmh, max_accel_mps2,
-		                    progress_fn=progress_fn, num_workers=num_workers)
+		                    progress_fn=progress_fn)
 		if log_fn:
 			log_fn(f"  Stage 4 round {rnd}: {len(error_set)} errors, fixed {fixed}")
 
@@ -80,8 +79,6 @@ def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: 
 			if log_fn:
 				log_fn(f"  Stage 5 pass {fill_pass+1}: filled {len(error_set)} unrecoverable frames")
 			fill_pass += 1
-
-	return rows
 
 	return rows
 
@@ -226,7 +223,7 @@ def _detect_errors(rows: list, anchors: set, times: list, max_speed_kmh: float, 
 
 def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR", error_set: set,
                 anchors: set, times: list, max_speed_kmh: float, max_accel_mps2: float,
-                progress_fn: "Callable | None" = None, num_workers: int = 1) -> int:
+                progress_fn: "Callable | None" = None) -> int:
 	"""阶段 2+3：对每个 error 帧重 OCR 获取备选，选最优值填入。"""
 	fixed = 0
 	progress_done = 0
