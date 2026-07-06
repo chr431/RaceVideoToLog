@@ -260,15 +260,28 @@ class _ExportThread(QThread):
 			self._max_speed_kmh, self._max_accel_mps2)
 		segments = find_problem_segments(confidences)
 
-		self._emit_progress(f"发现 {len(segments)} 个问题段，等待人工审核...", 75.0)
-		self._review_data.emit(rows, observations, confidences, segments)
-		self.app._review_rows = rows
-		self.app._review_observations = observations
-		self.app._review_raw_frames = raw_frames
-		self.app._review_ocr = ocr
-		self.app._review_anchor_indices = anchor_indices
-		self.app._review_output_path = self._output_path
-		self._finished.emit("review")
+		if segments:
+			self._emit_progress(f"发现 {len(segments)} 个问题段，等待人工审核...", 75.0)
+			self._review_data.emit(rows, observations, confidences, segments)
+			self.app._review_rows = rows
+			self.app._review_observations = observations
+			self.app._review_raw_frames = raw_frames
+			self.app._review_ocr = ocr
+			self.app._review_anchor_indices = anchor_indices
+			self.app._review_output_path = self._output_path
+			self._finished.emit("review")
+		else:
+			self._emit_progress("未发现问题段，无需人工审核。", 85.0)
+			dist = 0.0; prev_t = prev_v = None
+			for r in rows:
+				v = r[2] / 3.6
+				if prev_t is not None and prev_v is not None:
+					dt = r[0] - prev_t
+					if dt > 0: dist += (prev_v + v) * 0.5 * dt
+				prev_t, prev_v = r[0], v; r[1] = dist
+			self._write_csv(rows)
+			self._emit_progress("完成", 100.0)
+			self._finished.emit("auto")
 
 	def _write_csv(self, rows: list) -> None:
 		assert self.app.video_path is not None

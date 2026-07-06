@@ -146,6 +146,9 @@ class ReviewDialog(QDialog):
         self._speed_spin = CompactSpinBox()
         self._speed_spin.setRange(0, int(self._max_speed))
         self._speed_spin.setFixedWidth(90)
+        try: self._speed_spin.compactSpinButton.clicked.disconnect()
+        except Exception: pass
+        self._speed_spin._showFlyout = lambda: None
         cr.addWidget(self._speed_spin)
         cr.addWidget(BodyLabel("km/h"))
         cr.addStretch()
