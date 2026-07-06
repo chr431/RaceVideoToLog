@@ -158,7 +158,7 @@ class ReviewDialog(QDialog):
         self._btn_confirm = PushButton("此段正确")
         self._btn_confirm.setFixedWidth(100)
         self._btn_confirm.clicked.connect(self._confirm_segment)
-        btn_row.addWidget(btn_confirm)
+        btn_row.addWidget(self._btn_confirm)
         btn_row.addStretch()
         ctrl.addLayout(btn_row)
 
