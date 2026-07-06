@@ -24,8 +24,9 @@ import ocr_engine
 from ocr_engine import *  # noqa: F403, F405
 from gui_analysis import AnalysisTab
 from gui_review import ReviewDialog
+from theme_manager import ThemeManager
 
-from qfluentwidgets import (setTheme, Theme,
+from qfluentwidgets import (setTheme, Theme, isDarkTheme,
 	PushButton, PrimaryPushButton, LineEdit, ComboBox, CheckBox, RadioButton,
 	BodyLabel, StrongBodyLabel, CaptionLabel, CardWidget, Slider, ProgressBar, CompactSpinBox, Pivot)
 
@@ -384,7 +385,8 @@ class RaceVideoToLogApp(QMainWindow):
 		# ── 中央内容 ──
 		central = QWidget()
 		self.setCentralWidget(central)
-		self._sync_titlebar()
+		self._register_theme_callbacks()
+		ThemeManager.refresh()
 		root = QVBoxLayout(central)
 		root.setContentsMargins(12, 8, 12, 6)
 		root.setSpacing(0)
@@ -396,7 +398,7 @@ class RaceVideoToLogApp(QMainWindow):
 		self._tab_pivot.setFixedWidth(160)
 		tbl.addWidget(self._tab_pivot)
 		tbl.addStretch()
-		self._theme_btn = PushButton("☀" if not self._theme_is_dark() else "☾")
+		self._theme_btn = PushButton("☀" if not isDarkTheme() else "☾")
 		self._theme_btn.setFixedSize(36, 28)
 		self._theme_btn.setToolTip("切换亮色/暗色主题")
 		self._theme_btn.clicked.connect(self._toggle_theme)
@@ -641,6 +643,42 @@ class RaceVideoToLogApp(QMainWindow):
 		w.leaveEvent = lambda e: None
 		return w
 
+	def _register_theme_callbacks(self) -> None:
+		# 主窗口背景色
+		def _update_bg(dark: bool) -> None:
+			bg = "#1f1f1f" if dark else "#f5f5f5"
+			fg = "#f0f0f0" if dark else "#000000"
+			from PySide6.QtGui import QPalette, QColor
+			for w in (self, self.centralWidget(), getattr(self, "_tab_stack", None)):
+				if w is None: continue
+				p = w.palette()
+				p.setColor(QPalette.ColorRole.Window, QColor(bg))
+				p.setColor(QPalette.ColorRole.Base, QColor(bg))
+				p.setColor(QPalette.ColorRole.WindowText, QColor(fg))
+				p.setColor(QPalette.ColorRole.Text, QColor(fg))
+				p.setColor(QPalette.ColorRole.ButtonText, QColor(fg))
+				w.setPalette(p)
+		ThemeManager.register(_update_bg)
+		# Windows 标题栏
+		def _update_titlebar(dark: bool) -> None:
+			import sys, ctypes
+			if sys.platform != "win32": return
+			try:
+				hwnd = int(self.winId())
+				val = ctypes.c_int(1 if dark else 0)
+				ctypes.windll.dwmapi.DwmSetWindowAttribute(
+					hwnd, 20, ctypes.byref(val), ctypes.sizeof(val))
+			except Exception: pass
+		ThemeManager.register(_update_titlebar)
+		# 主题图标
+		def _update_icon(dark: bool) -> None:
+			self._theme_btn.setText("☀" if not dark else "☾")
+		ThemeManager.register(_update_icon)
+		# 数据分析 matplotlib
+		if hasattr(self, "_analysis_tab"):
+			tab = self._analysis_tab
+			ThemeManager.register(lambda dark: tab._sync_figure_theme())
+
 	def _apply_theme(self) -> None:
 		from qfluentwidgets import qconfig, Theme, isDarkTheme
 		if qconfig.theme == Theme.DARK:
@@ -653,45 +691,9 @@ class RaceVideoToLogApp(QMainWindow):
 		if hasattr(self, '_analysis_tab'):
 			self._analysis_tab._sync_figure_theme()
 
-	def _sync_titlebar(self) -> None:
-		from qfluentwidgets import isDarkTheme
-		dark = isDarkTheme()
-# 仅设 palette，不做 setAutoFillBackground，避免文字阴影
-		from PySide6.QtGui import QPalette, QColor
-		bg = QColor('#1f1f1f' if dark else '#f5f5f5')
-		fg = QColor('#f0f0f0' if dark else '#000000')
-		widgets = [self, self.centralWidget()]
-		tabs = getattr(self, '_tab_stack', None)
-		if tabs is not None:
-			widgets.append(tabs)
-		for w in widgets:
-			if w is None:
-				continue
-			p = w.palette()
-			p.setColor(QPalette.ColorRole.Window, bg)
-			p.setColor(QPalette.ColorRole.Base, bg)
-			p.setColor(QPalette.ColorRole.WindowText, fg)
-			p.setColor(QPalette.ColorRole.Text, fg)
-			p.setColor(QPalette.ColorRole.ButtonText, fg)
-			w.setPalette(p)
-		# Windows 标题栏
-		import sys
-		if sys.platform == 'win32':
-			try:
-				import ctypes
-				hwnd = int(self.winId())
-				val = ctypes.c_int(1 if dark else 0)
-				ctypes.windll.dwmapi.DwmSetWindowAttribute(
-					hwnd, 20, ctypes.byref(val), ctypes.sizeof(val))
-			except Exception:
-				pass
 
-	def _theme_is_dark(self) -> bool:
-		from qfluentwidgets import isDarkTheme
-		return isDarkTheme()
 
-	def _update_theme_icon(self) -> None:
-		self._theme_btn.setText("☀" if not self._theme_is_dark() else "☾")
+
 
 	def _toggle_theme(self) -> None:
 		self._apply_theme()

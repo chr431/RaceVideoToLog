@@ -11,7 +11,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QPixmap, QImage, QPalette, QColor
 from qfluentwidgets import (BodyLabel, StrongBodyLabel, CaptionLabel,
-    PrimaryPushButton, PushButton, CardWidget, CompactSpinBox, isDarkTheme, qconfig)
+    PrimaryPushButton, PushButton, CardWidget, CompactSpinBox, isDarkTheme)
+from theme_manager import ThemeManager
 
 import cv2
 import numpy as np
@@ -39,32 +40,26 @@ class ReviewDialog(QDialog):
         self._current_frame: int = 0
 
         self._build_ui()
-        qconfig.themeChanged.connect(self._on_theme_changed)
+        self._register_theme_callbacks()
 
-    def _on_theme_changed(self) -> None:
-        """主题切换时刷新所有控件颜色。"""
-        dark = isDarkTheme()
-        bg = QColor("#1f1f1f" if dark else "#f5f5f5")
-        fg = QColor("#f0f0f0" if dark else "#000000")
-        btn_bg = QColor("#3a3a3a" if dark else "#e8e8e8")
-        img_bg = "#111" if dark else "#e0e0e0"
+    def _register_theme_callbacks(self) -> None:
+        def _update(dark: bool) -> None:
+            bg = QColor("#1f1f1f" if dark else "#f5f5f5")
+            fg = QColor("#f0f0f0" if dark else "#000000")
+            btn_bg = QColor("#3a3a3a" if dark else "#e8e8e8")
+            img_bg = "#111" if dark else "#e0e0e0"
+            p = self.palette()
+            for role, color in [(QPalette.ColorRole.Window, bg), (QPalette.ColorRole.Base, btn_bg),
+                                (QPalette.ColorRole.WindowText, fg), (QPalette.ColorRole.Text, fg),
+                                (QPalette.ColorRole.Button, btn_bg), (QPalette.ColorRole.ButtonText, fg)]:
+                p.setColor(role, color)
+            self.setPalette(p)
+            self._list.setPalette(p)
+            self._img_label.setStyleSheet(f"background-color: {img_bg}; border-radius: 4px;")
+            if hasattr(self, '_figure'): self._redraw_chart()
+        ThemeManager.register(_update)
+        _update(isDarkTheme())
 
-        # 对话框 + 列表
-        p = self.palette()
-        for role, color in [(QPalette.ColorRole.Window, bg), (QPalette.ColorRole.Base, btn_bg),
-                            (QPalette.ColorRole.WindowText, fg), (QPalette.ColorRole.Text, fg),
-                            (QPalette.ColorRole.Button, btn_bg), (QPalette.ColorRole.ButtonText, fg)]:
-            p.setColor(role, color)
-        self.setPalette(p)
-        self._list.setPalette(p)
-
-        # 图像预览背景
-        self._img_label.setStyleSheet(
-            f"background-color: {img_bg}; border-radius: 4px;")
-
-        # 图表
-        if hasattr(self, '_figure'):
-            self._redraw_chart()
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
@@ -188,7 +183,6 @@ class ReviewDialog(QDialog):
 
         if self._segments:
             QTimer.singleShot(100, lambda: self._list.setCurrentRow(0))
-        self._on_theme_changed()
 
     def _create_chart(self):
         from matplotlib.figure import Figure
