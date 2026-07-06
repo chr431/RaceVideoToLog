@@ -429,6 +429,7 @@ class RaceVideoToLogApp(QMainWindow):
 		fl.addWidget(self._status_label)
 		fl.addWidget(self._progress_bar)
 		root.addWidget(self._footer)
+		ThemeManager.refresh()
 
 	def _build_ocr_tab(self) -> None:
 		layout = QVBoxLayout(self._ocr_tab)
@@ -680,11 +681,7 @@ class RaceVideoToLogApp(QMainWindow):
 			setTheme(Theme.LIGHT)
 		else:
 			setTheme(Theme.DARK)
-		self._sync_titlebar()
-		self._update_theme_icon()
-		# 同步 matplotlib 画布
-		if hasattr(self, '_analysis_tab'):
-			self._analysis_tab._sync_figure_theme()
+		ThemeManager.refresh()
 
 
 
