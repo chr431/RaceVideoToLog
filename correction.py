@@ -15,7 +15,8 @@ def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: 
                          max_speed_kmh: float, max_accel_mps2: float, anchor_indices: set,
                          log_fn: "Callable | None" = None,
                          progress_fn: "Callable | None" = None,
-                         num_workers: int = 1) -> list:
+                         num_workers: int = 1,
+                         skip_fill: bool = False) -> list:
 	"""5 阶段物理约束纠错流水线。
 
 	以 anchor_indices 中帧的速度为硬约束（固定不变），

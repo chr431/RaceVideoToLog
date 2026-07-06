@@ -955,7 +955,7 @@ class RaceVideoToLogApp(QMainWindow):
 
 		from correction import correct_with_anchors
 		rows = correct_with_anchors(rows, observations, raw_frames, ocr,
-			ms, ma, anchor_indices, num_workers=max(1, int(getattr(self, "workers_edit", type("obj", (), {"text": lambda: "4"})()).text() or "4")))
+			ms, ma, anchor_indices, num_workers=max(1, int(getattr(self, "workers_edit", type("obj", (), {"text": lambda: "4"})()).text() or "4")), skip_fill=True)
 
 		dist = 0.0; prev_t = prev_v = None
 		for r in rows:
