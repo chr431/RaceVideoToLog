@@ -31,8 +31,6 @@ def main() -> None:
 	parser.add_argument("--analysis-out", type=str)
 	parser.add_argument("--frame-start", type=int, metavar="N")
 	parser.add_argument("--frame-end", type=int, metavar="N")
-	parser.add_argument("--threaded", action="store_true",
-		help="使用 producer-consumer 线程模型 (仅用于性能对比)")
 	args = parser.parse_args()
 
 	if args.video:

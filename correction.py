@@ -5,7 +5,7 @@
 """
 from __future__ import annotations
 import cv2
-from ocr_engine import extract_speed_value, build_speed_candidates, ocr_digital_fallback
+from ocr_engine import extract_speed_value, build_speed_candidates
 
 # 重 OCR 缓存（避免同一帧重复处理）
 _reocr_cache: dict[int, set[float]] = {}
