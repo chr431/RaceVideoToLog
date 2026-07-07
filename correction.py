@@ -338,16 +338,7 @@ def _re_ocr_frame(crop_bgr: "np.ndarray", ocr: "RapidOCR", max_speed_kmh: float,
 	if timing is not None:
 		timing['reocr_prep_v3'] = timing.get('reocr_prep_v3', 0.0) + _t.perf_counter() - t_p
 
-	# 变体 4: ocr_digital_fallback 后备
-	t_p = _t.perf_counter() if timing is not None else 0
-	try:
-		sv, _rt = ocr_digital_fallback(ocr, crop_bgr, max_speed_kmh)
-		if sv is not None:
-			candidates.add(float(sv))
-	except Exception:
-		pass
-	if timing is not None:
-		timing['reocr_digital_fb'] = timing.get('reocr_digital_fb', 0.0) + _t.perf_counter() - t_p
+	# 变体 4 (digital fallback): 已移除 — 每帧 ~500ms，占总重OCR 70%，候选增益有限
 
 	if cache_key is not None:
 		_reocr_cache[cache_key] = candidates
