@@ -1,6 +1,6 @@
 # RaceVideoToLog
 
-从赛车游戏视频中提取速度数据，生成时间-速度-距离 CSV 文件。支持 GPU (CUDA) / CPU 后端，提供 PySide6 Fluent Design GUI 和 CLI 两种界面。
+从赛车游戏视频中提取速度数据，生成时间-速度-距离 CSV 文件。支持 GPU (CUDA) / CPU 后端，提供 PySide6 Fluent Design GUI 和 CLI 两种界面。GUI 与 CLI 共用统一的 `ProcessingPipeline` 后端，保证行为一致。
 
 ## 安装
 
@@ -30,7 +30,7 @@ GUI 内置数据分析工具，支持导入多个 CSV 进行 v-t / v-x / Δt-x �
 python RaceVideoToLog.py video.mp4 --roi X1 Y1 X2 Y2 [options] -o output.csv
 ```
 
-CLI 与 GUI 自动锚点模式共用同一纠错后端。
+CLI 与 GUI 共用 `pipeline.py` 中的 `ProcessingPipeline`，在原生线程中运行以保证 CUDA 推理性能。
 
 ### 数据分析
 
@@ -45,11 +45,14 @@ python RaceVideoToLog.py --analysis csv1.csv csv2.csv --analysis-out prefix
 RaceVideoToLog/
 ├── RaceVideoToLog.py    # 入口: arg 解析 + GUI/CLI 调度
 ├── gui.py               # PySide6 主窗口 (Fluent Design)
+├── gui_review.py        # 人工审核对话框
 ├── gui_analysis.py      # 数据分析 Tab
 ├── analysis.py          # 数据分析业务逻辑
+├── pipeline.py          # 统一处理流水线 (GUI/CLI 共用)
 ├── correction.py        # 纠错流水线
 ├── ocr_engine.py        # OCR 引擎、预处理、锚点选择
-├── headless.py          # CLI OCR 流水线
+├── theme_manager.py     # 主题回调管理器
+├── headless.py          # CLI 入口 (委托给 pipeline)
 ├── RaceVideoToLog.spec  # PyInstaller 打包配置
 └── README.md
 ```
@@ -66,7 +69,7 @@ timestamp,distance,speed_kmh,flag
 10.55,0.00,0.00,0
 ```
 
-Flag: `0` = 原始 OCR, `1` = 自动纠错, `2` = 锚点。
+Flag: `0` = 原始 OCR, `1` = 自动纠错, `2` = 锚点, `3` = 需人工审核 (skip_fill 模式)。
 
 ## CLI 参数
 
