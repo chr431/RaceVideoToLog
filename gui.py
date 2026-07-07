@@ -95,7 +95,7 @@ class _ExportThread(QThread):
 					pipeline.run_auto(self._output_path)
 					result_container["mode"] = "auto"
 				else:
-					result = pipeline.run_review_pass1()
+					result = pipeline.run_review_pass1(self._output_path)
 					if result is None:
 						# No problem segments, CSV already written
 						result_container["mode"] = "auto"

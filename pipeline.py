@@ -114,11 +114,13 @@ class ProcessingPipeline:
         self._run_correction_pass(Path(output_path), skip_fill=False)
         self._emit("完成", 100.0)
 
-    def run_review_pass1(self) -> tuple | None:
+    def run_review_pass1(self, output_path: str | Path | None = None) -> tuple | None:
         """人工辅助第 1 轮：OCR → 纠错 → 置信度 → 问题段。
 
+        Args:
+            output_path: 无问题段时自动写 CSV 的目标路径。None 则跳过写出。
         Returns:
-            (rows, observations, raw_frames, confidences, segments) 或 None（无问题段时自动写 CSV）
+            (rows, observations, raw_frames, confidences, segments) 或 None（无问题段）
         """
         self._emit("加载 OCR 引擎...", 1.0)
         self._ensure_ocr()
@@ -170,7 +172,8 @@ class ProcessingPipeline:
         else:
             self._emit("未发现问题段，无需人工审核。", 98.5)
             self._integrate_distance()
-            self._write_csv(self._rows, Path(""), auto_anchor=False)
+            if output_path is not None:
+                self._write_csv(self._rows, Path(output_path), auto_anchor=False)
             self._emit("完成", 100.0)
             return None
 
