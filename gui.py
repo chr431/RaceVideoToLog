@@ -103,6 +103,7 @@ class _ExportThread(QThread):
 						result_container["mode"] = "review"
 						result_container["review_data"] = result
 						self.app._pipeline = pipeline
+						self.app._review_output_path = self._output_path
 			except _CancelExport:
 				result_container["cancelled"] = True
 			except Exception as exc:
