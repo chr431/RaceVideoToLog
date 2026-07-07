@@ -384,8 +384,5 @@ class ProcessingPipeline:
 
     @staticmethod
     def _print_reocr_timing(t: dict) -> None:
-        if t.get("reocr_cache_miss", 0):
-            print(f"  [重OCR子阶段] 缓存: 命中{t.get('reocr_cache_hit',0):.3f}s 未命中{t.get('reocr_cache_miss',0)}帧")
-            print(f"    灰度: {t.get('reocr_prep_gray',0):.3f}s  v1预处理: {t.get('reocr_prep_v1',0):.3f}s  v2预处理: {t.get('reocr_prep_v2',0):.3f}s  v3预处理: {t.get('reocr_prep_v3',0):.3f}s")
-            print(f"    推理v1: {t.get('reocr_infer_v1_gray24',0):.3f}s  推理v2: {t.get('reocr_infer_v2_clahe32',0):.3f}s  推理v3: {t.get('reocr_infer_v3_otsuinv32',0):.3f}s")
-            print(f"    digital后备: {t.get('reocr_digital_fb',0):.3f}s")
+        if t.get("re_ocr", 0) > 0:
+            print(f"  [重OCR] {t['re_ocr']:.2f}s")
