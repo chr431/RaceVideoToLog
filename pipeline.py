@@ -14,7 +14,7 @@ import ocr_engine as _oe
 from ocr_engine import (
     auto_select_anchors, clamp_region, compute_video_hash,
     extract_speed_value, SpeedObservation,
-    SOURCE_TO_KMH, ocr_digital_fallback,
+    SOURCE_TO_KMH,
     _reset_backend, _select_backend, _get_model_kwargs,
 )
 from correction import correct_with_anchors, compute_confidence, find_problem_segments
@@ -301,8 +301,6 @@ class ProcessingPipeline:
                 proc_fb = _preprocess_otsu(crop, self._target_h, self._pad)
                 ocr_result, _ = ocr(proc_fb)
                 sv, rt = extract_speed_value(ocr_result)
-            if sv is None:
-                sv, rt = ocr_digital_fallback(ocr, crop, max_speed)
             if sv is not None and rt is not None:
                 observations.append(SpeedObservation(
                     timestamp=ts,
