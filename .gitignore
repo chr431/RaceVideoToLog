@@ -31,3 +31,13 @@ ort_dml_bundle/
 
 # Benchmark cache
 __pycache__/
+
+# Test outputs
+*_output.csv
+*_headless.csv
+*_threaded.csv
+*_verify*.csv
+*_no_digital*.csv
+*_clean.csv
+444.csv
+111.csv

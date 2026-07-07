@@ -5,7 +5,7 @@
 """
 from __future__ import annotations
 import cv2
-from ocr_engine import extract_speed_value, build_speed_candidates, ocr_digital_fallback
+from ocr_engine import extract_speed_value, build_speed_candidates
 
 # 重 OCR 缓存（避免同一帧重复处理）
 _reocr_cache: dict[int, set[float]] = {}
@@ -14,7 +14,9 @@ _reocr_cache: dict[int, set[float]] = {}
 def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR",
                          max_speed_kmh: float, max_accel_mps2: float, anchor_indices: set,
                          log_fn: "Callable | None" = None,
-                         progress_fn: "Callable | None" = None) -> list:
+                         progress_fn: "Callable | None" = None,
+                         skip_fill: bool = False,
+                         timing: dict | None = None) -> list:
 	"""5 阶段物理约束纠错流水线。
 
 	以 anchor_indices 中帧的速度为硬约束（固定不变），
@@ -43,7 +45,7 @@ def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: 
 	# ── 阶段 2+3：重 OCR + 最优选择（首轮）──
 	fixed = _fix_errors(rows, observations, raw_frames, ocr, error_set,
 	                    anchors, times, max_speed_kmh, max_accel_mps2,
-	                    progress_fn=progress_fn)
+	                    progress_fn=progress_fn, timing=timing)
 	if log_fn:
 		log_fn(f"  Stage 2+3: fixed {fixed} frames in round 1")
 
@@ -55,21 +57,29 @@ def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: 
 			break
 		fixed = _fix_errors(rows, observations, raw_frames, ocr, error_set,
 		                    anchors, times, max_speed_kmh, max_accel_mps2,
-		                    progress_fn=progress_fn)
+		                    progress_fn=progress_fn, timing=timing)
 		if log_fn:
 			log_fn(f"  Stage 4 round {rnd}: {len(error_set)} errors, fixed {fixed}")
 
 	# ── 阶段 5：迭代填充直到收敛（处理级联效应）──
-	fill_pass = 0
-	while fill_pass < 10:
+	if skip_fill:
 		error_set = _detect_errors(rows, anchors, times, max_speed_kmh, max_accel_mps2)
-		if not error_set:
-			break
-		_fill_unrecoverable(rows, anchors, error_set, times, max_speed_kmh, max_accel_mps2,
-		                    progress_fn=progress_fn)
+		for i in error_set:
+			if i not in anchors and rows[i][3] < 2:
+				rows[i][3] = 3
 		if log_fn:
-			log_fn(f"  Stage 5 pass {fill_pass+1}: filled {len(error_set)} unrecoverable frames")
-		fill_pass += 1
+			log_fn(f"  Stage 5: {len(error_set)} frames flagged for manual review")
+	else:
+		fill_pass = 0
+		while fill_pass < 10:
+			error_set = _detect_errors(rows, anchors, times, max_speed_kmh, max_accel_mps2)
+			if not error_set:
+				break
+			_fill_unrecoverable(rows, anchors, error_set, times, max_speed_kmh, max_accel_mps2,
+			                    progress_fn=progress_fn)
+			if log_fn:
+				log_fn(f"  Stage 5 pass {fill_pass+1}: filled {len(error_set)} unrecoverable frames")
+			fill_pass += 1
 
 	return rows
 
@@ -214,14 +224,15 @@ def _detect_errors(rows: list, anchors: set, times: list, max_speed_kmh: float, 
 
 def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR", error_set: set,
                 anchors: set, times: list, max_speed_kmh: float, max_accel_mps2: float,
-                progress_fn: "Callable | None" = None) -> int:
+                progress_fn: "Callable | None" = None,
+                timing: dict | None = None) -> int:
 	"""阶段 2+3：对每个 error 帧重 OCR 获取备选，选最优值填入。"""
 	fixed = 0
 	progress_done = 0
 	error_list = sorted(i for i in error_set if i not in anchors)
 	total = len(error_list)
 	for i in error_list:
-		candidates = list(_re_ocr_frame(raw_frames[i][1], ocr, max_speed_kmh))
+		candidates = list(_re_ocr_frame(raw_frames[i][1], ocr, max_speed_kmh, timing=timing))
 		interp_cand = _interp_candidate(i, rows, anchors, times, max_speed_kmh)
 		if interp_cand is not None:
 			candidates.append(interp_cand)
@@ -231,7 +242,7 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
 
 		if candidates:
 			raw_val = rows[i][2]
-			reocr_unique = _re_ocr_frame(raw_frames[i][1], ocr, max_speed_kmh)
+			reocr_unique = _re_ocr_frame(raw_frames[i][1], ocr, max_speed_kmh, timing=timing)
 			if len(reocr_unique) <= 1 and interp_cand is not None and abs(interp_cand - raw_val) > 10.0:
 				if abs(raw_val - interp_cand) > 0.5:
 					rows[i][2] = interp_cand
@@ -261,12 +272,14 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
 	return fixed
 
 
-def _re_ocr_frame(crop_bgr: "np.ndarray", ocr: "RapidOCR", max_speed_kmh: float) -> set:
-	"""阶段 2：对单帧尝试 4 种预处理变体重 OCR，有缓存。"""
+def _re_ocr_frame(crop_bgr: "np.ndarray", ocr: "RapidOCR", max_speed_kmh: float,
+                  timing: dict | None = None) -> set:
+	"""阶段 2：对单帧尝试 3 种预处理变体重 OCR，有缓存。"""
 	global _reocr_cache
 	cache_key = hash(crop_bgr.tobytes()) if crop_bgr is not None and crop_bgr.size > 0 else None
 	if cache_key is not None and cache_key in _reocr_cache:
 		return _reocr_cache[cache_key]
+
 	candidates = set()
 	if crop_bgr is None or crop_bgr.size == 0:
 		return candidates
@@ -298,14 +311,6 @@ def _re_ocr_frame(crop_bgr: "np.ndarray", ocr: "RapidOCR", max_speed_kmh: float)
 	_, otsu3 = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 	proc = cv2.resize(otsu3, (max(1, int(w * scale32)), 32))
 	_do_ocr(cv2.cvtColor(proc, cv2.COLOR_GRAY2BGR))
-
-	# 变体 4: ocr_digital_fallback 后备
-	try:
-		sv, _rt = ocr_digital_fallback(ocr, crop_bgr, max_speed_kmh)
-		if sv is not None:
-			candidates.add(float(sv))
-	except Exception:
-		pass
 
 	if cache_key is not None:
 		_reocr_cache[cache_key] = candidates
@@ -429,3 +434,131 @@ def _fill_unrecoverable(rows: list, anchors: set, error_set: set, times: list, m
 		progress_done += 1
 		if progress_fn:
 			progress_fn(progress_done, total)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 置信度评分 — 用于聚焦人工审核
+# ═══════════════════════════════════════════════════════════════
+
+def compute_confidence(rows: list, observations: list, max_speed: float,
+                       max_accel: float) -> list[dict]:
+    """计算每帧置信度 (0-100)，返回 [{index, score, is_corrected, reason}, ...]。
+
+    评分维度:
+    - OCR 偏差: 原始 OCR 值与纠错后值的差 (权重 0.3)
+    - 邻帧加速度: 与前后帧的加速度是否超限 (权重 0.4)
+    - 纠错标记: flag=1 惩罚 (权重 1.0, -30分)
+    - 局部平滑: SG 滤波偏差 (权重 0.2)
+    """
+    from ocr_engine import _savgol_filter_np
+    n = len(rows)
+    vals = [r[2] for r in rows]
+    flags = [r[3] for r in rows]
+
+    # SG 平滑曲线
+    win = min(11, n - 2)
+    if win >= 5:
+        if win % 2 == 0:
+            win += 1
+        try:
+            smoothed = _savgol_filter_np(vals, win, min(3, win - 1))
+        except Exception:
+            smoothed = vals
+    else:
+        smoothed = vals
+
+    confidences = []
+    for i in range(n):
+        score = 100.0
+        reasons = []
+
+        cur = vals[i]
+        if cur < 0 or cur > max_speed:
+            confidences.append({'index': i, 'score': 0, 'is_corrected': flags[i] >= 1,
+                                'speed': cur, 'reason': '速度超出范围'})
+            continue
+
+        # OCR 偏差
+        if i < len(observations):
+            obs = observations[i]
+            ocr_val = obs.raw_speed_kmh if obs.raw_speed_kmh >= 0 else None
+            if ocr_val is not None and ocr_val > 0:
+                dev = abs(ocr_val - cur) / max(max_speed, 1.0) * 100
+                score -= 0.3 * dev
+                if dev > 5:
+                    reasons.append(f'OCR偏差{dev:.0f}%')
+
+        # 邻帧加速度
+        if i > 0 and vals[i - 1] >= 0:
+            dt = max(rows[i][0] - rows[i - 1][0], 0.001)
+            accel = abs(cur - vals[i - 1]) / dt / 3.6
+            if accel > max_accel:
+                penalty = 0.4 * min(40, (accel / max_accel - 1) * 50)
+                score -= penalty
+                reasons.append(f'前向加速度{accel:.0f}m/s²')
+
+        if i + 1 < n and vals[i + 1] >= 0:
+            dt = max(rows[i + 1][0] - rows[i][0], 0.001)
+            accel = abs(vals[i + 1] - cur) / dt / 3.6
+            if accel > max_accel:
+                penalty = 0.4 * min(40, (accel / max_accel - 1) * 50)
+                score -= penalty
+                r = f'后向加速度{accel:.0f}m/s²'
+                if r not in reasons:
+                    reasons.append(r)
+
+        # 纠错标记
+        if flags[i] == 1:
+            score -= 30
+            reasons.append('自动纠错')
+
+        # SG 平滑偏差
+        if win >= 5:
+            sg_dev = abs(cur - smoothed[i]) / max(max_speed, 1.0) * 100
+            score -= 0.2 * sg_dev
+            if sg_dev > 10:
+                reasons.append(f'SG偏差{sg_dev:.0f}%')
+
+        score = max(0.0, min(100.0, score))
+        confidences.append({'index': i, 'score': round(score, 1),
+                            'is_corrected': flags[i] >= 1, 'speed': cur,
+                            'reason': reasons[0] if reasons else '正常'})
+
+    return confidences
+
+
+def find_problem_segments(confidences: list[dict], min_score: float = 70.0,
+                          min_gap: int = 3, min_segment_len: int = 3) -> list[dict]:
+    """将低置信度连续帧聚合成问题段。
+
+    Returns: [{start, end, count, avg_score, min_score, frames, reason, suggested}]
+    """
+    segments = []
+    i = 0
+    while i < len(confidences):
+        if confidences[i]['score'] < min_score:
+            start = i
+            reasons = set()
+            while i < len(confidences) and confidences[i]['score'] < min_score:
+                r = confidences[i]['reason']
+                if r and r != '正常':
+                    reasons.add(r)
+                i += 1
+            count = i - start
+            if count >= min_segment_len:
+                seg_frames = confidences[start:i]
+                scores = [f['score'] for f in seg_frames]
+                segments.append({
+                    'start': start, 'end': i - 1, 'count': count,
+                    'avg_score': round(sum(scores) / len(scores), 1),
+                    'min_score': min(scores),
+                    'reason': ', '.join(sorted(reasons)[:3]) if reasons else '低置信度',
+                    'suggested': sorted(set(
+                        [seg_frames[0]['index'], seg_frames[-1]['index']] +
+                        [min(seg_frames, key=lambda f: f['score'])['index']]
+                    )),
+                })
+        i += 1
+
+    segments.sort(key=lambda s: s['avg_score'])
+    return segments

@@ -23,7 +23,7 @@ def main() -> None:
 	parser.add_argument("--max-accel", type=float, default=50)
 	parser.add_argument("--target-h", type=int, default=24)
 	parser.add_argument("--pad", type=int, default=0)
-	parser.add_argument("--workers", type=int, default=4)
+	parser.add_argument("--buffer", type=int, default=1)
 	parser.add_argument("--backend", choices=["auto","cuda","cpu"], default="auto")
 	parser.add_argument("--ocr-model", choices=["v6_small"], default="v6_small")
 	parser.add_argument("-o", "--output", type=str)
@@ -41,7 +41,13 @@ def main() -> None:
 		run_analysis_headless(args)
 	else:
 		from PySide6.QtWidgets import QApplication
-		from qfluentwidgets import setTheme, Theme
+		import io, sys as _sys
+		_saved = _sys.stdout
+		_sys.stdout = io.StringIO()
+		try:
+			from qfluentwidgets import setTheme, Theme
+		finally:
+			_sys.stdout = _saved
 		from gui import RaceVideoToLogApp
 		app = QApplication(sys.argv)
 		setTheme(Theme.AUTO)

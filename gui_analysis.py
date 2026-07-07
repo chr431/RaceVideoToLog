@@ -32,7 +32,7 @@ class AnalysisTab:
 
 		# 状态
 		self._csvs: list[str | None] = [None, None, None]
-		self._labels: list[QLabel] = []
+		self._labels: list = []
 		self._figure: Figure | None = None
 		self._canvas: FigureCanvasQTAgg | None = None
 		self._chart_mode: str = "v-x"
