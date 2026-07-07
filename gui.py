@@ -16,6 +16,8 @@ from PySide6.QtWidgets import (
 	QDialog, QFileDialog, QMessageBox, QHBoxLayout, QVBoxLayout, QGridLayout,
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QThread
+import threading
+from pipeline import ProcessingPipeline
 from PySide6.QtGui import (
 	QPixmap, QImage, QPainter, QPen, QColor, QKeySequence, QShortcut,
 )
@@ -35,14 +37,12 @@ from qfluentwidgets import (setTheme, Theme, isDarkTheme,
 
 
 class _ExportThread(QThread):
-	"""后台执行 OCR + 纠错 + CSV 写出。
+	"""Run OCR/correction pipeline on a native thread to avoid QThread slowdown."""
 
-	通过 Qt Signals 与 GUI 线程通信。
-	"""
-	_progress = Signal(str, float)   # (message, pct 0–100)
-	_finished = Signal(str)           # mode: "auto" | "baseline" | "review"
-	_review_data = Signal(list, list, list, list)  # rows, obs, conf, segs
-	_error = Signal(str)              # error message
+	_progress = Signal(str, float)
+	_finished = Signal(str)
+	_review_data = Signal(list, list, list, list)
+	_error = Signal(str)
 	_cancelled = Signal()
 
 	def __init__(self, app: "RaceVideoToLogApp", output_path: Path,
@@ -61,32 +61,75 @@ class _ExportThread(QThread):
 		self._buffer_size = buffer_size
 		self._cancel_flag = False
 
+
 	def run(self) -> None:
-		try:
-			mode = self.app.correction_mode
-			self._emit_progress("加载 OCR 引擎...", 2.0)
-			ocr = self.app.get_ocr_engine()
+		"""Run Pipeline in a native threading.Thread, wait for completion."""
+		import threading
+		done = threading.Event()
+		error_container: list[Exception] = []
+		result_container: dict = {}
 
-			self._emit_progress("OCR 引擎就绪, 解码视频帧...", 5.0)
-			raw_frames, total_frames = self._extract_frames()
-			if total_frames == 0:
-				self._error.emit("未从视频中读取到任何帧。")
-				return
+		def _worker() -> None:
+			try:
+				self._check_cancel()
+				mode = self.app.correction_mode
+				pipeline = ProcessingPipeline(
+					video_path=self.app.video_path,
+					roi=self._region,
+					max_speed=self._max_speed_kmh,
+					max_accel=self._max_accel_mps2,
+					frame_div=self._frame_div,
+					target_h=self._target_h,
+					pad=self._pad_px,
+					buffer_size=self._buffer_size,
+					backend=self._backend,
+					ocr_model="v6_small",
+					speed_format=self.app.speed_format,
+					frame_start=self.app.frame_start_edit.text(),
+					frame_end=self.app.frame_end_edit.text(),
+					progress_cb=self._emit_progress,
+				)
+				if mode == "auto":
+					pipeline.run_auto(self._output_path)
+					result_container["mode"] = "auto"
+				else:
+					result = pipeline.run_review_pass1()
+					if result is None:
+						# No problem segments, CSV already written
+						result_container["mode"] = "auto"
+					else:
+						result_container["mode"] = "review"
+						result_container["review_data"] = result
+						self.app._pipeline = pipeline
+			except _CancelExport:
+				result_container["cancelled"] = True
+			except Exception as exc:
+				import traceback
+				traceback.print_exc()
+				error_container.append(exc)
+			finally:
+				done.set()
 
-			observations = self._run_ocr(raw_frames, ocr, total_frames)
-			if not observations:
-				self._error.emit("未识别到任何速度数据。")
-				return
+		t = threading.Thread(target=_worker, daemon=False)
+		t.start()
+		done.wait()
+		t.join()
 
-			if mode == "auto":
-				self._run_auto_anchor(observations, raw_frames, ocr, total_frames)
-			else:
-				self._run_focused_review(observations, raw_frames, ocr, total_frames)
-		except _CancelExport:
+		if error_container:
+			self._error.emit(str(error_container[0]))
+		elif result_container.get("cancelled"):
 			self._cancelled.emit()
-		except Exception as exc:
-			traceback.print_exc()
-			self._error.emit(str(exc))
+		elif result_container["mode"] == "review":
+			rows, obs, raw_frames, conf, segs = result_container["review_data"]
+			self._review_data.emit(rows, obs, conf, segs)
+			self.app._review_rows = rows
+			self.app._review_observations = obs
+			self.app._review_raw_frames = raw_frames
+			self.app._review_confidences = conf
+			self.app._review_segments = segs
+			self._finished.emit("review")
+		else:
+			self._finished.emit("auto")
 
 	def _check_cancel(self) -> None:
 		if self._cancel_flag:
@@ -94,242 +137,6 @@ class _ExportThread(QThread):
 
 	def _emit_progress(self, msg: str, pct: float) -> None:
 		self._progress.emit(msg, pct)
-
-	# ── 帧提取 ──
-
-	def _extract_frames(self) -> tuple[list, int]:
-		assert self.app.video_path is not None
-		assert self.app.metadata is not None
-
-		cap = cv2.VideoCapture(str(self.app.video_path))
-		x1, y1, x2, y2 = self._region
-		frame_step = max(1, self._frame_div)
-		total_video_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-
-		f_start = _parse_int_or_none(self.app.frame_start_edit.text())
-		f_end = _parse_int_or_none(self.app.frame_end_edit.text())
-		_end_limit = f_end if f_end is not None else total_video_frames
-
-		raw_frames: list[tuple[float, np.ndarray]] = []
-		fi = 0
-		while fi < total_video_frames:
-			self._check_cancel()
-			if fi >= _end_limit:
-				break
-			if f_start is not None and fi < f_start:
-				cap.grab(); fi += 1; continue
-			if fi % frame_step != 0:
-				cap.grab(); fi += 1; continue
-			if not cap.grab():
-				break
-			ok, frame = cap.retrieve()
-			if not ok or frame is None:
-				break
-			if fi % max(1, frame_step * 200) == 0:
-				pct = 5.0 + 15.0 * (fi / max(_end_limit, 1))
-				self._emit_progress(f"解码视频: {fi}/{_end_limit} 帧", pct)
-			timestamp = fi / self.app.metadata.fps if self.app.metadata.fps > 0 else 0.0
-			crop = frame[y1:y2 + 1, x1:x2 + 1].copy()
-			raw_frames.append((timestamp, crop))
-			fi += 1
-		cap.release()
-		return raw_frames, len(raw_frames)
-
-	# ── OCR ──
-
-	def _run_ocr(self, raw_frames: list, ocr: "RapidOCR", total: int) -> list:
-		import threading
-		from queue import Queue
-
-		max_speed = self._max_speed_kmh
-		speed_format = self.app.speed_format
-		n = len(raw_frames)
-		buf_size = max(2, self._buffer_size * 2)
-		q: Queue = Queue(maxsize=buf_size)
-		errors: list[Exception] = []
-
-		def _producer() -> None:
-			try:
-				for ts, crop in raw_frames:
-					proc = self._preprocess(crop, self._target_h, self._pad_px)
-					q.put((ts, crop, proc))
-				q.put(None)
-			except Exception as e:
-				errors.append(e)
-				q.put(None)
-
-		t = threading.Thread(target=_producer, daemon=True)
-		t.start()
-
-		observations: list[SpeedObservation] = []
-		done = 0
-		while True:
-			self._check_cancel()
-			item = q.get()
-			if item is None:
-				break
-			ts, crop, proc = item
-			ocr_result, _ = ocr(proc)
-			sv, rt = extract_speed_value(ocr_result)
-			if sv is None:
-				proc_fb = self._preprocess_fb(crop, self._target_h, self._pad_px)
-				ocr_result, _ = ocr(proc_fb)
-				sv, rt = extract_speed_value(ocr_result)
-			if sv is None:
-				sv, rt = ocr_digital_fallback(ocr, crop, max_speed)
-			if sv is not None and rt is not None:
-				observations.append(SpeedObservation(
-					timestamp=ts,
-					raw_speed_kmh=sv * SOURCE_TO_KMH[speed_format],
-					raw_text=rt))
-			else:
-				observations.append(SpeedObservation(ts, -1.0, ""))
-			done += 1
-			if done % 10 == 0:
-				pct = (done / total * 90.0) + 5.0
-				self._emit_progress(
-					f"[{ocr_engine._gpu_backend}] OCR: {done}/{total}", pct)
-		t.join()
-		if errors:
-			raise errors[0]
-		return observations
-
-
-	def _run_auto_anchor(self, observations: list, raw_frames: list,
-			ocr: "RapidOCR", total_frames: int) -> None:
-		self._emit_progress("正在自动识别可靠锚点...", 40.0)
-		anchor_indices = auto_select_anchors(observations, self._max_speed_kmh,
-			max_accel_mps2=self._max_accel_mps2)
-		if len(anchor_indices) < 3:
-			self._error.emit("自动锚点选择失败：未找到足够的可靠帧。")
-			return
-
-		rows = []
-		for i, obs in enumerate(observations):
-			rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh,
-				2 if i in anchor_indices else 0])
-
-		self._emit_progress("正在纠错...", 60.0)
-		from correction import correct_with_anchors
-		def _prog(done: int, total: int) -> None:
-			pct = done / max(total, 1)
-			self._emit_progress(f"物理纠错: {done}/{total} 帧", 60.0 + pct * 30.0)
-		rows = correct_with_anchors(rows, observations, raw_frames, ocr,
-			self._max_speed_kmh, self._max_accel_mps2, anchor_indices,
-			progress_fn=_prog)
-
-		# 积分距离
-		dist = 0.0; prev_t = prev_v = None
-		for r in rows:
-			v = r[2] / 3.6
-			if prev_t is not None and prev_v is not None:
-				dt = r[0] - prev_t
-				if dt > 0: dist += (prev_v + v) * 0.5 * dt
-			prev_t, prev_v = r[0], v; r[1] = dist
-
-		# 写出 CSV
-		self._write_csv(rows)
-
-		self._emit_progress("完成", 100.0)
-		self._finished.emit("auto")
-
-	def _run_focused_review(self, observations: list, raw_frames: list,
-			ocr: "RapidOCR", total_frames: int) -> None:
-		self._emit_progress("正在自动识别可靠锚点...", 20.0)
-		anchor_indices = auto_select_anchors(observations, self._max_speed_kmh,
-			max_accel_mps2=self._max_accel_mps2)
-		if len(anchor_indices) < 3:
-			self._error.emit("自动锚点选择失败：未找到足够的可靠帧。")
-			return
-
-		rows = []
-		for i, obs in enumerate(observations):
-			rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh,
-				2 if i in anchor_indices else 0])
-
-		self._emit_progress("正在初次纠错...", 40.0)
-		from correction import correct_with_anchors, compute_confidence, find_problem_segments
-		def _prog(done: int, total: int) -> None:
-			pct = done / max(total, 1)
-			self._emit_progress(f"物理纠错: {done}/{total} 帧", 40.0 + pct * 20.0)
-		rows = correct_with_anchors(rows, observations, raw_frames, ocr,
-			self._max_speed_kmh, self._max_accel_mps2, anchor_indices,
-			progress_fn=_prog)
-
-		self._emit_progress("计算置信度...", 70.0)
-		confidences = compute_confidence(rows, observations,
-			self._max_speed_kmh, self._max_accel_mps2)
-		segments = find_problem_segments(confidences)
-
-		if segments:
-			self._emit_progress(f"发现 {len(segments)} 个问题段，等待人工审核...", 75.0)
-			self._review_data.emit(rows, observations, confidences, segments)
-			self.app._review_rows = rows
-			self.app._review_observations = observations
-			self.app._review_raw_frames = raw_frames
-			self.app._review_ocr = ocr
-			self.app._review_anchor_indices = anchor_indices
-			self.app._review_output_path = self._output_path
-			self._finished.emit("review")
-		else:
-			self._emit_progress("未发现问题段，无需人工审核。", 85.0)
-			dist = 0.0; prev_t = prev_v = None
-			for r in rows:
-				v = r[2] / 3.6
-				if prev_t is not None and prev_v is not None:
-					dt = r[0] - prev_t
-					if dt > 0: dist += (prev_v + v) * 0.5 * dt
-				prev_t, prev_v = r[0], v; r[1] = dist
-			self._write_csv(rows)
-			self._emit_progress("完成", 100.0)
-			self._finished.emit("auto")
-
-	def _write_csv(self, rows: list) -> None:
-		assert self.app.video_path is not None
-		vhash = compute_video_hash(self.app.video_path)
-		with self._output_path.open("w", newline="", encoding="utf-8-sig") as fh:
-			fh.write("# RaceVideoToLog\n")
-			fh.write(f"# video_hash={vhash}, video={self.app.video_path.name}\n")
-			r = self._region
-			fh.write(f"# roi={r[0]},{r[1]},{r[2]},{r[3]}, format={self.app.speed_format}\n")
-			fh.write(f"# max_speed={self._max_speed_kmh}, max_accel={self._max_accel_mps2}, "
-				f"div={self._frame_div}, target_h={self._target_h}, pad={self._pad_px}, "
-				f"backend={ocr_engine._gpu_backend}, model=v6_small, "
-				f"buffer={self._buffer_size}, "
-				f"frame_start={self.app.frame_start_edit.text() or ''}, "
-				f"frame_end={self.app.frame_end_edit.text() or ''}, auto_anchor=1\n")
-			w = csv.writer(fh)
-			for r in rows:
-				w.writerow([f"{r[0]:.2f}", f"{r[1]:.2f}", f"{r[2]:.2f}", str(r[3])])
-
-	# ── 预处理 ──
-
-	@staticmethod
-	def _preprocess(crop: np.ndarray, target_h: float, pad_px: float) -> np.ndarray:
-		gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-		return _ExportThread._finish(gray, target_h, pad_px)
-
-	@staticmethod
-	def _preprocess_fb(crop: np.ndarray, target_h: float, pad_px: float) -> np.ndarray:
-		gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-		_, gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-		return _ExportThread._finish(gray, target_h, pad_px)
-
-	@staticmethod
-	def _finish(gray: np.ndarray, target_h: float, pad_px: float) -> np.ndarray:
-		h, w = gray.shape[:2]
-		th = max(8.0, float(target_h))
-		scale = th / float(h) if h > 0 else 1.0
-		if abs(scale - 1.0) > 0.02:
-			gray = cv2.resize(gray, (max(1, int(w * scale)), int(th)))
-		pad_int = int(pad_px)
-		if pad_int > 0:
-			gray = cv2.copyMakeBorder(gray, pad_int, pad_int, pad_int, pad_int,
-				cv2.BORDER_REPLICATE)
-		return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-
-
-# ═══════════════════════ 主窗口 ═══════════════════════
 
 class RaceVideoToLogApp(QMainWindow):
 	"""RaceVideoToLog PySide6 主窗口。"""
@@ -915,11 +722,12 @@ class RaceVideoToLogApp(QMainWindow):
 			ms = float(self.max_speed_edit.text()); ma = float(self.max_accel_edit.text())
 			fd = self.div_spin.value(); th = float(self.target_h_edit.text())
 			pp = float(self.pad_edit.text()); nw = int(self.buffer_edit.text())
+			be = ["auto", "cuda", "cpu"][self.backend_combo.currentIndex()]
 		except ValueError:
 			QMessageBox.warning(self, "参数错误", "请检查数值参数。"); return
 
 		self._export_btn.setEnabled(False); self._cancel_btn.setEnabled(True)
-		self._export_thread = _ExportThread(self, Path(out), roi, ms, ma, fd, th, pp, nw)
+		self._export_thread = _ExportThread(self, Path(out), roi, ms, ma, fd, th, pp, nw, be)
 		self._export_thread._progress.connect(self._on_progress)
 		self._export_thread._finished.connect(self._on_done)
 		self._export_thread._review_data.connect(self._on_review_needed)
@@ -975,64 +783,39 @@ class RaceVideoToLogApp(QMainWindow):
 				import traceback; traceback.print_exc()
 
 	def _continue_with_manual_anchors(self, corrections: dict[int, float]) -> None:
-		rows = self._review_rows
-		observations = self._review_observations
-		raw_frames = self._review_raw_frames
-		ocr = self._review_ocr
-		anchor_indices = set(self._review_anchor_indices)
-		try:
-			ms = float(self.max_speed_edit.text())
-			ma = float(self.max_accel_edit.text())
-		except ValueError:
-			ms = 400.0; ma = 50.0
+		pipeline = getattr(self, "_pipeline", None)
+		if pipeline is None:
+			self._status_label.setText("错误: 处理状态丢失"); return
+		import threading
+		done = threading.Event()
+		error_container: list[Exception] = []
 
-		for fi, v in corrections.items():
-			if 0 <= fi < len(rows):
-				rows[fi][2] = v
-				rows[fi][3] = 2
-				anchor_indices.add(fi)
-		# 确认正确的段: 所有帧 flag=2
-		for seg_start in getattr(self, "_review_confirmed", set()):
-			for seg in self._review_segments:
-				if seg["start"] == seg_start:
-					for fi in range(seg["start"], seg["end"] + 1):
-						if fi not in corrections and 0 <= fi < len(rows):
-							rows[fi][3] = 2
-							anchor_indices.add(fi)
-					break
+		def _worker() -> None:
+			try:
+				out_path = getattr(self, "_review_output_path",
+					self.video_path.parent / f"{self.video_path.stem}_log.csv")
+				pipeline.run_review_pass2(
+					corrections=corrections,
+					confirmed_segments=getattr(self, "_review_confirmed", set()),
+					output_path=out_path,
+				)
+			except Exception as exc:
+				import traceback; traceback.print_exc()
+				error_container.append(exc)
+			finally:
+				done.set()
 
-		from correction import correct_with_anchors
-		rows = correct_with_anchors(rows, observations, raw_frames, ocr,
-			ms, ma, anchor_indices, skip_fill=True)
+		t = threading.Thread(target=_worker)
+		t.start()
+		done.wait()
+		t.join()
 
-		dist = 0.0; prev_t = prev_v = None
-		for r in rows:
-			v = r[2] / 3.6
-			if prev_t is not None and prev_v is not None:
-				dt = r[0] - prev_t
-				if dt > 0: dist += (prev_v + v) * 0.5 * dt
-			prev_t, prev_v = r[0], v; r[1] = dist
-
-		assert self.video_path is not None
-		out_path = getattr(self, "_review_output_path", self.video_path.parent / f"{self.video_path.stem}_log.csv")
-		import csv
-		vhash = compute_video_hash(self.video_path)
-		roi = self._get_roi()
-		with out_path.open("w", newline="", encoding="utf-8-sig") as fh:
-			fh.write("# RaceVideoToLog")
-			fh.write("\\n")
-			fh.write(f"# video_hash={vhash}, video={self.video_path.name}")
-			fh.write("\\n")
-			if roi:
-				fh.write(f"# roi={roi[0]},{roi[1]},{roi[2]},{roi[3]}, format={self.speed_format}")
-				fh.write("\\n")
-			fh.write(f"# max_speed={ms}, max_accel={ma}, manual_anchor=1")
-			fh.write("\\n")
-			w = csv.writer(fh)
-			for r in rows:
-				w.writerow([f"{r[0]:.2f}", f"{r[1]:.2f}", f"{r[2]:.2f}", str(r[3])])
-		self._progress_bar.setValue(100)
-		self._status_label.setText(f"人工审核完成 — {len(corrections)} 帧已修正，结果已保存。")
+		if error_container:
+			self._progress_bar.setValue(0)
+			self._status_label.setText(f"审核失败: {error_container[0]}")
+		else:
+			self._progress_bar.setValue(100)
+			self._status_label.setText(f"人工审核完成 — {len(corrections)} 帧已修正，结果已保存。")
 
 	def _finish_export(self) -> None:
 		self._export_btn.setEnabled(True); self._cancel_btn.setEnabled(False)

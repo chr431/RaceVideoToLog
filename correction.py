@@ -15,7 +15,8 @@ def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: 
                          max_speed_kmh: float, max_accel_mps2: float, anchor_indices: set,
                          log_fn: "Callable | None" = None,
                          progress_fn: "Callable | None" = None,
-                         skip_fill: bool = False) -> list:
+                         skip_fill: bool = False,
+                         timing: dict | None = None) -> list:
 	"""5 阶段物理约束纠错流水线。
 
 	以 anchor_indices 中帧的速度为硬约束（固定不变），
@@ -44,7 +45,7 @@ def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: 
 	# ── 阶段 2+3：重 OCR + 最优选择（首轮）──
 	fixed = _fix_errors(rows, observations, raw_frames, ocr, error_set,
 	                    anchors, times, max_speed_kmh, max_accel_mps2,
-	                    progress_fn=progress_fn)
+	                    progress_fn=progress_fn, timing=timing)
 	if log_fn:
 		log_fn(f"  Stage 2+3: fixed {fixed} frames in round 1")
 
@@ -56,7 +57,7 @@ def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: 
 			break
 		fixed = _fix_errors(rows, observations, raw_frames, ocr, error_set,
 		                    anchors, times, max_speed_kmh, max_accel_mps2,
-		                    progress_fn=progress_fn)
+		                    progress_fn=progress_fn, timing=timing)
 		if log_fn:
 			log_fn(f"  Stage 4 round {rnd}: {len(error_set)} errors, fixed {fixed}")
 
@@ -223,14 +224,19 @@ def _detect_errors(rows: list, anchors: set, times: list, max_speed_kmh: float, 
 
 def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR", error_set: set,
                 anchors: set, times: list, max_speed_kmh: float, max_accel_mps2: float,
-                progress_fn: "Callable | None" = None) -> int:
+                progress_fn: "Callable | None" = None,
+                timing: dict | None = None) -> int:
 	"""阶段 2+3：对每个 error 帧重 OCR 获取备选，选最优值填入。"""
+	import time as _time_module
 	fixed = 0
 	progress_done = 0
 	error_list = sorted(i for i in error_set if i not in anchors)
 	total = len(error_list)
 	for i in error_list:
-		candidates = list(_re_ocr_frame(raw_frames[i][1], ocr, max_speed_kmh))
+		t_reocr_start = _time_module.perf_counter() if timing is not None else 0
+		candidates = list(_re_ocr_frame(raw_frames[i][1], ocr, max_speed_kmh, timing=timing))
+		if timing is not None:
+			timing['re_ocr'] = timing.get('re_ocr', 0.0) + _time_module.perf_counter() - t_reocr_start
 		interp_cand = _interp_candidate(i, rows, anchors, times, max_speed_kmh)
 		if interp_cand is not None:
 			candidates.append(interp_cand)
@@ -240,7 +246,7 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
 
 		if candidates:
 			raw_val = rows[i][2]
-			reocr_unique = _re_ocr_frame(raw_frames[i][1], ocr, max_speed_kmh)
+			reocr_unique = _re_ocr_frame(raw_frames[i][1], ocr, max_speed_kmh, timing=timing)
 			if len(reocr_unique) <= 1 and interp_cand is not None and abs(interp_cand - raw_val) > 10.0:
 				if abs(raw_val - interp_cand) > 0.5:
 					rows[i][2] = interp_cand
@@ -270,51 +276,78 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
 	return fixed
 
 
-def _re_ocr_frame(crop_bgr: "np.ndarray", ocr: "RapidOCR", max_speed_kmh: float) -> set:
+def _re_ocr_frame(crop_bgr: "np.ndarray", ocr: "RapidOCR", max_speed_kmh: float,
+                  timing: dict | None = None) -> set:
 	"""阶段 2：对单帧尝试 4 种预处理变体重 OCR，有缓存。"""
+	import time as _t
+	t0 = _t.perf_counter() if timing is not None else 0
 	global _reocr_cache
 	cache_key = hash(crop_bgr.tobytes()) if crop_bgr is not None and crop_bgr.size > 0 else None
 	if cache_key is not None and cache_key in _reocr_cache:
+		if timing is not None:
+			timing['reocr_cache_hit'] = timing.get('reocr_cache_hit', 0.0) + _t.perf_counter() - t0
 		return _reocr_cache[cache_key]
+	if timing is not None:
+		timing['reocr_cache_miss'] = timing.get('reocr_cache_miss', 0) + 1
+
 	candidates = set()
 	if crop_bgr is None or crop_bgr.size == 0:
 		return candidates
 
+	t_gray = _t.perf_counter() if timing is not None else 0
 	gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
 	h, w = gray.shape[:2]
+	if timing is not None:
+		timing['reocr_prep_gray'] = timing.get('reocr_prep_gray', 0.0) + _t.perf_counter() - t_gray
 	if h <= 0 or w <= 0:
 		return candidates
 
-	def _do_ocr(img_bgr: "np.ndarray") -> None:
+	def _do_ocr(img_bgr: "np.ndarray", label: str = "") -> None:
+		t_ocr = _t.perf_counter() if timing is not None else 0
 		res, _ = ocr(img_bgr)
+		if timing is not None:
+			key = f"reocr_infer_{label}"
+			timing[key] = timing.get(key, 0.0) + _t.perf_counter() - t_ocr
 		sv, rt = extract_speed_value(res)
 		if sv is not None and sv <= max_speed_kmh:
 			candidates.add(float(sv))
 
 	# 变体 1: 标准灰度 (h=24)
+	t_p = _t.perf_counter() if timing is not None else 0
 	scale = 24.0 / h if h > 0 else 1.0
 	proc = cv2.resize(gray, (max(1, int(w * scale)), 24))
-	_do_ocr(cv2.cvtColor(proc, cv2.COLOR_GRAY2BGR))
+	_do_ocr(cv2.cvtColor(proc, cv2.COLOR_GRAY2BGR), "v1_gray24")
+	if timing is not None:
+		timing['reocr_prep_v1'] = timing.get('reocr_prep_v1', 0.0) + _t.perf_counter() - t_p
 
 	# 变体 2: CLAHE + OTSU (h=32)
+	t_p = _t.perf_counter() if timing is not None else 0
 	clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 	_, otsu = cv2.threshold(clahe.apply(gray), 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 	scale32 = 32.0 / h if h > 0 else 1.0
 	proc = cv2.resize(otsu, (max(1, int(w * scale32)), 32))
-	_do_ocr(cv2.cvtColor(proc, cv2.COLOR_GRAY2BGR))
+	_do_ocr(cv2.cvtColor(proc, cv2.COLOR_GRAY2BGR), "v2_clahe32")
+	if timing is not None:
+		timing['reocr_prep_v2'] = timing.get('reocr_prep_v2', 0.0) + _t.perf_counter() - t_p
 
 	# 变体 3: OTSU 反相 (h=32)
+	t_p = _t.perf_counter() if timing is not None else 0
 	_, otsu3 = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 	proc = cv2.resize(otsu3, (max(1, int(w * scale32)), 32))
-	_do_ocr(cv2.cvtColor(proc, cv2.COLOR_GRAY2BGR))
+	_do_ocr(cv2.cvtColor(proc, cv2.COLOR_GRAY2BGR), "v3_otsuinv32")
+	if timing is not None:
+		timing['reocr_prep_v3'] = timing.get('reocr_prep_v3', 0.0) + _t.perf_counter() - t_p
 
 	# 变体 4: ocr_digital_fallback 后备
+	t_p = _t.perf_counter() if timing is not None else 0
 	try:
 		sv, _rt = ocr_digital_fallback(ocr, crop_bgr, max_speed_kmh)
 		if sv is not None:
 			candidates.add(float(sv))
 	except Exception:
 		pass
+	if timing is not None:
+		timing['reocr_digital_fb'] = timing.get('reocr_digital_fb', 0.0) + _t.perf_counter() - t_p
 
 	if cache_key is not None:
 		_reocr_cache[cache_key] = candidates

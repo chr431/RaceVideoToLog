@@ -31,6 +31,8 @@ def main() -> None:
 	parser.add_argument("--analysis-out", type=str)
 	parser.add_argument("--frame-start", type=int, metavar="N")
 	parser.add_argument("--frame-end", type=int, metavar="N")
+	parser.add_argument("--threaded", action="store_true",
+		help="使用 producer-consumer 线程模型 (仅用于性能对比)")
 	args = parser.parse_args()
 
 	if args.video:
@@ -41,7 +43,13 @@ def main() -> None:
 		run_analysis_headless(args)
 	else:
 		from PySide6.QtWidgets import QApplication
-		from qfluentwidgets import setTheme, Theme
+		import io, sys as _sys
+		_saved = _sys.stdout
+		_sys.stdout = io.StringIO()
+		try:
+			from qfluentwidgets import setTheme, Theme
+		finally:
+			_sys.stdout = _saved
 		from gui import RaceVideoToLogApp
 		app = QApplication(sys.argv)
 		setTheme(Theme.AUTO)
