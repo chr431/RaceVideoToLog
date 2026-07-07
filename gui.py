@@ -74,6 +74,7 @@ class _ExportThread(QThread):
 			try:
 				self._check_cancel()
 				mode = self.app.correction_mode
+				assert self.app.video_path is not None
 				pipeline = ProcessingPipeline(
 					video_path=self.app.video_path,
 					roi=self._region,
@@ -150,6 +151,7 @@ class RaceVideoToLogApp(QMainWindow):
 
 		# ── 状态变量 ──
 		self.video_path: Path | None = None
+		self._pipeline: object | None = None
 		self.metadata: VideoMetadata | None = None
 		self.first_frame_bgr: np.ndarray | None = None
 		self.first_frame_qimg: QImage | None = None
@@ -793,6 +795,7 @@ class RaceVideoToLogApp(QMainWindow):
 
 		def _worker() -> None:
 			try:
+				assert self.video_path is not None
 				out_path = getattr(self, "_review_output_path",
 					self.video_path.parent / f"{self.video_path.stem}_log.csv")
 				pipeline.run_review_pass2(
