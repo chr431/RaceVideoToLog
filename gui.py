@@ -48,7 +48,7 @@ class _ExportThread(QThread):
 	def __init__(self, app: "RaceVideoToLogApp", output_path: Path,
 			region: tuple, max_speed_kmh: float, max_accel_mps2: float,
 			frame_div: int, target_h: float, pad_px: float, buffer_size: int,
-			parent: QWidget | None = None) -> None:
+			backend: str = "auto", parent: QWidget | None = None) -> None:
 		super().__init__(parent)
 		self.app = app
 		self._output_path = output_path
@@ -59,6 +59,7 @@ class _ExportThread(QThread):
 		self._target_h = target_h
 		self._pad_px = pad_px
 		self._buffer_size = buffer_size
+		self._backend = backend
 		self._cancel_flag = False
 
 
