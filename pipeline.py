@@ -10,11 +10,11 @@ import cv2
 import numpy as np
 
 from rapidocr_onnxruntime import RapidOCR
+import ocr_engine as _oe
 from ocr_engine import (
     auto_select_anchors, clamp_region, compute_video_hash,
     extract_speed_value, SpeedObservation,
     SOURCE_TO_KMH, ocr_digital_fallback,
-    ocr_engine,
     _reset_backend, _select_backend, _get_model_kwargs,
 )
 from correction import correct_with_anchors, compute_confidence, find_problem_segments
@@ -313,7 +313,7 @@ class ProcessingPipeline:
             done += 1
             if done % 10 == 0:
                 pct = 7.0 + (done / total) * 83.0
-                self._emit(f"[{ocr_engine._gpu_backend}] OCR: {done}/{total}", pct)
+                self._emit(f"[{_oe._gpu_backend}] OCR: {done}/{total}", pct)
         t.join()
         if errors:
             raise errors[0]

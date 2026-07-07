@@ -15,6 +15,14 @@ from qfluentwidgets import (BodyLabel, StrongBodyLabel, CaptionLabel,
 from theme_manager import ThemeManager
 
 import cv2
+
+
+def _make_static_card(parent=None):
+    """创建禁用 hover 高亮的 CardWidget — 与主窗口一致。"""
+    w = CardWidget(parent)
+    w.enterEvent = lambda e: None
+    w.leaveEvent = lambda e: None
+    return w
 import numpy as np
 
 
@@ -95,29 +103,30 @@ class ReviewDialog(QDialog):
         rl = QVBoxLayout(right); rl.setContentsMargins(8, 0, 0, 0); rl.setSpacing(6)
 
         # 速度曲线
-        chart_card = CardWidget()
+        chart_card = _make_static_card()
         cl = QVBoxLayout(chart_card); cl.setContentsMargins(8, 8, 8, 4)
         cl.addWidget(CaptionLabel("速度曲线（当前段加粗高亮，红色=问题段，绿色=已确认，蓝点=已修正）"))
         self._figure, self._ax, self._canvas = self._create_chart()
         cl.addWidget(self._canvas, 1)
-        rl.addWidget(chart_card, 2)
+        rl.addWidget(chart_card, 3)
 
         # 原始图像 + 修正控件（水平排列）
         bottom_row = QHBoxLayout(); bottom_row.setSpacing(8)
 
         # 原始图像预览
-        img_card = CardWidget()
+        img_card = _make_static_card()
         il = QVBoxLayout(img_card); il.setContentsMargins(8, 8, 8, 4)
         il.addWidget(CaptionLabel("当前帧原始图像（ROI 裁剪区域）"))
         self._img_label = QLabel("选择帧后显示")
         self._img_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._img_label.setMinimumSize(250, 60)
+        self._img_label.setMaximumHeight(220)
         self._img_label.setStyleSheet("background-color: #111; border-radius: 4px;")
         il.addWidget(self._img_label, 1)
         bottom_row.addWidget(img_card, 1)
 
         # 修正控件
-        ctrl_card = CardWidget()
+        ctrl_card = _make_static_card()
         ctrl = QVBoxLayout(ctrl_card); ctrl.setContentsMargins(8, 8, 8, 4)
 
         cf_row = QHBoxLayout()
@@ -155,6 +164,11 @@ class ReviewDialog(QDialog):
         btn_add.setFixedWidth(100)
         btn_add.clicked.connect(self._add_correction)
         btn_row.addWidget(btn_add)
+        self._btn_delete = PushButton("删除修正")
+        self._btn_delete.setFixedWidth(100)
+        self._btn_delete.setEnabled(False)
+        self._btn_delete.clicked.connect(self._delete_correction)
+        btn_row.addWidget(self._btn_delete)
         self._btn_confirm = PushButton("此段正确")
         self._btn_confirm.setFixedWidth(100)
         self._btn_confirm.clicked.connect(self._confirm_segment)
@@ -190,7 +204,7 @@ class ReviewDialog(QDialog):
         from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
         from qfluentwidgets import isDarkTheme
 
-        fig = Figure(figsize=(8, 3.5), dpi=100)
+        fig = Figure(figsize=(8, 3.5), dpi=100, constrained_layout=True)
         ax = fig.add_subplot(111)
         dark = isDarkTheme()
         bg = "#2a2a2a" if dark else "#ffffff"
@@ -200,11 +214,12 @@ class ReviewDialog(QDialog):
 
         self._chart_params = {'dark': dark, 'bg': bg, 'fg': fg}
 
+        from PySide6.QtWidgets import QSizePolicy
         canvas = FigureCanvasQTAgg(fig)
-        canvas.setParent(self)
+        canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        canvas.setMinimumHeight(150)
         self._canvas = canvas
         self._redraw_chart(ax, fig)
-        fig.tight_layout()
         return fig, ax, canvas
 
     def _redraw_chart(self, ax=None, fig=None) -> None:
@@ -260,7 +275,6 @@ class ReviewDialog(QDialog):
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
         ax.grid(True, alpha=0.15 if dark else 0.25)
-        fig.tight_layout()
         self._canvas.draw_idle()
 
     def _show_frame_image(self, frame_index: int) -> None:
@@ -307,9 +321,10 @@ class ReviewDialog(QDialog):
         self._suggested_btns.clear()
 
         for fi in seg['suggested']:
-            v = self._rows[fi][2]
+            v = self._corrections.get(fi, self._rows[fi][2])
             btn = PushButton(f"#{fi} ({v:.0f}km/h)")
             btn.setFixedWidth(110)
+            btn.setProperty("frame_idx", fi)
             btn.clicked.connect(lambda checked, f=fi, val=v: self._quick_correct(f, val))
             self._suggested_widget.layout().insertWidget(
                 self._suggested_widget.layout().count() - 1, btn)
@@ -318,9 +333,10 @@ class ReviewDialog(QDialog):
 
         self._current_frame = seg['start']; self._frame_label.setText(f"#{seg['start']}")
         self._show_frame_image(seg['start'])
-        seg_vals = [self._rows[i][2] for i in range(seg['start'], seg['end'] + 1)]
-        avg_val = int(sum(seg_vals) / max(len(seg_vals), 1))
-        self._speed_spin.setValue(avg_val)
+        # SpinBox: 有修正则显示修正值，否则显示当前帧的识别值
+        start_val = self._corrections.get(seg['start'], self._rows[seg['start']][2])
+        self._speed_spin.setValue(int(start_val))
+        self._btn_delete.setEnabled(seg['start'] in self._corrections)
         self._update_corr_label()
         self._redraw_chart()
         seg_start = seg['start']
@@ -331,7 +347,9 @@ class ReviewDialog(QDialog):
 
     def _quick_correct(self, fi: int, val: float) -> None:
         self._current_frame = fi; self._frame_label.setText(f"#{fi}")
-        self._speed_spin.setValue(int(val))
+        v = self._corrections.get(fi, val)
+        self._speed_spin.setValue(int(v))
+        self._btn_delete.setEnabled(fi in self._corrections)
         self._show_frame_image(fi)
 
     def _add_correction(self) -> None:
@@ -340,11 +358,54 @@ class ReviewDialog(QDialog):
         self._corrections[fi] = float(speed)
         self._update_corr_label()
         self._redraw_chart()
-        seg_start = seg['start']
-        if seg_start in self._confirmed_segments:
-            self._btn_confirm.setText("取消确认")
-        else:
-            self._btn_confirm.setText("此段正确")
+        # 更新建议按钮文字以反映修正值
+        for btn in self._suggested_btns:
+            try:
+                f = btn.property("frame_idx")
+            except Exception:
+                continue
+            if f == fi:
+                btn.setText(f"#{fi} ({speed:.0f}km/h)")
+                break
+        # 检查当前段是否已确认，若是则切换按钮
+        row = self._list.currentRow()
+        if row >= 0:
+            seg = self._list.item(row).data(Qt.ItemDataRole.UserRole)
+            if seg['start'] in self._confirmed_segments:
+                self._btn_confirm.setText("取消确认")
+            else:
+                self._btn_confirm.setText("此段正确")
+        self._show_frame_image(fi)
+        self._btn_delete.setEnabled(True)
+
+    def _delete_correction(self) -> None:
+        fi = getattr(self, "_current_frame", 0)
+        if fi not in self._corrections:
+            return
+        del self._corrections[fi]
+        # 恢复 SpinBox 为原始识别值
+        orig = self._rows[fi][2]
+        self._speed_spin.setValue(int(orig))
+        # 恢复建议按钮文字
+        for btn in self._suggested_btns:
+            try:
+                f = btn.property("frame_idx")
+            except Exception:
+                continue
+            if f == fi:
+                btn.setText(f"#{fi} ({orig:.0f}km/h)")
+                break
+        self._update_corr_label()
+        self._redraw_chart()
+        self._btn_delete.setEnabled(False)
+        # 若当前段已确认，切换按钮文字
+        row = self._list.currentRow()
+        if row >= 0:
+            seg = self._list.item(row).data(Qt.ItemDataRole.UserRole)
+            if seg['start'] in self._confirmed_segments:
+                self._btn_confirm.setText("取消确认")
+            else:
+                self._btn_confirm.setText("此段正确")
         self._show_frame_image(fi)
 
     def _update_corr_label(self) -> None:
@@ -366,11 +427,14 @@ class ReviewDialog(QDialog):
             self._corrections.update(saved)
             self._confirmed.discard(seg_start)
             item = self._list.item(row)
-            item.setForeground(Qt.GlobalColor.black if not hasattr(self, '_is_dark') else Qt.GlobalColor.white)
+            from qfluentwidgets import isDarkTheme
+            item.setForeground(Qt.GlobalColor.white if isDarkTheme() else Qt.GlobalColor.black)
             item.setText(item.text().replace(" ✓", ""))
             self._btn_confirm.setText("此段正确")
             self._update_corr_label()
             self._redraw_chart()
+            # 恢复删除按钮状态
+            self._btn_delete.setEnabled(self._current_frame in self._corrections)
         else:
             # Confirm: save current corrections for this segment, remove them
             saved = {}
@@ -385,6 +449,7 @@ class ReviewDialog(QDialog):
             self._btn_confirm.setText("取消确认")
             self._update_corr_label()
             self._redraw_chart()
+            self._btn_delete.setEnabled(False)
             # Move to next unconfirmed
             for r in range(row + 1, self._list.count()):
                 s = self._list.item(r).data(Qt.ItemDataRole.UserRole)
@@ -399,7 +464,10 @@ class ReviewDialog(QDialog):
         self.accept()
 
     def get_corrections(self) -> dict[int, float]:
-        return dict(self._corrections)
+        result = dict(self._corrections)
+        for saved in self._confirmed_segments.values():
+            result.update(saved)
+        return result
 
     def get_confirmed(self) -> set[int]:
         return set(self._confirmed)	        # 修正控件
