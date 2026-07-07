@@ -25,6 +25,8 @@ hiddenimports = [
     'numpy._core.umath', 'numpy._core._methods',
     # rapidocr 内部依赖
     'yaml',
+    # Project modules
+    'pipeline', 'correction',
 ]
 
 # rapidocr_onnxruntime（OCR 引擎）
