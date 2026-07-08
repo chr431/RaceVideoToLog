@@ -4,8 +4,14 @@
 支持 GUI 和无头 CLI 共用同一实现。
 """
 from __future__ import annotations
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 import cv2
+import numpy as np
 from ocr_engine import extract_speed_value, build_speed_candidates
+
+if TYPE_CHECKING:
+    from rapidocr_onnxruntime import RapidOCR
 
 # 重 OCR 缓存（避免同一帧重复处理）
 _reocr_cache: dict[int, set[float]] = {}
@@ -449,7 +455,7 @@ def compute_confidence(rows: list, observations: list, max_speed: float,
         if win % 2 == 0:
             win += 1
         try:
-            smoothed = _savgol_filter_np(vals, win, min(3, win - 1))
+            smoothed = _savgol_filter_np(np.array(vals), win, min(3, win - 1))
         except Exception:
             smoothed = vals
     else:
