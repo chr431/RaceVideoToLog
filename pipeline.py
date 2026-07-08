@@ -90,11 +90,6 @@ class ProcessingPipeline:
         self._emit("加载 OCR 引擎...", 1.0)
         self._ensure_ocr()
 
-        self._emit("解码视频帧...", 3.0)
-        self._extract_frames()
-        if not self._raw_frames:
-            raise RuntimeError("未从视频中读取到任何帧。")
-
         self._run_ocr()
 
         if not self._observations:
@@ -113,11 +108,6 @@ class ProcessingPipeline:
         """
         self._emit("加载 OCR 引擎...", 1.0)
         self._ensure_ocr()
-
-        self._emit("解码视频帧...", 3.0)
-        self._extract_frames()
-        if not self._raw_frames:
-            raise RuntimeError("未从视频中读取到任何帧。")
 
         self._run_ocr()
         if not self._observations:
@@ -216,72 +206,69 @@ class ProcessingPipeline:
             self._ocr = RapidOCR(**(kw or {}))
         return self._ocr
 
-    def _extract_frames(self) -> None:
-        cap = cv2.VideoCapture(str(self._video_path))
-        x1, y1, x2, y2 = clamp_region(*self._roi, 0, 0)
-        frame_step = max(1, self._frame_div)
-        total_video_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
-
-        # 重读分辨率以 clamp
-        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
-        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
-        x1, y1, x2, y2 = clamp_region(*self._roi, w, h)
-
-        f_start = _parse_int_or_none(self._frame_start)
-        f_end = _parse_int_or_none(self._frame_end)
-        _end_limit = f_end if f_end is not None else total_video_frames
-
-        self._raw_frames = []
-        fi = 0
-        while fi < total_video_frames:
-            if fi >= _end_limit:
-                break
-            if f_start is not None and fi < f_start:
-                cap.grab(); fi += 1; continue
-            if fi % frame_step != 0:
-                cap.grab(); fi += 1; continue
-            if not cap.grab():
-                break
-            ok, frame = cap.retrieve()
-            if not ok or frame is None:
-                break
-            if fi % max(1, frame_step * 200) == 0:
-                pct = 3.0 + 4.0 * (fi / max(_end_limit, 1))
-                self._emit(f"解码视频: {fi}/{_end_limit} 帧", pct)
-            ts = fi / fps if fps > 0 else 0.0
-            crop = frame[y1:y2 + 1, x1:x2 + 1].copy()
-            self._raw_frames.append((ts, crop))
-            fi += 1
-        cap.release()
-
     def _run_ocr(self) -> None:
+        """解码 + OCR 流水线：producer 线程解码并预处理，consumer 做 OCR 推理。"""
         import threading
         from queue import Queue
 
         ocr = self._ocr
         max_speed = self._max_speed
         speed_format = self._speed_format
-        total = len(self._raw_frames)
+        target_h = self._target_h
+        pad = self._pad
+        frame_step = max(1, self._frame_div)
+
+        cap = cv2.VideoCapture(str(self._video_path))
+        total_video_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+        x1, y1, x2, y2 = clamp_region(*self._roi, w, h)
+        f_start = _parse_int_or_none(self._frame_start)
+        f_end = _parse_int_or_none(self._frame_end)
+        _end_limit = f_end if f_end is not None else total_video_frames
+
+        self._raw_frames = []
+        raw_frames_local: list[tuple[float, np.ndarray]] = []
         buf_size = max(2, self._buffer_size * 2)
         q: Queue = Queue(maxsize=buf_size)
         errors: list[Exception] = []
 
         def _producer() -> None:
             try:
-                for ts, crop in self._raw_frames:
-                    proc = _preprocess_standard(crop, self._target_h, self._pad)
+                fi = 0
+                while fi < total_video_frames:
+                    if fi >= _end_limit:
+                        break
+                    if f_start is not None and fi < f_start:
+                        cap.grab(); fi += 1; continue
+                    if fi % frame_step != 0:
+                        cap.grab(); fi += 1; continue
+                    if not cap.grab():
+                        break
+                    ok, frame = cap.retrieve()
+                    if not ok or frame is None:
+                        break
+                    ts = fi / fps if fps > 0 else 0.0
+                    crop = frame[y1:y2 + 1, x1:x2 + 1].copy()
+                    raw_frames_local.append((ts, crop))
+                    proc = _preprocess_standard(crop, target_h, pad)
                     q.put((ts, crop, proc))
+                    fi += 1
                 q.put(None)
             except Exception as e:
                 errors.append(e)
                 q.put(None)
+            finally:
+                cap.release()
 
         t = threading.Thread(target=_producer, daemon=True)
         t.start()
 
         observations: list[SpeedObservation] = []
         done = 0
+        # Estimate total from frame range
+        est_total = (_end_limit - (f_start or 0)) // frame_step
         while True:
             item = q.get()
             if item is None:
@@ -297,12 +284,13 @@ class ProcessingPipeline:
             else:
                 observations.append(SpeedObservation(ts, -1.0, ""))
             done += 1
-            if done % 10 == 0:
-                pct = 7.0 + (done / total) * 83.0
-                self._emit(f"[{_oe._gpu_backend}] OCR: {done}/{total}", pct)
+            if done % 10 == 0 or done <= 3 or done == est_total:
+                pct = 3.0 + (done / max(est_total, 1)) * 87.0
+                self._emit(f"[{_oe._gpu_backend}] OCR: {done}/{est_total}", pct)
         t.join()
         if errors:
             raise errors[0]
+        self._raw_frames = raw_frames_local
         self._observations = observations
 
     def _run_correction_pass(self, output_path: Path, skip_fill: bool,
