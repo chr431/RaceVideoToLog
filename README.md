@@ -87,7 +87,7 @@ python RaceVideoToLog.py [video] [options]
   --max-accel N            最大加速度 m/s² (默认: 50)
   --target-h N             OCR 高度 px (默认: 24)
   --pad N                  边缘填充 px (默认: 0)
-  --buffer N               缓冲队列大小 (默认: 1)
+  --buffer N               缓冲队列大小 (默认: 8)
   --backend {auto,cuda,cpu}  OCR 后端 (默认: auto)
   -o, --output PATH        输出 CSV 路径
   --frame-start N          起始帧号
