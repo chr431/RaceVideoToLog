@@ -123,7 +123,7 @@ class ProcessingPipeline:
         if not self._observations:
             raise RuntimeError("未识别到任何速度数据。")
 
-        self._emit("锚点选择 + 重OCR纠错...", 91.0)
+        self._emit("锚点选择 + 纠错...", 91.0)
         self._anchor_indices = auto_select_anchors(
             self._observations, self._max_speed, max_accel_mps2=self._max_accel)
         if len(self._anchor_indices) < 3:
@@ -134,14 +134,14 @@ class ProcessingPipeline:
             self._rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh,
                                2 if i in self._anchor_indices else 0])
 
-        self._emit("重OCR纠错: 检测错误帧...", 92.0)
+        self._emit("纠错: 检测误差...", 92.0)
         from correction import correct_with_anchors, compute_confidence, find_problem_segments
         corr_timing: dict[str, float] = {}
         def _prog(done: int, total: int) -> None:
             if done % max(1, total // 5) != 0 and done != total:
                 return
             pct = done / max(total, 1)
-            self._emit(f"重OCR纠错: {done}/{total} 帧", 92.0 + pct * 5.0)
+            self._emit(f"纠错: {done}/{total} 帧", 92.0 + pct * 5.0)
         self._rows = correct_with_anchors(
             self._rows, self._observations, self._raw_frames, self._ocr,
             self._max_speed, self._max_accel, self._anchor_indices,
@@ -307,7 +307,7 @@ class ProcessingPipeline:
 
     def _run_correction_pass(self, output_path: Path, skip_fill: bool,
                              manual_anchor: bool = False) -> None:
-        self._emit("锚点选择 + 重OCR纠错...", 91.0)
+        self._emit("锚点选择 + 纠错...", 91.0)
         self._anchor_indices = auto_select_anchors(
             self._observations, self._max_speed, max_accel_mps2=self._max_accel)
         if len(self._anchor_indices) < 3:
@@ -318,13 +318,13 @@ class ProcessingPipeline:
             self._rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh,
                                2 if i in self._anchor_indices else 0])
 
-        self._emit("重OCR纠错: 检测错误帧...", 92.0)
+        self._emit("纠错: 检测误差...", 92.0)
         corr_timing: dict[str, float] = {}
         def _prog(done: int, total: int) -> None:
             if done % max(1, total // 5) != 0 and done != total:
                 return
             pct = done / max(total, 1)
-            self._emit(f"重OCR纠错: {done}/{total} 帧", 92.0 + pct * 6.0)
+            self._emit(f"纠错: {done}/{total} 帧", 92.0 + pct * 6.0)
         self._rows = correct_with_anchors(
             self._rows, self._observations, self._raw_frames, self._ocr,
             self._max_speed, self._max_accel, self._anchor_indices,
