@@ -28,23 +28,19 @@ def _parse_int_or_none(s: str) -> int | None:
 
 
 def _preprocess_standard(crop: np.ndarray, target_h: float, pad: float) -> np.ndarray:
-    """标准预处理：灰度化 + 缩放 + 填充 + 转 BGR。"""
-    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-    return _finish_preprocess(gray, target_h, pad)
-
-
-def _finish_preprocess(gray: np.ndarray, target_h: float, pad: float) -> np.ndarray:
-    """统一的缩放 + 填充 + 转 BGR。"""
-    h, w = gray.shape[:2]
+    """标准预处理：纯 resize + 填充。保留 BGR 通道以利用颜色信息。"""
+    h, w = crop.shape[:2]
     th = max(8.0, float(target_h))
     scale = th / float(h) if h > 0 else 1.0
     if abs(scale - 1.0) > 0.02:
-        gray = cv2.resize(gray, (max(1, int(w * scale)), int(th)))
+        resized = cv2.resize(crop, (max(1, int(w * scale)), int(th)))
+    else:
+        resized = crop
     pad_int = int(pad)
     if pad_int > 0:
-        gray = cv2.copyMakeBorder(gray, pad_int, pad_int, pad_int, pad_int,
-                                  cv2.BORDER_REPLICATE)
-    return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        resized = cv2.copyMakeBorder(resized, pad_int, pad_int, pad_int, pad_int,
+                                     cv2.BORDER_REPLICATE)
+    return resized
 
 
 ProgressFn = Callable[[str, float], None]
