@@ -300,18 +300,6 @@ def _re_ocr_frame(crop_bgr: "np.ndarray", ocr: "RapidOCR", max_speed_kmh: float,
 	proc = cv2.resize(gray, (max(1, int(w * scale)), 24))
 	_do_ocr(cv2.cvtColor(proc, cv2.COLOR_GRAY2BGR))
 
-	# 变体 2: CLAHE + OTSU (h=32)
-	clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-	_, otsu = cv2.threshold(clahe.apply(gray), 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-	scale32 = 32.0 / h if h > 0 else 1.0
-	proc = cv2.resize(otsu, (max(1, int(w * scale32)), 32))
-	_do_ocr(cv2.cvtColor(proc, cv2.COLOR_GRAY2BGR))
-
-	# 变体 3: OTSU 反相 (h=32)
-	_, otsu3 = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-	proc = cv2.resize(otsu3, (max(1, int(w * scale32)), 32))
-	_do_ocr(cv2.cvtColor(proc, cv2.COLOR_GRAY2BGR))
-
 	if cache_key is not None:
 		_reocr_cache[cache_key] = candidates
 	return candidates

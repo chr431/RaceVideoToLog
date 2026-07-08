@@ -33,13 +33,6 @@ def _preprocess_standard(crop: np.ndarray, target_h: float, pad: float) -> np.nd
     return _finish_preprocess(gray, target_h, pad)
 
 
-def _preprocess_otsu(crop: np.ndarray, target_h: float, pad: float) -> np.ndarray:
-    """OTSU 备选预处理：灰度化 + OTSU 二值化 + 缩放 + 填充 + 转 BGR。"""
-    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-    _, gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    return _finish_preprocess(gray, target_h, pad)
-
-
 def _finish_preprocess(gray: np.ndarray, target_h: float, pad: float) -> np.ndarray:
     """统一的缩放 + 填充 + 转 BGR。"""
     h, w = gray.shape[:2]
@@ -300,10 +293,6 @@ class ProcessingPipeline:
             ts, crop, proc = item
             ocr_result, _ = ocr(proc)
             sv, rt = extract_speed_value(ocr_result)
-            if sv is None:
-                proc_fb = _preprocess_otsu(crop, self._target_h, self._pad)
-                ocr_result, _ = ocr(proc_fb)
-                sv, rt = extract_speed_value(ocr_result)
             if sv is not None and rt is not None:
                 observations.append(SpeedObservation(
                     timestamp=ts,
