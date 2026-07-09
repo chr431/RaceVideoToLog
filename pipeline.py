@@ -95,7 +95,17 @@ class ProcessingPipeline:
         if not self._observations:
             raise RuntimeError("未识别到任何速度数据。")
 
-        self._run_correction_pass(Path(output_path), skip_fill=False)
+        # max_speed <= 0: raw OCR output, skip all correction
+        if self._max_speed <= 0:
+            self._emit("跳过纠错（原始OCR输出）...", 95.0)
+            self._rows = []
+            for obs in self._observations:
+                v = obs.raw_speed_kmh if obs.raw_speed_kmh >= 0 else 0.0
+                self._rows.append([obs.timestamp, 0.0, v, 0])
+            self._integrate_distance()
+            self._write_csv(self._rows, Path(output_path), auto_anchor=False)
+        else:
+            self._run_correction_pass(Path(output_path), skip_fill=False)
         self._emit("完成", 100.0)
 
     def run_review_pass1(self, output_path: str | Path | None = None) -> tuple | None:
