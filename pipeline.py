@@ -135,7 +135,7 @@ class ProcessingPipeline:
         self._rows = correct_with_anchors(
             self._rows, self._observations, self._raw_frames, self._ocr,
             self._max_speed, self._max_accel, self._anchor_indices,
-            progress_fn=_prog, timing=corr_timing)
+            progress_fn=_prog, timing=corr_timing, skip_fill=True)
         self._print_reocr_timing(corr_timing)
 
         self._emit("计算置信度...", 97.5)
@@ -184,7 +184,7 @@ class ProcessingPipeline:
         self._rows = correct_with_anchors(
             self._rows, self._observations, self._raw_frames, self._ocr,
             self._max_speed, self._max_accel, self._anchor_indices,
-            skip_fill=True, timing=corr_timing)
+            skip_fill=False, timing=corr_timing)
         self._print_reocr_timing(corr_timing)
 
         self._integrate_distance()
