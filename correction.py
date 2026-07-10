@@ -105,7 +105,7 @@ def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: 
 		error_set = _detect_errors(rows, anchors, times, max_speed_kmh, max_accel_mps2)
 		for i in error_set:
 			if i not in anchors and rows[i][3] < 2:
-				rows[i][3] = 3
+				rows[i][3] = 30
 		if log_fn:
 			log_fn(f"  Stage 5: {len(error_set)} frames flagged for manual review")
 	else:
@@ -292,7 +292,7 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
 				if abs(raw_val - interp_cand) > 0.5:
 					rows[i][2] = interp_cand
 					if rows[i][3] == 0:
-						rows[i][3] = 1
+						rows[i][3] = 11
 					fixed += 1
 			else:
 				best_val = None
@@ -308,7 +308,7 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
 				if best_val is not None and abs(rows[i][2] - best_val) > 0.5:
 					rows[i][2] = best_val
 					if rows[i][3] == 0:
-						rows[i][3] = 1
+						rows[i][3] = 11
 					fixed += 1
 
 		progress_done += 1
@@ -470,7 +470,7 @@ def _fill_unrecoverable(rows: list, anchors: set, error_set: set, times: list, m
 			val = max(0.0, min(max_speed_kmh, lv + left_max_dv))
 		rows[i][2] = val
 		if rows[i][3] == 0:
-			rows[i][3] = 1
+			rows[i][3] = 12
 
 		progress_done += 1
 		if progress_fn:
@@ -549,9 +549,9 @@ def compute_confidence(rows: list, observations: list, max_speed: float,
                     reasons.append(r)
 
         # 纠错标记
-        if flags[i] == 1:
+        if 10 <= flags[i] <= 19:
             score -= 30
-            reasons.append('自动纠错')
+            reasons.append('auto-corrected')
 
         # SG 平滑偏差
         if win >= 5:

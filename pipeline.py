@@ -116,7 +116,7 @@ class ProcessingPipeline:
         self._rows = []
         for i, obs in enumerate(self._observations):
             self._rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh,
-                               2 if i in self._anchor_indices else 0])
+                               21 if i in self._anchor_indices else 0])
 
         self._emit("计算置信度...", 97.5)
         confidences = compute_confidence(self._rows, self._observations,
@@ -144,7 +144,7 @@ class ProcessingPipeline:
         for fi, v in corrections.items():
             if 0 <= fi < len(self._rows):
                 self._rows[fi][2] = v
-                self._rows[fi][3] = 2
+                self._rows[fi][3] = 22
                 self._anchor_indices.add(fi)
 
         for seg_start in confirmed_segments:
@@ -152,7 +152,7 @@ class ProcessingPipeline:
                 if seg["start"] == seg_start:
                     for fi in range(seg["start"], seg["end"] + 1):
                         if fi not in corrections and 0 <= fi < len(self._rows):
-                            self._rows[fi][3] = 2
+                            self._rows[fi][3] = 23
                             self._anchor_indices.add(fi)
                     break
 
@@ -195,7 +195,7 @@ class ProcessingPipeline:
             self._rows = []
             for i, obs in enumerate(self._observations):
                 self._rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh,
-                                   2 if i in self._anchor_indices else 0])
+                                   21 if i in self._anchor_indices else 0])
 
         self._emit("纠错: 检测误差...", progress_base + 1.0)
         corr_timing: dict[str, float] = {}

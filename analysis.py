@@ -98,8 +98,8 @@ def plot_segmented(ax: "Axes", x: "np.ndarray | list[float]", y: "np.ndarray | l
                    smooth_strength: int) -> None:
 	"""平滑 + 纠错段着色。
 
-	- 红色 (#F44336): 自动纠错 (flag=1)
-	- 绿色 (#81C784): 人工纠错 (flag>=2)
+	- red (#F44336): auto-corrected (flag 11-19)
+	- green (#81C784): anchor (flag >= 20)
 	"""
 	red = "#F44336"
 	green = "#81C784"
@@ -122,10 +122,10 @@ def plot_segmented(ax: "Axes", x: "np.ndarray | list[float]", y: "np.ndarray | l
 	rx, ry = [], []
 	i = 0
 	while i < n_orig:
-		if flags[i] == 1:
-			# 找到连续 flag=1 段
+		if 10 <= flags[i] <= 19:
+			# find consecutive auto-corrected segment
 			j = i
-			while j < n_orig and flags[j] == 1:
+			while j < n_orig and 10 <= flags[j] <= 19:
 				j += 1
 			run_len = j - i
 			# 映射到平滑后的索引：覆盖 run_len+1 个数据点（段头尾各延半帧）
@@ -141,13 +141,13 @@ def plot_segmented(ax: "Axes", x: "np.ndarray | list[float]", y: "np.ndarray | l
 	if rx:
 		ax.plot(rx, ry, color=red, linewidth=2.0)
 
-	# 绿色段（flag>=2 人工纠错）
+	# green segment (flag >= 20, anchors)
 	gx, gy = [], []
 	i = 0
 	while i < n_orig:
-		if flags[i] >= 2:
+		if flags[i] >= 20:
 			j = i
-			while j < n_orig and flags[j] >= 2:
+			while j < n_orig and flags[j] >= 20:
 				j += 1
 			si = int(max(0, i - 0.5) * n_smooth / n_orig)
 			ei = int(min(n_orig, j + 0.5) * n_smooth / n_orig)
