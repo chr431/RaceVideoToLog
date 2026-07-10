@@ -90,8 +90,7 @@ class ProcessingPipeline:
             self._emit("跳过纠错（原始OCR输出）...", 95.0)
             self._rows = []
             for obs in self._observations:
-                v = obs.raw_speed_kmh if obs.raw_speed_kmh >= 0 else 0.0
-                self._rows.append([obs.timestamp, 0.0, v, 0])
+                self._rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh, 0])
             self._integrate_distance()
             self._write_csv(self._rows, Path(output_path), auto_anchor=False)
         else:
@@ -116,8 +115,7 @@ class ProcessingPipeline:
 
         self._rows = []
         for i, obs in enumerate(self._observations):
-            v = obs.raw_speed_kmh if obs.raw_speed_kmh >= 0 else 0.0
-            self._rows.append([obs.timestamp, 0.0, v,
+            self._rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh,
                                2 if i in self._anchor_indices else 0])
 
         self._emit("计算置信度...", 97.5)
@@ -307,7 +305,7 @@ class ProcessingPipeline:
     def _integrate_distance(self) -> None:
         dist = 0.0; prev_t = prev_v = None
         for r in self._rows:
-            v = r[2] / 3.6
+            v = r[2] / 3.6 if r[2] >= 0 else 0.0
             if prev_t is not None and prev_v is not None:
                 dt = r[0] - prev_t
                 if dt > 0:
