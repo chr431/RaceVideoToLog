@@ -767,8 +767,10 @@ class RaceVideoToLogApp(QMainWindow):
 					rb.setChecked(True); break
 		if "manual_anchor" in settings:
 			self.mode_baseline.setChecked(True)
+			self._on_mode("baseline")
 		elif "auto_anchor" in settings:
 			self.mode_auto.setChecked(True)
+			self._on_mode("auto")
 		self._status_label.setText(f"已导入设置: {Path(path).name}")
 
 	def _export_csv(self) -> None:
