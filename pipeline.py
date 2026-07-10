@@ -123,7 +123,7 @@ class ProcessingPipeline:
         self._emit("计算置信度...", 97.5)
         confidences = compute_confidence(self._rows, self._observations,
                                          self._max_speed, self._max_accel)
-        segments = find_problem_segments(confidences)
+        segments = find_problem_segments(confidences, min_segment_len=1)
 
         if segments:
             self._emit(f"发现 {len(segments)} 个问题段，等待人工审核...", 98.5)
