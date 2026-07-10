@@ -2,7 +2,7 @@
 运行在调用者线程中（GUI 应在原生 threading.Thread 中调用以避免 QThread 性能损失）。
 """
 from __future__ import annotations
-import csv, time
+import csv
 from pathlib import Path
 from collections.abc import Callable
 
@@ -14,17 +14,10 @@ import ocr_engine as _oe
 from ocr_engine import (
     auto_select_anchors, clamp_region, compute_video_hash,
     extract_speed_value, SpeedObservation,
-    SOURCE_TO_KMH,
+    SOURCE_TO_KMH, _parse_int_or_none,
     _reset_backend, _select_backend, _get_model_kwargs,
 )
 from correction import correct_with_anchors, compute_confidence, find_problem_segments
-
-
-def _parse_int_or_none(s: str) -> int | None:
-    try:
-        return int(s.strip()) if s.strip() else None
-    except Exception:
-        return None
 
 
 def _preprocess_standard(crop: np.ndarray, target_h: float, pad: float) -> np.ndarray:
@@ -74,14 +67,13 @@ class ProcessingPipeline:
         self._frame_end = frame_end
         self._progress = progress_cb
 
-        # 状态（run_review_pass1 后填充，供 run_review_pass2 使用）
+        # 状态
         self._ocr: RapidOCR | None = None
         self._raw_frames: list[tuple[float, np.ndarray]] = []
         self._observations: list[SpeedObservation] = []
         self._rows: list[list] = []
-        self._anchor_indices: set = set()
+        self._anchor_indices: set[int] = set()
         self._segments: list[dict] = []
-        self._backend_actual: str = "CPU"
 
     # ═══════════════ 公开接口 ═══════════════
 
@@ -89,13 +81,11 @@ class ProcessingPipeline:
         """自动锚点模式：完整流水线 → 写 CSV。"""
         self._emit("加载 OCR 引擎...", 1.0)
         self._ensure_ocr()
-
         self._run_ocr()
 
         if not self._observations:
             raise RuntimeError("未识别到任何速度数据。")
 
-        # max_speed <= 0: raw OCR output, skip all correction
         if self._max_speed <= 0:
             self._emit("跳过纠错（原始OCR输出）...", 95.0)
             self._rows = []
@@ -105,48 +95,19 @@ class ProcessingPipeline:
             self._integrate_distance()
             self._write_csv(self._rows, Path(output_path), auto_anchor=False)
         else:
-            self._run_correction_pass(Path(output_path), skip_fill=False)
+            self._run_correction(Path(output_path), skip_fill=False)
         self._emit("完成", 100.0)
 
     def run_review_pass1(self, output_path: str | Path | None = None) -> tuple | None:
-        """人工辅助第 1 轮：OCR → 纠错 → 置信度 → 问题段。
-
-        Args:
-            output_path: 无问题段时自动写 CSV 的目标路径。None 则跳过写出。
-        Returns:
-            (rows, observations, raw_frames, confidences, segments) 或 None（无问题段）
-        """
+        """人工辅助第 1 轮：OCR → 纠错 → 置信度 → 问题段。"""
         self._emit("加载 OCR 引擎...", 1.0)
         self._ensure_ocr()
-
         self._run_ocr()
+
         if not self._observations:
             raise RuntimeError("未识别到任何速度数据。")
 
-        self._emit("锚点选择 + 纠错...", 91.0)
-        self._anchor_indices = auto_select_anchors(
-            self._observations, self._max_speed, max_accel_mps2=self._max_accel)
-        if len(self._anchor_indices) < 3:
-            raise RuntimeError("自动锚点选择失败：未找到足够的可靠帧。")
-
-        self._rows = []
-        for i, obs in enumerate(self._observations):
-            self._rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh,
-                               2 if i in self._anchor_indices else 0])
-
-        self._emit("纠错: 检测误差...", 92.0)
-        from correction import correct_with_anchors, compute_confidence, find_problem_segments
-        corr_timing: dict[str, float] = {}
-        def _prog(done: int, total: int) -> None:
-            if done % max(1, total // 5) != 0 and done != total:
-                return
-            pct = done / max(total, 1)
-            self._emit(f"纠错: {done}/{total} 帧", 92.0 + pct * 5.0)
-        self._rows = correct_with_anchors(
-            self._rows, self._observations, self._raw_frames, self._ocr,
-            self._max_speed, self._max_accel, self._anchor_indices,
-            progress_fn=_prog, timing=corr_timing, skip_fill=True)
-        self._print_reocr_timing(corr_timing)
+        self._correct(92.0, 5.0, skip_fill=True)
 
         self._emit("计算置信度...", 97.5)
         confidences = compute_confidence(self._rows, self._observations,
@@ -169,18 +130,13 @@ class ProcessingPipeline:
     def run_review_pass2(self, corrections: dict[int, float],
                          confirmed_segments: set[int],
                          output_path: str | Path) -> None:
-        """人工辅助第 2 轮：合并手动修正 → 再纠错 → 写 CSV。
-
-        依赖 run_review_pass1 已填充的内部状态。
-        """
-        # 合并手动修正
+        """人工辅助第 2 轮：合并手动修正 → 再纠错 → 写 CSV。"""
         for fi, v in corrections.items():
             if 0 <= fi < len(self._rows):
                 self._rows[fi][2] = v
                 self._rows[fi][3] = 2
                 self._anchor_indices.add(fi)
 
-        # 确认正确的段: 所有帧 flag=2
         for seg_start in confirmed_segments:
             for seg in self._segments:
                 if seg["start"] == seg_start:
@@ -190,19 +146,14 @@ class ProcessingPipeline:
                             self._anchor_indices.add(fi)
                     break
 
-        corr_timing: dict[str, float] = {}
-        self._rows = correct_with_anchors(
-            self._rows, self._observations, self._raw_frames, self._ocr,
-            self._max_speed, self._max_accel, self._anchor_indices,
-            skip_fill=False, timing=corr_timing)
-        self._print_reocr_timing(corr_timing)
+        self._correct(91.0, 7.0, skip_fill=False)
 
         self._integrate_distance()
         self._write_csv(self._rows, Path(output_path), auto_anchor=False,
                         manual_anchor=True)
         self._emit(f"人工审核完成 — {len(corrections)} 帧已修正，结果已保存。", 100.0)
 
-    # ═══════════════ 内部：阶段实现 ═══════════════
+    # ═══════════════ 内部 ═══════════════
 
     def _emit(self, msg: str, pct: float) -> None:
         if self._progress:
@@ -216,13 +167,47 @@ class ProcessingPipeline:
             self._ocr = RapidOCR(**(kw or {}))
         return self._ocr
 
+    def _correct(self, progress_base: float, progress_span: float,
+                 skip_fill: bool) -> None:
+        """共享纠错逻辑：锚点选择 → 构建 rows → correct_with_anchors。"""
+        self._emit("锚点选择 + 纠错...", progress_base)
+        self._anchor_indices = auto_select_anchors(
+            self._observations, self._max_speed, max_accel_mps2=self._max_accel)
+        if len(self._anchor_indices) < 3:
+            raise RuntimeError("自动锚点选择失败：未找到足够的可靠帧。")
+
+        self._rows = []
+        for i, obs in enumerate(self._observations):
+            self._rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh,
+                               2 if i in self._anchor_indices else 0])
+
+        self._emit("纠错: 检测误差...", progress_base + 1.0)
+        corr_timing: dict[str, float] = {}
+        def _prog(done: int, total: int) -> None:
+            if done % max(1, total // 5) != 0 and done != total:
+                return
+            pct = done / max(total, 1)
+            self._emit(f"纠错: {done}/{total} 帧", progress_base + 1.0 + pct * progress_span)
+        self._rows = correct_with_anchors(
+            self._rows, self._observations, self._raw_frames, self._ocr,
+            self._max_speed, self._max_accel, self._anchor_indices,
+            progress_fn=_prog, timing=corr_timing, skip_fill=skip_fill)
+        if corr_timing.get("re_ocr", 0) > 0:
+            print(f"  [重OCR] {corr_timing['re_ocr']:.2f}s")
+
+    def _run_correction(self, output_path: Path, skip_fill: bool) -> None:
+        """自动锚点模式的完整纠错 + 写 CSV（调用 _correct 后继续）。"""
+        self._correct(91.0, 6.0, skip_fill=skip_fill)
+        self._integrate_distance()
+        self._write_csv(self._rows, output_path, auto_anchor=True)
+        self._emit("完成", 100.0)
+
     def _run_ocr(self) -> None:
-        """解码 + OCR 流水线：producer 线程解码并预处理，consumer 做 OCR 推理。"""
+        """解码 + OCR：producer 线程解码并预处理，consumer 做 ONNX 推理。"""
         import threading
         from queue import Queue
 
         ocr = self._ocr
-        max_speed = self._max_speed
         speed_format = self._speed_format
         target_h = self._target_h
         pad = self._pad
@@ -239,7 +224,6 @@ class ProcessingPipeline:
         _end_limit = f_end if f_end is not None else total_video_frames
 
         self._raw_frames = []
-        raw_frames_local: list[tuple[float, np.ndarray]] = []
         buf_size = max(2, self._buffer_size * 2)
         q: Queue = Queue(maxsize=buf_size)
         errors: list[Exception] = []
@@ -261,9 +245,9 @@ class ProcessingPipeline:
                         break
                     ts = fi / fps if fps > 0 else 0.0
                     crop = frame[y1:y2 + 1, x1:x2 + 1].copy()
-                    raw_frames_local.append((ts, crop))
+                    self._raw_frames.append((ts, crop))
                     proc = _preprocess_standard(crop, target_h, pad)
-                    q.put((ts, crop, proc))
+                    q.put((ts, proc))
                     fi += 1
                 q.put(None)
             except Exception as e:
@@ -277,13 +261,12 @@ class ProcessingPipeline:
 
         observations: list[SpeedObservation] = []
         done = 0
-        # Estimate total from frame range
         est_total = (_end_limit - (f_start or 0)) // frame_step
         while True:
             item = q.get()
             if item is None:
                 break
-            ts, crop, proc = item
+            ts, proc = item
             ocr_result, _ = ocr(proc)
             sv, rt = extract_speed_value(ocr_result)
             if sv is not None and rt is not None:
@@ -300,39 +283,7 @@ class ProcessingPipeline:
         t.join()
         if errors:
             raise errors[0]
-        self._raw_frames = raw_frames_local
         self._observations = observations
-
-    def _run_correction_pass(self, output_path: Path, skip_fill: bool,
-                             manual_anchor: bool = False) -> None:
-        self._emit("锚点选择 + 纠错...", 91.0)
-        self._anchor_indices = auto_select_anchors(
-            self._observations, self._max_speed, max_accel_mps2=self._max_accel)
-        if len(self._anchor_indices) < 3:
-            raise RuntimeError("自动锚点选择失败：未找到足够的可靠帧。")
-
-        self._rows = []
-        for i, obs in enumerate(self._observations):
-            self._rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh,
-                               2 if i in self._anchor_indices else 0])
-
-        self._emit("纠错: 检测误差...", 92.0)
-        corr_timing: dict[str, float] = {}
-        def _prog(done: int, total: int) -> None:
-            if done % max(1, total // 5) != 0 and done != total:
-                return
-            pct = done / max(total, 1)
-            self._emit(f"纠错: {done}/{total} 帧", 92.0 + pct * 6.0)
-        self._rows = correct_with_anchors(
-            self._rows, self._observations, self._raw_frames, self._ocr,
-            self._max_speed, self._max_accel, self._anchor_indices,
-            progress_fn=_prog, timing=corr_timing, skip_fill=skip_fill)
-        self._print_reocr_timing(corr_timing)
-
-        self._integrate_distance()
-        self._write_csv(self._rows, output_path, auto_anchor=not manual_anchor,
-                        manual_anchor=manual_anchor)
-        self._emit("完成", 100.0)
 
     def _integrate_distance(self) -> None:
         dist = 0.0; prev_t = prev_v = None
@@ -365,8 +316,3 @@ class ProcessingPipeline:
             for row in rows:
                 w.writerow([f"{row[0]:.2f}", f"{row[1]:.2f}",
                            f"{row[2]:.2f}", str(row[3])])
-
-    @staticmethod
-    def _print_reocr_timing(t: dict) -> None:
-        if t.get("re_ocr", 0) > 0:
-            print(f"  [重OCR] {t['re_ocr']:.2f}s")
