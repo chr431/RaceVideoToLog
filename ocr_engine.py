@@ -672,45 +672,32 @@ def auto_select_anchors(observations: list["SpeedObservation"], max_speed_kmh: f
 		if keep:
 			anchors_filtered.add(i)
 
-	# ═══ Acceleration validation: anchors must be physically reachable ═══
-	# When OCR misreads the same value across consecutive frames (e.g. "200"→"20"),
-	# the neighbor check above can be fooled (errors agree with each other).
-	# Skip same-cluster anchors (within 2 km/h) to find a "real" neighbor,
-	# then check if implied acceleration exceeds 2× max_accel.
-	# Remove anchor if unreachable from EITHER side (not just both).
-	max_dv_per_sec = max_accel_mps2 * 3.6 * 2.0  # km/h per second (2x safety margin)
+	# ═══ Acceleration validation ═══
+	# Check acceleration to nearest frame with >2 km/h difference (any frame,
+	# not just anchors) — avoids "same-cluster" OCR repeat errors fooling the check.
+	max_dv_per_sec = max_accel_mps2 * 3.6 * 2.0  # km/h/s (2x safety margin)
 	anchors_validated: set[int] = set()
 	for i in anchors_filtered:
 		v = raw_vals[i]
-		left_fail = False
-		right_fail = False
+		left_fail = right_fail = False
 
-		# Find nearest anchor on left with a meaningfully different value
+		# Left: nearest frame (any valid speed) with >2 km/h difference
 		for j in range(i - 1, -1, -1):
-			if j in anchors_filtered and raw_vals[j] > 0:
-				if abs(raw_vals[j] - v) > 2.0:  # skip same-cluster errors
-					dt = times[i] - times[j]
-					if abs(v - raw_vals[j]) / max(dt, 0.001) > max_dv_per_sec:
-						left_fail = True
-					break
-				# else: same cluster (OCR repeated error), keep looking
-		else:
-			left_fail = False  # no different-valued anchor found → OK
+			if raw_vals[j] > 0 and abs(raw_vals[j] - v) > 2.0:
+				dt = times[i] - times[j]
+				if abs(v - raw_vals[j]) / max(dt, 0.001) > max_dv_per_sec:
+					left_fail = True
+				break
 
-		# Find nearest anchor on right with a meaningfully different value
+		# Right: nearest frame (any valid speed) with >2 km/h difference
 		for j in range(i + 1, n):
-			if j in anchors_filtered and raw_vals[j] > 0:
-				if abs(raw_vals[j] - v) > 2.0:  # skip same-cluster errors
-					dt = times[j] - times[i]
-					if abs(raw_vals[j] - v) / max(dt, 0.001) > max_dv_per_sec:
-						right_fail = True
-					break
-				# else: same cluster (OCR repeated error), keep looking
-		else:
-			right_fail = False  # no different-valued anchor found → OK
+			if raw_vals[j] > 0 and abs(raw_vals[j] - v) > 2.0:
+				dt = times[j] - times[i]
+				if abs(raw_vals[j] - v) / max(dt, 0.001) > max_dv_per_sec:
+					right_fail = True
+				break
 
-		# Remove anchor if physically unreachable from either side
-		if not (left_fail or right_fail):
+		if not (left_fail or right_fail):  # keep only if NEITHER side fails accel check
 			anchors_validated.add(i)
 
 	return anchors_validated
