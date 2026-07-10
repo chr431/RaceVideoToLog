@@ -727,9 +727,13 @@ class RaceVideoToLogApp(QMainWindow):
 			try:
 				parts = [int(x.strip()) for x in settings["roi"].split(",")]
 				if len(parts) == 4:
-					for spin, v in [(self.roi_x1, parts[0]), (self.roi_y1, parts[1]),
-					                (self.roi_x2, parts[2]), (self.roi_y2, parts[3])]:
-						spin.setValue(v)
+					# Block signals to prevent _on_roi_spin clamping during bulk set
+					for s in [self.roi_x1, self.roi_y1, self.roi_x2, self.roi_y2]:
+						s.blockSignals(True)
+					self.roi_x2.setValue(parts[2]); self.roi_y2.setValue(parts[3])
+					self.roi_x1.setValue(parts[0]); self.roi_y1.setValue(parts[1])
+					for s in [self.roi_x1, self.roi_y1, self.roi_x2, self.roi_y2]:
+						s.blockSignals(False)
 			except ValueError:
 				pass
 		for key, widget, cast in [
@@ -761,6 +765,10 @@ class RaceVideoToLogApp(QMainWindow):
 			                (self._fmt_mph, "mile/h")]:
 				if key == fmt:
 					rb.setChecked(True); break
+		if "manual_anchor" in settings:
+			self.mode_baseline.setChecked(True)
+		elif "auto_anchor" in settings:
+			self.mode_auto.setChecked(True)
 		self._status_label.setText(f"已导入设置: {Path(path).name}")
 
 	def _export_csv(self) -> None:
