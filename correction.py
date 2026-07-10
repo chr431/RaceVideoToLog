@@ -436,30 +436,38 @@ def _fill_unrecoverable(rows: list, anchors: set, error_set: set, times: list, m
 	total = len(sorted_errors)
 	progress_done = 0
 	for i in sorted_errors:
+		# Left reference: any frame with valid speed (including previously filled)
 		la = None
 		for j in range(i - 1, -1, -1):
-			if j in anchors or j not in error_set:
-				if 0 <= rows[j][2] <= max_speed_kmh:
-					la = j; break
+			if 0 <= rows[j][2] <= max_speed_kmh:
+				la = j; break
 		if la is None:
 			continue
 		lv = rows[la][2]; lt = rows[la][0]
+
+		# Right reference: nearest anchor
 		ra = None
 		for j in range(i + 1, n):
-			if j in anchors:
-				if 0 <= rows[j][2] <= max_speed_kmh:
-					ra = j; break
+			if j in anchors and 0 <= rows[j][2] <= max_speed_kmh:
+				ra = j; break
+
+		left_dt = max(times[i] - lt, 0.001)
+		left_max_dv = max_accel_mps2 * left_dt * 3.6
 		if ra is not None:
 			rv = rows[ra][2]; rt = rows[ra][0]
-			total_dt = max(rt - lt, 0.001)
-			frac = (times[i] - lt) / total_dt
-			val = lv + (rv - lv) * frac
+			right_dt = max(rt - times[i], 0.001)
+			right_max_dv = max_accel_mps2 * right_dt * 3.6
+			# Range reachable from left anchor
+			lo = max(0.0, lv - left_max_dv)
+			hi = min(max_speed_kmh, lv + left_max_dv)
+			# Also must be reachable from right anchor
+			lo = max(lo, rv - right_max_dv)
+			hi = min(hi, rv + right_max_dv)
+			# Linear interp clamped to reachable range
+			interp = lv + (rv - lv) * (left_dt / max(left_dt + right_dt, 0.001))
+			val = max(lo, min(hi, interp))
 		else:
-			val = lv
-		dt = max(times[i] - lt, 0.001)
-		max_dv = max_accel_mps2 * dt * 3.6
-		val = max(lv - max_dv, min(lv + max_dv, val))
-		val = max(0.0, min(max_speed_kmh, val))
+			val = max(0.0, min(max_speed_kmh, lv + left_max_dv))
 		rows[i][2] = val
 		if rows[i][3] == 0:
 			rows[i][3] = 1
