@@ -107,7 +107,18 @@ class ProcessingPipeline:
         if not self._observations:
             raise RuntimeError("未识别到任何速度数据。")
 
-        self._correct(92.0, 5.0, skip_fill=True)
+        # 跳过纠错：直接用原始OCR数据标记问题段
+        self._emit("锚点选择...", 91.0)
+        self._anchor_indices = auto_select_anchors(
+            self._observations, self._max_speed, max_accel_mps2=self._max_accel)
+        if len(self._anchor_indices) < 3:
+            raise RuntimeError("自动锚点选择失败：未找到足够的可靠帧。")
+
+        self._rows = []
+        for i, obs in enumerate(self._observations):
+            v = obs.raw_speed_kmh if obs.raw_speed_kmh >= 0 else 0.0
+            self._rows.append([obs.timestamp, 0.0, v,
+                               2 if i in self._anchor_indices else 0])
 
         self._emit("计算置信度...", 97.5)
         confidences = compute_confidence(self._rows, self._observations,
@@ -146,7 +157,7 @@ class ProcessingPipeline:
                             self._anchor_indices.add(fi)
                     break
 
-        self._correct(91.0, 7.0, skip_fill=False)
+        self._correct(91.0, 7.0, skip_fill=False, reuse_anchors=True)
 
         self._integrate_distance()
         self._write_csv(self._rows, Path(output_path), auto_anchor=False,
@@ -168,18 +179,22 @@ class ProcessingPipeline:
         return self._ocr
 
     def _correct(self, progress_base: float, progress_span: float,
-                 skip_fill: bool) -> None:
-        """共享纠错逻辑：锚点选择 → 构建 rows → correct_with_anchors。"""
-        self._emit("锚点选择 + 纠错...", progress_base)
-        self._anchor_indices = auto_select_anchors(
-            self._observations, self._max_speed, max_accel_mps2=self._max_accel)
-        if len(self._anchor_indices) < 3:
-            raise RuntimeError("自动锚点选择失败：未找到足够的可靠帧。")
+                 skip_fill: bool, reuse_anchors: bool = False) -> None:
+        """共享纠错逻辑：锚点选择 → 构建 rows → correct_with_anchors。
 
-        self._rows = []
-        for i, obs in enumerate(self._observations):
-            self._rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh,
-                               2 if i in self._anchor_indices else 0])
+        reuse_anchors=True 时使用 self._anchor_indices 和 self._rows 的已有值，
+        跳过锚点选择和 rows 构建（用于 pass2 手动锚点场景）。
+        """
+        if not reuse_anchors:
+            self._emit("锚点选择 + 纠错...", progress_base)
+            self._anchor_indices = auto_select_anchors(
+                self._observations, self._max_speed, max_accel_mps2=self._max_accel)
+            if len(self._anchor_indices) < 3:
+                raise RuntimeError("自动锚点选择失败：未找到足够的可靠帧。")
+            self._rows = []
+            for i, obs in enumerate(self._observations):
+                self._rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh,
+                                   2 if i in self._anchor_indices else 0])
 
         self._emit("纠错: 检测误差...", progress_base + 1.0)
         corr_timing: dict[str, float] = {}
