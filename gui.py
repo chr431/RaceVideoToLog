@@ -421,8 +421,8 @@ class RaceVideoToLogApp(QMainWindow):
 		self._fmt_ms.clicked.connect(lambda: self._on_fmt("m/s"))
 		self._fmt_kmh.clicked.connect(lambda: self._on_fmt("km/h"))
 		self._fmt_mph.clicked.connect(lambda: self._on_fmt("mile/h"))
-		self.mode_auto.clicked.connect(lambda: self._on_mode("auto"))
-		self.mode_baseline.clicked.connect(lambda: self._on_mode("baseline"))
+		self.mode_auto.toggled.connect(lambda checked: checked and self._on_mode("auto"))
+		self.mode_baseline.toggled.connect(lambda checked: checked and self._on_mode("baseline"))
 		self.backend_combo.currentIndexChanged.connect(self._on_backend)
 
 		self.debug_cb.toggled.connect(lambda v: setattr(self, '_debug_log', v))
@@ -766,11 +766,11 @@ class RaceVideoToLogApp(QMainWindow):
 				if key == fmt:
 					rb.setChecked(True); break
 		if "manual_anchor" in settings:
+			self.mode_auto.setChecked(False)
 			self.mode_baseline.setChecked(True)
-			self._on_mode("baseline")
 		elif "auto_anchor" in settings:
+			self.mode_baseline.setChecked(False)
 			self.mode_auto.setChecked(True)
-			self._on_mode("auto")
 		self._status_label.setText(f"已导入设置: {Path(path).name}")
 
 	def _export_csv(self) -> None:
