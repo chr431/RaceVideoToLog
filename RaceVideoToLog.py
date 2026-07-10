@@ -31,7 +31,51 @@ def main() -> None:
 	parser.add_argument("--analysis-out", type=str)
 	parser.add_argument("--frame-start", type=int, metavar="N")
 	parser.add_argument("--frame-end", type=int, metavar="N")
+	parser.add_argument("--from-csv", type=str, metavar="PATH",
+		help="从已有 CSV 文件头导入设置（可被显式参数覆盖）")
 	args = parser.parse_args()
+
+	# ── 从 CSV 导入设置 ──
+	if args.from_csv:
+		from ocr_engine import parse_csv_header
+		csv_settings = parse_csv_header(args.from_csv)
+		# 仅填充用户未显式指定的参数
+		# argparse defaults (action.default) vs user-specified
+		_defaults = {a.dest: a.default
+		             for a in parser._actions if a.dest != "help"}
+		for key, val in csv_settings.items():
+			# Map CSV keys to argparse dest names
+			_dest = {
+				"roi": "roi", "format": "format", "max_speed": "max_speed",
+				"max_accel": "max_accel", "div": "div", "target_h": "target_h",
+				"pad": "pad", "backend": "backend", "buffer": "buffer",
+				"frame_start": "frame_start", "frame_end": "frame_end",
+			}.get(key)
+			if _dest is None:
+				continue
+			# Only apply if arg still has its default value
+			cur = getattr(args, _dest)
+			if cur == _defaults.get(_dest):
+				if _dest == "roi":
+					try:
+						parts = [int(x.strip()) for x in val.split(",")]
+						if len(parts) == 4:
+							setattr(args, _dest, parts)
+					except ValueError:
+						pass
+				elif _dest in ("frame_start", "frame_end", "div", "target_h",
+				               "pad", "buffer"):
+					try:
+						setattr(args, _dest, int(val))
+					except ValueError:
+						pass
+				elif _dest in ("max_speed", "max_accel"):
+					try:
+						setattr(args, _dest, float(val))
+					except ValueError:
+						pass
+				else:
+					setattr(args, _dest, val)
 
 	if args.video:
 		from headless import run_headless

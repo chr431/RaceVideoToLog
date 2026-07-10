@@ -254,6 +254,9 @@ class RaceVideoToLogApp(QMainWindow):
 		self._file_label = BodyLabel("未导入视频")
 		self._file_label.setWordWrap(True)
 		hdr.addWidget(self._file_label, 1)
+		self._import_btn = PushButton("导入设置")
+		self._import_btn.clicked.connect(self._import_settings)
+		hdr.addWidget(self._import_btn)
 		self._export_btn = PrimaryPushButton("导出 CSV")
 		hdr.addWidget(self._export_btn)
 		self._cancel_btn = PushButton("取消")
@@ -709,6 +712,56 @@ class RaceVideoToLogApp(QMainWindow):
 		import gc; gc.collect()
 
 	# ═══════════════════ 导出 ═══════════════════
+
+	def _import_settings(self) -> None:
+		path, _ = QFileDialog.getOpenFileName(self, "选择 CSV 文件", "",
+			"CSV 文件 (*.csv);;所有文件 (*.*)")
+		if not path:
+			return
+		from ocr_engine import parse_csv_header
+		settings = parse_csv_header(path)
+		if not settings:
+			QMessageBox.warning(self, "导入失败", "无法解析 CSV 文件头。")
+			return
+		if "roi" in settings:
+			try:
+				parts = [int(x.strip()) for x in settings["roi"].split(",")]
+				if len(parts) == 4:
+					for spin, v in [(self.roi_x1, parts[0]), (self.roi_y1, parts[1]),
+					                (self.roi_x2, parts[2]), (self.roi_y2, parts[3])]:
+						spin.setValue(v)
+			except ValueError:
+				pass
+		for key, widget, cast in [
+			("max_speed", self.max_speed_edit, str),
+			("max_accel", self.max_accel_edit, str),
+			("div", self.div_spin, lambda v: int(float(v))),
+			("target_h", self.target_h_edit, str),
+			("pad", self.pad_edit, str),
+			("buffer", self.buffer_edit, str),
+			("frame_start", self.frame_start_edit, str),
+			("frame_end", self.frame_end_edit, str),
+		]:
+			if key in settings:
+				try:
+					val = cast(settings[key])
+					if hasattr(widget, "setValue"):
+						widget.setValue(val)
+					else:
+						widget.setText(str(val))
+				except Exception:
+					pass
+		if "backend" in settings:
+			be = settings["backend"].lower()
+			idx = {"auto": 0, "cuda": 1, "cpu": 2}.get(be, 0)
+			self.backend_combo.setCurrentIndex(idx)
+		if "format" in settings:
+			fmt = settings["format"].lower()
+			for rb, key in [(self._fmt_ms, "m/s"), (self._fmt_kmh, "km/h"),
+			                (self._fmt_mph, "mile/h")]:
+				if key == fmt:
+					rb.setChecked(True); break
+		self._status_label.setText(f"已导入设置: {Path(path).name}")
 
 	def _export_csv(self) -> None:
 		if self.video_path is None or self.metadata is None:

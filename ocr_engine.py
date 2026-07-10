@@ -27,7 +27,7 @@ __all__ = [
 	"ocr_digital_fallback", "compute_video_hash", "auto_select_anchors",
 	"_reset_backend", "_select_backend", "_get_model_kwargs",
 	"_gpu_backend", "_gpu_patched", "_CancelExport",
-	"_parse_int_or_none", "_estimate_raw_trust", "_savgol_filter_np",
+	"_parse_int_or_none", "parse_csv_header", "_estimate_raw_trust", "_savgol_filter_np",
 	"_set_rec_keys_path",
 ]
 
@@ -309,6 +309,27 @@ def _parse_int_or_none(s: str) -> int | None:
 		return int(s)
 	except ValueError:
 		return None
+
+
+def parse_csv_header(path: str) -> dict[str, str]:
+	"""从 CSV 文件头中提取第 3-4 行的参数。
+
+	Returns: {key: value} dict, e.g. {'roi': '862,945,957,1003', 'max_speed': '400', ...}
+	"""
+	settings: dict[str, str] = {}
+	try:
+		with open(path, "r", encoding="utf-8-sig") as f:
+			for _ in range(2):
+				f.readline()
+			for _ in range(2):
+				line = f.readline().lstrip("#").strip()
+				for part in line.split(", "):
+					if "=" in part:
+						k, v = part.split("=", 1)
+						settings[k.strip()] = v.strip()
+	except Exception:
+		pass
+	return settings
 
 
 def normalize_ocr_text(text: str) -> str:
