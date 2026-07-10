@@ -778,15 +778,17 @@ class RaceVideoToLogApp(QMainWindow):
 			self._review_segments, ms)
 		if dlg.exec() == QDialog.DialogCode.Accepted:
 			corrections = dlg.get_corrections()
+			partial_corrections = dlg.get_partial_corrections()
 			self._review_confirmed = dlg.get_confirmed()
 			try:
-				self._continue_with_manual_anchors(corrections)
+				self._continue_with_manual_anchors(corrections, partial_corrections)
 			except Exception as e:
 				self._progress_bar.setValue(0)
 				self._status_label.setText(f"审核失败: {e}")
 				import traceback; traceback.print_exc()
 
-	def _continue_with_manual_anchors(self, corrections: dict[int, float]) -> None:
+	def _continue_with_manual_anchors(self, corrections: dict[int, float],
+	                                   partial_corrections: dict[int, str] | None = None) -> None:
 		pipeline = getattr(self, "_pipeline", None)
 		if pipeline is None:
 			self._status_label.setText("错误: 处理状态丢失"); return
@@ -803,6 +805,7 @@ class RaceVideoToLogApp(QMainWindow):
 					corrections=corrections,
 					confirmed_segments=getattr(self, "_review_confirmed", set()),
 					output_path=out_path,
+					partial_corrections=partial_corrections or None,
 				)
 			except Exception as exc:
 				import traceback; traceback.print_exc()

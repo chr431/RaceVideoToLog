@@ -13,6 +13,38 @@ from ocr_engine import extract_speed_value, build_speed_candidates
 if TYPE_CHECKING:
     from rapidocr_onnxruntime import RapidOCR
 
+def expand_partial(pattern: str, max_speed: float) -> list[float]:
+    """Generate values matching a partial digit pattern. 'x' = any digit 0-9.
+
+    Supports any number of x's. All-x patterns (e.g. 'xxx') return empty
+    since they provide no constraint. Patterns with >3 x's also return
+    empty to avoid combinatorial explosion.
+    The caller always has re-OCR + interpolation as fallback candidates.
+    """
+    import itertools
+    x_count = pattern.count('x') + pattern.count('X')
+    if x_count == 0:
+        val = float(pattern)
+        return [val] if val <= max_speed else []
+    # No constraint = skip (all-x or too many x's)
+    if x_count == len(pattern) or x_count > 2:
+        return []
+    results = []
+    pattern_lower = pattern.lower()
+    for digits in itertools.product('0123456789', repeat=x_count):
+        di = 0
+        chars = []
+        for ch in pattern_lower:
+            if ch == 'x':
+                chars.append(digits[di]); di += 1
+            else:
+                chars.append(ch)
+        val = float(''.join(chars))
+        if val <= max_speed:
+            results.append(val)
+    return results
+
+
 # 重 OCR 缓存（避免同一帧重复处理）
 _reocr_cache: dict[int, set[float]] = {}
 
@@ -22,7 +54,8 @@ def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: 
                          log_fn: "Callable | None" = None,
                          progress_fn: "Callable | None" = None,
                          skip_fill: bool = False,
-                         timing: dict | None = None) -> list:
+                         timing: dict | None = None,
+                         partial_corrections: dict[int, str] | None = None) -> list:
 	"""5 阶段物理约束纠错流水线。
 
 	以 anchor_indices 中帧的速度为硬约束（固定不变），
@@ -51,7 +84,7 @@ def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: 
 	# ── 阶段 2+3：重 OCR + 最优选择（首轮）──
 	fixed = _fix_errors(rows, observations, raw_frames, ocr, error_set,
 	                    anchors, times, max_speed_kmh, max_accel_mps2,
-	                    progress_fn=progress_fn, timing=timing)
+	                    progress_fn=progress_fn, timing=timing, partial_corrections=partial_corrections)
 	if log_fn:
 		log_fn(f"  Stage 2+3: fixed {fixed} frames in round 1")
 
@@ -63,7 +96,7 @@ def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: 
 			break
 		fixed = _fix_errors(rows, observations, raw_frames, ocr, error_set,
 		                    anchors, times, max_speed_kmh, max_accel_mps2,
-		                    progress_fn=progress_fn, timing=timing)
+		                    progress_fn=progress_fn, timing=timing, partial_corrections=partial_corrections)
 		if log_fn:
 			log_fn(f"  Stage 4 round {rnd}: {len(error_set)} errors, fixed {fixed}")
 
@@ -231,7 +264,8 @@ def _detect_errors(rows: list, anchors: set, times: list, max_speed_kmh: float, 
 def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR", error_set: set,
                 anchors: set, times: list, max_speed_kmh: float, max_accel_mps2: float,
                 progress_fn: "Callable | None" = None,
-                timing: dict | None = None) -> int:
+                timing: dict | None = None,
+                partial_corrections: dict[int, str] | None = None) -> int:
 	"""阶段 2+3：对每个 error 帧重 OCR 获取备选，选最优值填入。"""
 	fixed = 0
 	progress_done = 0
@@ -245,6 +279,11 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
 		oid = min(i, len(observations) - 1)
 		confusion_cands = build_speed_candidates(observations[oid].raw_text, max_speed_kmh)
 		candidates.extend(c for c in confusion_cands if c not in candidates)
+
+		# 人工部分模式候选值
+		if partial_corrections and i in partial_corrections:
+			pattern_cands = expand_partial(partial_corrections[i], max_speed_kmh)
+			candidates.extend(c for c in pattern_cands if c not in candidates)
 
 		if candidates:
 			raw_val = rows[i][2]

@@ -6,12 +6,12 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QWidget, QLabel,
-    QListWidget, QListWidgetItem, QMessageBox, QSplitter,
+    QListWidget, QListWidgetItem, QMessageBox, QSplitter, QLineEdit,
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QPixmap, QImage, QPalette, QColor
 from qfluentwidgets import (BodyLabel, StrongBodyLabel, CaptionLabel,
-    PrimaryPushButton, PushButton, CardWidget, CompactSpinBox, isDarkTheme)
+    PrimaryPushButton, PushButton, CardWidget, isDarkTheme)
 from theme_manager import ThemeManager
 
 import cv2
@@ -44,6 +44,7 @@ class ReviewDialog(QDialog):
         self._segments = segments
         self._max_speed = max_speed
         self._corrections: dict[int, float] = {}
+        self._partial_corrections: dict[int, str] = {}
         self._confirmed: set[int] = set()
         self._current_frame: int = 0
         self._confirmed_segments: dict[int, dict[int, float]] = {}  # seg_start -> saved corrections
@@ -148,13 +149,10 @@ class ReviewDialog(QDialog):
         ctrl.addSpacing(4)
         cr = QHBoxLayout()
         cr.addWidget(BodyLabel("修正速度"))
-        self._speed_spin = CompactSpinBox()
-        self._speed_spin.setRange(0, int(self._max_speed))
-        self._speed_spin.setFixedWidth(90)
-        try: self._speed_spin.compactSpinButton.clicked.disconnect()
-        except Exception: pass
-        self._speed_spin._showFlyout = lambda: None
-        cr.addWidget(self._speed_spin)
+        self._speed_edit = QLineEdit()
+        self._speed_edit.setFixedWidth(90)
+        self._speed_edit.setPlaceholderText("ex: 123 or 12x")
+        cr.addWidget(self._speed_edit)
         cr.addWidget(BodyLabel("km/h"))
         cr.addStretch()
         ctrl.addLayout(cr)
@@ -333,10 +331,15 @@ class ReviewDialog(QDialog):
 
         self._current_frame = seg['start']; self._frame_label.setText(f"#{seg['start']}")
         self._show_frame_image(seg['start'])
-        # SpinBox: 有修正则显示修正值，否则显示当前帧的识别值
-        start_val = self._corrections.get(seg['start'], self._rows[seg['start']][2])
-        self._speed_spin.setValue(int(start_val))
-        self._btn_delete.setEnabled(seg['start'] in self._corrections)
+        # 有修正/部分修正则显示，否则显示当前帧的识别值
+        if seg['start'] in self._partial_corrections:
+            self._speed_edit.setText(self._partial_corrections[seg['start']])
+        elif seg['start'] in self._corrections:
+            self._speed_edit.setText(str(int(self._corrections[seg['start']])))
+        else:
+            self._speed_edit.setText(str(int(self._rows[seg['start']][2])))
+        self._btn_delete.setEnabled(
+            seg['start'] in self._corrections or seg['start'] in self._partial_corrections)
         self._update_corr_label()
         self._redraw_chart()
         seg_start = seg['start']
@@ -347,27 +350,44 @@ class ReviewDialog(QDialog):
 
     def _quick_correct(self, fi: int, val: float) -> None:
         self._current_frame = fi; self._frame_label.setText(f"#{fi}")
-        v = self._corrections.get(fi, val)
-        self._speed_spin.setValue(int(v))
-        self._btn_delete.setEnabled(fi in self._corrections)
+        if fi in self._partial_corrections:
+            self._speed_edit.setText(self._partial_corrections[fi])
+        elif fi in self._corrections:
+            self._speed_edit.setText(str(int(self._corrections[fi])))
+        else:
+            self._speed_edit.setText(str(int(val)))
+        self._btn_delete.setEnabled(
+            fi in self._corrections or fi in self._partial_corrections)
         self._show_frame_image(fi)
 
     def _add_correction(self) -> None:
         fi = getattr(self, "_current_frame", 0)
-        speed = self._speed_spin.value()
-        self._corrections[fi] = float(speed)
+        text = self._speed_edit.text().strip()
+        if not text:
+            return
+        # Parse: pure digits = exact, contains 'x' = partial
+        if 'x' in text.lower():
+            self._partial_corrections[fi] = text
+            self._corrections.pop(fi, None)
+            label = text
+        else:
+            try:
+                v = float(text)
+            except ValueError:
+                return
+            self._corrections[fi] = v
+            self._partial_corrections.pop(fi, None)
+            label = f"{v:.0f}km/h"
         self._update_corr_label()
         self._redraw_chart()
-        # 更新建议按钮文字以反映修正值
         for btn in self._suggested_btns:
             try:
                 f = btn.property("frame_idx")
             except Exception:
                 continue
             if f == fi:
-                btn.setText(f"#{fi} ({speed:.0f}km/h)")
+                btn.setText(f"#{fi} ({label})")
                 break
-        # 检查当前段是否已确认，若是则切换按钮
         row = self._list.currentRow()
         if row >= 0:
             seg = self._list.item(row).data(Qt.ItemDataRole.UserRole)
@@ -380,13 +400,12 @@ class ReviewDialog(QDialog):
 
     def _delete_correction(self) -> None:
         fi = getattr(self, "_current_frame", 0)
-        if fi not in self._corrections:
+        if fi not in self._corrections and fi not in self._partial_corrections:
             return
-        del self._corrections[fi]
-        # 恢复 SpinBox 为原始识别值
+        self._corrections.pop(fi, None)
+        self._partial_corrections.pop(fi, None)
         orig = self._rows[fi][2]
-        self._speed_spin.setValue(int(orig))
-        # 恢复建议按钮文字
+        self._speed_edit.setText(str(int(orig)))
         for btn in self._suggested_btns:
             try:
                 f = btn.property("frame_idx")
@@ -398,7 +417,6 @@ class ReviewDialog(QDialog):
         self._update_corr_label()
         self._redraw_chart()
         self._btn_delete.setEnabled(False)
-        # 若当前段已确认，切换按钮文字
         row = self._list.currentRow()
         if row >= 0:
             seg = self._list.item(row).data(Qt.ItemDataRole.UserRole)
@@ -409,10 +427,11 @@ class ReviewDialog(QDialog):
         self._show_frame_image(fi)
 
     def _update_corr_label(self) -> None:
-        if not self._corrections:
+        if not self._corrections and not self._partial_corrections:
             self._corr_label.setText("（尚无手动修正）")
             return
         items = [f"#{f}={v:.0f}km/h" for f, v in sorted(self._corrections.items())]
+        items += [f"#{f}={p}" for f, p in sorted(self._partial_corrections.items())]
         self._corr_label.setText("已修正: " + ", ".join(items))
 
     def _confirm_segment(self) -> None:
@@ -423,8 +442,9 @@ class ReviewDialog(QDialog):
         seg_start = seg['start']
         if seg_start in self._confirmed_segments:
             # Cancel confirmation: restore saved corrections
-            saved = self._confirmed_segments.pop(seg_start)
-            self._corrections.update(saved)
+            saved_exact, saved_partial = self._confirmed_segments.pop(seg_start)
+            self._corrections.update(saved_exact)
+            self._partial_corrections.update(saved_partial)
             self._confirmed.discard(seg_start)
             item = self._list.item(row)
             from qfluentwidgets import isDarkTheme
@@ -433,15 +453,19 @@ class ReviewDialog(QDialog):
             self._btn_confirm.setText("此段正确")
             self._update_corr_label()
             self._redraw_chart()
-            # 恢复删除按钮状态
-            self._btn_delete.setEnabled(self._current_frame in self._corrections)
+            has_corr = (self._current_frame in self._corrections or
+                        self._current_frame in self._partial_corrections)
+            self._btn_delete.setEnabled(has_corr)
         else:
-            # Confirm: save current corrections for this segment, remove them
-            saved = {}
+            # Confirm: save corrections for this segment
+            saved_exact = {}
+            saved_partial = {}
             for fi in range(seg_start, seg['end'] + 1):
                 if fi in self._corrections:
-                    saved[fi] = self._corrections.pop(fi)
-            self._confirmed_segments[seg_start] = saved
+                    saved_exact[fi] = self._corrections.pop(fi)
+                if fi in self._partial_corrections:
+                    saved_partial[fi] = self._partial_corrections.pop(fi)
+            self._confirmed_segments[seg_start] = (saved_exact, saved_partial)
             self._confirmed.add(seg_start)
             item = self._list.item(row)
             item.setForeground(Qt.GlobalColor.gray)
@@ -468,6 +492,9 @@ class ReviewDialog(QDialog):
         for saved in self._confirmed_segments.values():
             result.update(saved)
         return result
+
+    def get_partial_corrections(self) -> dict[int, str]:
+        return dict(self._partial_corrections)
 
     def get_confirmed(self) -> set[int]:
         return set(self._confirmed)	        # 修正控件

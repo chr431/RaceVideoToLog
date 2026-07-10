@@ -140,7 +140,8 @@ class ProcessingPipeline:
 
     def run_review_pass2(self, corrections: dict[int, float],
                          confirmed_segments: set[int],
-                         output_path: str | Path) -> None:
+                         output_path: str | Path,
+                         partial_corrections: dict[int, str] | None = None) -> None:
         """人工辅助第 2 轮：合并手动修正 → 再纠错 → 写 CSV。"""
         for fi, v in corrections.items():
             if 0 <= fi < len(self._rows):
@@ -157,7 +158,8 @@ class ProcessingPipeline:
                             self._anchor_indices.add(fi)
                     break
 
-        self._correct(91.0, 7.0, skip_fill=False, reuse_anchors=True)
+        self._correct(91.0, 7.0, skip_fill=False, reuse_anchors=True,
+                      partial_corrections=partial_corrections)
 
         self._integrate_distance()
         self._write_csv(self._rows, Path(output_path), auto_anchor=False,
@@ -179,7 +181,8 @@ class ProcessingPipeline:
         return self._ocr
 
     def _correct(self, progress_base: float, progress_span: float,
-                 skip_fill: bool, reuse_anchors: bool = False) -> None:
+                 skip_fill: bool, reuse_anchors: bool = False,
+                 partial_corrections: dict[int, str] | None = None) -> None:
         """共享纠错逻辑：锚点选择 → 构建 rows → correct_with_anchors。
 
         reuse_anchors=True 时使用 self._anchor_indices 和 self._rows 的已有值，
@@ -206,7 +209,8 @@ class ProcessingPipeline:
         self._rows = correct_with_anchors(
             self._rows, self._observations, self._raw_frames, self._ocr,
             self._max_speed, self._max_accel, self._anchor_indices,
-            progress_fn=_prog, timing=corr_timing, skip_fill=skip_fill)
+            progress_fn=_prog, timing=corr_timing, skip_fill=skip_fill,
+            partial_corrections=partial_corrections)
         if corr_timing.get("re_ocr", 0) > 0:
             print(f"  [重OCR] {corr_timing['re_ocr']:.2f}s")
 
