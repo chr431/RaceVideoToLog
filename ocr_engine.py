@@ -27,7 +27,7 @@ __all__ = [
 	"ocr_digital_fallback", "compute_video_hash", "auto_select_anchors",
 	"_reset_backend", "_select_backend", "_get_model_kwargs",
 	"_gpu_backend", "_gpu_patched", "_CancelExport",
-	"_parse_int_or_none", "_estimate_raw_trust", "_savgol_filter_np",
+	"_parse_int_or_none", "parse_csv_header", "_estimate_raw_trust", "_savgol_filter_np",
 	"_set_rec_keys_path",
 ]
 
@@ -309,6 +309,29 @@ def _parse_int_or_none(s: str) -> int | None:
 		return int(s)
 	except ValueError:
 		return None
+
+
+def parse_csv_header(path: str) -> dict[str, str]:
+	"""从 CSV 文件头中提取所有 # 注释行的 key=value 参数。
+
+	兼容 ", " 和 "," 两种分隔符，正确处理空值、含逗号的值（如 ROI）。
+	Returns: {key: value} dict, e.g. {'roi': '862,945,957,1003', 'max_speed': '400', ...}
+	"""
+	import re
+	_pair = re.compile(r"(\w+)=(.*?)(?=,\s*\w+=|$)")
+	settings: dict[str, str] = {}
+	try:
+		with open(path, "r", encoding="utf-8-sig") as f:
+			for line in f:
+				line = line.strip()
+				if not line.startswith("#"):
+					break
+				line = line.lstrip("#").strip()
+				for m in _pair.finditer(line):
+					settings[m.group(1)] = m.group(2).strip()
+	except Exception:
+		pass
+	return settings
 
 
 def normalize_ocr_text(text: str) -> str:
@@ -672,45 +695,32 @@ def auto_select_anchors(observations: list["SpeedObservation"], max_speed_kmh: f
 		if keep:
 			anchors_filtered.add(i)
 
-	# ═══ Acceleration validation: anchors must be physically reachable ═══
-	# When OCR misreads the same value across consecutive frames (e.g. "200"→"20"),
-	# the neighbor check above can be fooled (errors agree with each other).
-	# Skip same-cluster anchors (within 2 km/h) to find a "real" neighbor,
-	# then check if implied acceleration exceeds 2× max_accel.
-	# Remove anchor if unreachable from EITHER side (not just both).
-	max_dv_per_sec = max_accel_mps2 * 3.6 * 2.0  # km/h per second (2x safety margin)
+	# ═══ Acceleration validation ═══
+	# Check acceleration to nearest frame with >2 km/h difference (any frame,
+	# not just anchors) — avoids "same-cluster" OCR repeat errors fooling the check.
+	max_dv_per_sec = max_accel_mps2 * 3.6 * 2.0  # km/h/s (2x safety margin)
 	anchors_validated: set[int] = set()
 	for i in anchors_filtered:
 		v = raw_vals[i]
-		left_fail = False
-		right_fail = False
+		left_fail = right_fail = False
 
-		# Find nearest anchor on left with a meaningfully different value
+		# Left: nearest frame (any valid speed) with >2 km/h difference
 		for j in range(i - 1, -1, -1):
-			if j in anchors_filtered and raw_vals[j] > 0:
-				if abs(raw_vals[j] - v) > 2.0:  # skip same-cluster errors
-					dt = times[i] - times[j]
-					if abs(v - raw_vals[j]) / max(dt, 0.001) > max_dv_per_sec:
-						left_fail = True
-					break
-				# else: same cluster (OCR repeated error), keep looking
-		else:
-			left_fail = False  # no different-valued anchor found → OK
+			if raw_vals[j] > 0 and abs(raw_vals[j] - v) > 2.0:
+				dt = times[i] - times[j]
+				if abs(v - raw_vals[j]) / max(dt, 0.001) > max_dv_per_sec:
+					left_fail = True
+				break
 
-		# Find nearest anchor on right with a meaningfully different value
+		# Right: nearest frame (any valid speed) with >2 km/h difference
 		for j in range(i + 1, n):
-			if j in anchors_filtered and raw_vals[j] > 0:
-				if abs(raw_vals[j] - v) > 2.0:  # skip same-cluster errors
-					dt = times[j] - times[i]
-					if abs(raw_vals[j] - v) / max(dt, 0.001) > max_dv_per_sec:
-						right_fail = True
-					break
-				# else: same cluster (OCR repeated error), keep looking
-		else:
-			right_fail = False  # no different-valued anchor found → OK
+			if raw_vals[j] > 0 and abs(raw_vals[j] - v) > 2.0:
+				dt = times[j] - times[i]
+				if abs(raw_vals[j] - v) / max(dt, 0.001) > max_dv_per_sec:
+					right_fail = True
+				break
 
-		# Remove anchor if physically unreachable from either side
-		if not (left_fail or right_fail):
+		if not (left_fail or right_fail):  # keep only if NEITHER side fails accel check
 			anchors_validated.add(i)
 
 	return anchors_validated

@@ -249,11 +249,14 @@ class RaceVideoToLogApp(QMainWindow):
 
 		# Header
 		hdr = QHBoxLayout()
-		self._import_btn = PushButton("导入视频")
-		hdr.addWidget(self._import_btn)
+		self._import_video_btn = PushButton("导入视频")
+		hdr.addWidget(self._import_video_btn)
 		self._file_label = BodyLabel("未导入视频")
 		self._file_label.setWordWrap(True)
 		hdr.addWidget(self._file_label, 1)
+		self._import_settings_btn = PushButton("导入设置")
+		self._import_settings_btn.clicked.connect(self._import_settings)
+		hdr.addWidget(self._import_settings_btn)
 		self._export_btn = PrimaryPushButton("导出 CSV")
 		hdr.addWidget(self._export_btn)
 		self._cancel_btn = PushButton("取消")
@@ -321,7 +324,7 @@ class RaceVideoToLogApp(QMainWindow):
 		self._disable_spin_flyout(self.div_spin)
 		pl.addWidget(self.div_spin, 1, 1)
 		pl.addWidget(BodyLabel("并行线程数"), 1, 2)
-		self.buffer_edit = LineEdit(); self.buffer_edit.setText("1"); self.buffer_edit.setFixedWidth(50)
+		self.buffer_edit = LineEdit(); self.buffer_edit.setText("8"); self.buffer_edit.setFixedWidth(50)
 		pl.addWidget(self.buffer_edit, 1, 3)
 		pl.addWidget(BodyLabel("OCR 高度 (px)"), 2, 0)
 		self.target_h_edit = LineEdit(); self.target_h_edit.setText("24"); self.target_h_edit.setFixedWidth(50)
@@ -412,14 +415,14 @@ class RaceVideoToLogApp(QMainWindow):
 	# ═══════════════════ 信号连接 + 快捷键 ═══════════════════
 
 	def _connect_signals(self) -> None:
-		self._import_btn.clicked.connect(self._import_video)
+		self._import_video_btn.clicked.connect(self._import_video)
 		self._export_btn.clicked.connect(self._export_csv)
 		self._cancel_btn.clicked.connect(self._cancel_export)
 		self._fmt_ms.clicked.connect(lambda: self._on_fmt("m/s"))
 		self._fmt_kmh.clicked.connect(lambda: self._on_fmt("km/h"))
 		self._fmt_mph.clicked.connect(lambda: self._on_fmt("mile/h"))
-		self.mode_auto.clicked.connect(lambda: self._on_mode("auto"))
-		self.mode_baseline.clicked.connect(lambda: self._on_mode("baseline"))
+		self.mode_auto.toggled.connect(lambda checked: checked and self._on_mode("auto"))
+		self.mode_baseline.toggled.connect(lambda checked: checked and self._on_mode("baseline"))
 		self.backend_combo.currentIndexChanged.connect(self._on_backend)
 
 		self.debug_cb.toggled.connect(lambda v: setattr(self, '_debug_log', v))
@@ -710,6 +713,67 @@ class RaceVideoToLogApp(QMainWindow):
 
 	# ═══════════════════ 导出 ═══════════════════
 
+	def _import_settings(self) -> None:
+		path, _ = QFileDialog.getOpenFileName(self, "选择 CSV 文件", "",
+			"CSV 文件 (*.csv);;所有文件 (*.*)")
+		if not path:
+			return
+		from ocr_engine import parse_csv_header
+		settings = parse_csv_header(path)
+		if not settings:
+			QMessageBox.warning(self, "导入失败", "无法解析 CSV 文件头。")
+			return
+		if "roi" in settings:
+			try:
+				parts = [int(x.strip()) for x in settings["roi"].split(",")]
+				if len(parts) == 4:
+					# Block signals to prevent _on_roi_spin clamping during bulk set
+					for s in [self.roi_x1, self.roi_y1, self.roi_x2, self.roi_y2]:
+						s.blockSignals(True)
+					self.roi_x2.setValue(parts[2]); self.roi_y2.setValue(parts[3])
+					self.roi_x1.setValue(parts[0]); self.roi_y1.setValue(parts[1])
+					for s in [self.roi_x1, self.roi_y1, self.roi_x2, self.roi_y2]:
+						s.blockSignals(False)
+					self._redraw()
+			except ValueError:
+				pass
+		for key, widget, cast in [
+			("max_speed", self.max_speed_edit, str),
+			("max_accel", self.max_accel_edit, str),
+			("div", self.div_spin, lambda v: int(float(v))),
+			("target_h", self.target_h_edit, str),
+			("pad", self.pad_edit, str),
+			("buffer", self.buffer_edit, str),
+			("frame_start", self.frame_start_edit, str),
+			("frame_end", self.frame_end_edit, str),
+		]:
+			if key in settings:
+				try:
+					val = cast(settings[key])
+					if hasattr(widget, "setValue"):
+						widget.setValue(val)
+					else:
+						widget.setText(str(val))
+				except Exception:
+					pass
+		if "backend" in settings:
+			be = settings["backend"].lower()
+			idx = {"auto": 0, "cuda": 1, "cpu": 2}.get(be, 0)
+			self.backend_combo.setCurrentIndex(idx)
+		if "format" in settings:
+			fmt = settings["format"].lower()
+			for rb, key in [(self._fmt_ms, "m/s"), (self._fmt_kmh, "km/h"),
+			                (self._fmt_mph, "mile/h")]:
+				if key == fmt:
+					rb.setChecked(True); break
+		if "manual_anchor" in settings:
+			self.mode_auto.setChecked(False)
+			self.mode_baseline.setChecked(True)
+		elif "auto_anchor" in settings:
+			self.mode_baseline.setChecked(False)
+			self.mode_auto.setChecked(True)
+		self._status_label.setText(f"已导入设置: {Path(path).name}")
+
 	def _export_csv(self) -> None:
 		if self.video_path is None or self.metadata is None:
 			QMessageBox.warning(self, "未导入视频", "请先导入视频。"); return
@@ -778,15 +842,17 @@ class RaceVideoToLogApp(QMainWindow):
 			self._review_segments, ms)
 		if dlg.exec() == QDialog.DialogCode.Accepted:
 			corrections = dlg.get_corrections()
+			partial_corrections = dlg.get_partial_corrections()
 			self._review_confirmed = dlg.get_confirmed()
 			try:
-				self._continue_with_manual_anchors(corrections)
+				self._continue_with_manual_anchors(corrections, partial_corrections)
 			except Exception as e:
 				self._progress_bar.setValue(0)
 				self._status_label.setText(f"审核失败: {e}")
 				import traceback; traceback.print_exc()
 
-	def _continue_with_manual_anchors(self, corrections: dict[int, float]) -> None:
+	def _continue_with_manual_anchors(self, corrections: dict[int, float],
+	                                   partial_corrections: dict[int, str] | None = None) -> None:
 		pipeline = getattr(self, "_pipeline", None)
 		if pipeline is None:
 			self._status_label.setText("错误: 处理状态丢失"); return
@@ -803,6 +869,7 @@ class RaceVideoToLogApp(QMainWindow):
 					corrections=corrections,
 					confirmed_segments=getattr(self, "_review_confirmed", set()),
 					output_path=out_path,
+					partial_corrections=partial_corrections or None,
 				)
 			except Exception as exc:
 				import traceback; traceback.print_exc()

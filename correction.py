@@ -4,8 +4,86 @@
 支持 GUI 和无头 CLI 共用同一实现。
 """
 from __future__ import annotations
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 import cv2
+import numpy as np
 from ocr_engine import extract_speed_value, build_speed_candidates
+
+if TYPE_CHECKING:
+    from rapidocr_onnxruntime import RapidOCR
+
+def _infer_partial_pattern(ocr_text: str, expected: float, max_speed: float) -> str | None:
+	"""根据 OCR 文本和邻居插值估算，自动推断缺失数字的位置。
+
+	例如 OCR 读到 "21"、邻居速度约 221 → 推断模式 "x21"（首位缺失）。
+	OCR 读到 "20"、邻居速度约 200 → 推断模式 "20x"（末位缺失）。
+
+	Returns: 如 "x21" 的模式字符串，或 None 表示无法可靠推断。
+	"""
+	if not ocr_text or not ocr_text.isdigit():
+		return None
+	if len(ocr_text) > 3:
+		return None
+
+	best_pattern = None
+	best_diff = float("inf")
+
+	# 在每个位置尝试插入 'x'（处理缺失数字）
+	for i in range(len(ocr_text) + 1):
+		pattern = ocr_text[:i] + "x" + ocr_text[i:]
+		for v in expand_partial(pattern, max_speed):
+			diff = abs(v - expected)
+			if diff < best_diff:
+				best_diff = diff
+				best_pattern = pattern
+
+	# 在每个位置替换为 'x'（处理误读数字）
+	for i in range(len(ocr_text)):
+		pattern = ocr_text[:i] + "x" + ocr_text[i + 1:]
+		for v in expand_partial(pattern, max_speed):
+			diff = abs(v - expected)
+			if diff < best_diff:
+				best_diff = diff
+				best_pattern = pattern
+
+	# 仅在与预期值相差 <20% 时才采纳
+	if best_pattern and best_diff < expected * 0.2:
+		return best_pattern
+	return None
+
+
+def expand_partial(pattern: str, max_speed: float) -> list[float]:
+    """Generate values matching a partial digit pattern. 'x' = any digit 0-9.
+
+    Supports any number of x's. All-x patterns (e.g. 'xxx') return empty
+    since they provide no constraint. Patterns with >3 x's also return
+    empty to avoid combinatorial explosion.
+    The caller always has re-OCR + interpolation as fallback candidates.
+    """
+    import itertools
+    x_count = pattern.count('x') + pattern.count('X')
+    if x_count == 0:
+        val = float(pattern)
+        return [val] if val <= max_speed else []
+    # No constraint = skip (all-x or too many x's)
+    if x_count == len(pattern) or x_count > 2:
+        return []
+    results = []
+    pattern_lower = pattern.lower()
+    for digits in itertools.product('0123456789', repeat=x_count):
+        di = 0
+        chars = []
+        for ch in pattern_lower:
+            if ch == 'x':
+                chars.append(digits[di]); di += 1
+            else:
+                chars.append(ch)
+        val = float(''.join(chars))
+        if val <= max_speed:
+            results.append(val)
+    return results
+
 
 # 重 OCR 缓存（避免同一帧重复处理）
 _reocr_cache: dict[int, set[float]] = {}
@@ -16,7 +94,8 @@ def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: 
                          log_fn: "Callable | None" = None,
                          progress_fn: "Callable | None" = None,
                          skip_fill: bool = False,
-                         timing: dict | None = None) -> list:
+                         timing: dict | None = None,
+                         partial_corrections: dict[int, str] | None = None) -> list:
 	"""5 阶段物理约束纠错流水线。
 
 	以 anchor_indices 中帧的速度为硬约束（固定不变），
@@ -45,7 +124,7 @@ def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: 
 	# ── 阶段 2+3：重 OCR + 最优选择（首轮）──
 	fixed = _fix_errors(rows, observations, raw_frames, ocr, error_set,
 	                    anchors, times, max_speed_kmh, max_accel_mps2,
-	                    progress_fn=progress_fn, timing=timing)
+	                    progress_fn=progress_fn, timing=timing, partial_corrections=partial_corrections)
 	if log_fn:
 		log_fn(f"  Stage 2+3: fixed {fixed} frames in round 1")
 
@@ -57,7 +136,7 @@ def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: 
 			break
 		fixed = _fix_errors(rows, observations, raw_frames, ocr, error_set,
 		                    anchors, times, max_speed_kmh, max_accel_mps2,
-		                    progress_fn=progress_fn, timing=timing)
+		                    progress_fn=progress_fn, timing=timing, partial_corrections=partial_corrections)
 		if log_fn:
 			log_fn(f"  Stage 4 round {rnd}: {len(error_set)} errors, fixed {fixed}")
 
@@ -66,7 +145,7 @@ def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: 
 		error_set = _detect_errors(rows, anchors, times, max_speed_kmh, max_accel_mps2)
 		for i in error_set:
 			if i not in anchors and rows[i][3] < 2:
-				rows[i][3] = 3
+				rows[i][3] = 30
 		if log_fn:
 			log_fn(f"  Stage 5: {len(error_set)} frames flagged for manual review")
 	else:
@@ -225,29 +304,51 @@ def _detect_errors(rows: list, anchors: set, times: list, max_speed_kmh: float, 
 def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR", error_set: set,
                 anchors: set, times: list, max_speed_kmh: float, max_accel_mps2: float,
                 progress_fn: "Callable | None" = None,
-                timing: dict | None = None) -> int:
+                timing: dict | None = None,
+                partial_corrections: dict[int, str] | None = None) -> int:
 	"""阶段 2+3：对每个 error 帧重 OCR 获取备选，选最优值填入。"""
 	fixed = 0
 	progress_done = 0
 	error_list = sorted(i for i in error_set if i not in anchors)
 	total = len(error_list)
 	for i in error_list:
-		candidates = list(_re_ocr_frame(raw_frames[i][1], ocr, max_speed_kmh, timing=timing))
+		has_partial = partial_corrections and i in partial_corrections
 		interp_cand = _interp_candidate(i, rows, anchors, times, max_speed_kmh)
+		oid = min(i, len(observations) - 1)
+		reocr_set = _re_ocr_frame(raw_frames[i][1], ocr, max_speed_kmh, timing=timing)
+
+		# ── 收集候选值 ──
+		if has_partial:
+			candidates = expand_partial(partial_corrections[i], max_speed_kmh)
+		else:
+			candidates = list(reocr_set)
+			# 混淆字符候选
+			confusion_cands = build_speed_candidates(observations[oid].raw_text, max_speed_kmh)
+			for c in confusion_cands:
+				if c not in candidates:
+					candidates.append(c)
+			# 自动推断部分数字模式：OCR 读到 "21"、邻居约 221 → "x21"
+			if interp_cand is not None:
+				auto_pattern = _infer_partial_pattern(
+					observations[oid].raw_text, interp_cand, max_speed_kmh)
+				if auto_pattern:
+					for c in reversed(expand_partial(auto_pattern, max_speed_kmh)):
+						if c not in candidates:
+							candidates.insert(0, c)
+
+		# 插值候选（所有分支共用）
 		if interp_cand is not None:
 			candidates.append(interp_cand)
-		oid = min(i, len(observations) - 1)
-		confusion_cands = build_speed_candidates(observations[oid].raw_text, max_speed_kmh)
-		candidates.extend(c for c in confusion_cands if c not in candidates)
 
+		# ── 选择最佳候选 ──
 		if candidates:
 			raw_val = rows[i][2]
-			reocr_unique = _re_ocr_frame(raw_frames[i][1], ocr, max_speed_kmh, timing=timing)
-			if len(reocr_unique) <= 1 and interp_cand is not None and abs(interp_cand - raw_val) > 10.0:
+			# re-OCR 无结果且插值与当前值差异大 → 直接插值
+			if len(reocr_set) <= 1 and interp_cand is not None and abs(interp_cand - raw_val) > 10.0:
 				if abs(raw_val - interp_cand) > 0.5:
 					rows[i][2] = interp_cand
 					if rows[i][3] == 0:
-						rows[i][3] = 1
+						rows[i][3] = 13 if has_partial else 11
 					fixed += 1
 			else:
 				best_val = None
@@ -263,7 +364,7 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
 				if best_val is not None and abs(rows[i][2] - best_val) > 0.5:
 					rows[i][2] = best_val
 					if rows[i][3] == 0:
-						rows[i][3] = 1
+						rows[i][3] = 13 if has_partial else 11
 					fixed += 1
 
 		progress_done += 1
@@ -298,18 +399,6 @@ def _re_ocr_frame(crop_bgr: "np.ndarray", ocr: "RapidOCR", max_speed_kmh: float,
 	# 变体 1: 标准灰度 (h=24)
 	scale = 24.0 / h if h > 0 else 1.0
 	proc = cv2.resize(gray, (max(1, int(w * scale)), 24))
-	_do_ocr(cv2.cvtColor(proc, cv2.COLOR_GRAY2BGR))
-
-	# 变体 2: CLAHE + OTSU (h=32)
-	clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-	_, otsu = cv2.threshold(clahe.apply(gray), 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-	scale32 = 32.0 / h if h > 0 else 1.0
-	proc = cv2.resize(otsu, (max(1, int(w * scale32)), 32))
-	_do_ocr(cv2.cvtColor(proc, cv2.COLOR_GRAY2BGR))
-
-	# 变体 3: OTSU 反相 (h=32)
-	_, otsu3 = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-	proc = cv2.resize(otsu3, (max(1, int(w * scale32)), 32))
 	_do_ocr(cv2.cvtColor(proc, cv2.COLOR_GRAY2BGR))
 
 	if cache_key is not None:
@@ -403,33 +492,41 @@ def _fill_unrecoverable(rows: list, anchors: set, error_set: set, times: list, m
 	total = len(sorted_errors)
 	progress_done = 0
 	for i in sorted_errors:
+		# Left reference: any frame with valid speed (including previously filled)
 		la = None
 		for j in range(i - 1, -1, -1):
-			if j in anchors or j not in error_set:
-				if 0 <= rows[j][2] <= max_speed_kmh:
-					la = j; break
+			if 0 <= rows[j][2] <= max_speed_kmh:
+				la = j; break
 		if la is None:
 			continue
 		lv = rows[la][2]; lt = rows[la][0]
+
+		# Right reference: nearest anchor
 		ra = None
 		for j in range(i + 1, n):
-			if j in anchors:
-				if 0 <= rows[j][2] <= max_speed_kmh:
-					ra = j; break
+			if j in anchors and 0 <= rows[j][2] <= max_speed_kmh:
+				ra = j; break
+
+		left_dt = max(times[i] - lt, 0.001)
+		left_max_dv = max_accel_mps2 * left_dt * 3.6
 		if ra is not None:
 			rv = rows[ra][2]; rt = rows[ra][0]
-			total_dt = max(rt - lt, 0.001)
-			frac = (times[i] - lt) / total_dt
-			val = lv + (rv - lv) * frac
+			right_dt = max(rt - times[i], 0.001)
+			right_max_dv = max_accel_mps2 * right_dt * 3.6
+			# Range reachable from left anchor
+			lo = max(0.0, lv - left_max_dv)
+			hi = min(max_speed_kmh, lv + left_max_dv)
+			# Also must be reachable from right anchor
+			lo = max(lo, rv - right_max_dv)
+			hi = min(hi, rv + right_max_dv)
+			# Linear interp clamped to reachable range
+			interp = lv + (rv - lv) * (left_dt / max(left_dt + right_dt, 0.001))
+			val = max(lo, min(hi, interp))
 		else:
-			val = lv
-		dt = max(times[i] - lt, 0.001)
-		max_dv = max_accel_mps2 * dt * 3.6
-		val = max(lv - max_dv, min(lv + max_dv, val))
-		val = max(0.0, min(max_speed_kmh, val))
+			val = max(0.0, min(max_speed_kmh, lv + left_max_dv))
 		rows[i][2] = val
 		if rows[i][3] == 0:
-			rows[i][3] = 1
+			rows[i][3] = 12
 
 		progress_done += 1
 		if progress_fn:
@@ -461,7 +558,7 @@ def compute_confidence(rows: list, observations: list, max_speed: float,
         if win % 2 == 0:
             win += 1
         try:
-            smoothed = _savgol_filter_np(vals, win, min(3, win - 1))
+            smoothed = _savgol_filter_np(np.array(vals), win, min(3, win - 1))
         except Exception:
             smoothed = vals
     else:
@@ -508,9 +605,9 @@ def compute_confidence(rows: list, observations: list, max_speed: float,
                     reasons.append(r)
 
         # 纠错标记
-        if flags[i] == 1:
+        if 10 <= flags[i] <= 19:
             score -= 30
-            reasons.append('自动纠错')
+            reasons.append('auto-corrected')
 
         # SG 平滑偏差
         if win >= 5:
