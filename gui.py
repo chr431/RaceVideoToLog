@@ -249,14 +249,14 @@ class RaceVideoToLogApp(QMainWindow):
 
 		# Header
 		hdr = QHBoxLayout()
-		self._import_btn = PushButton("导入视频")
-		hdr.addWidget(self._import_btn)
+		self._import_video_btn = PushButton("导入视频")
+		hdr.addWidget(self._import_video_btn)
 		self._file_label = BodyLabel("未导入视频")
 		self._file_label.setWordWrap(True)
 		hdr.addWidget(self._file_label, 1)
-		self._import_btn = PushButton("导入设置")
-		self._import_btn.clicked.connect(self._import_settings)
-		hdr.addWidget(self._import_btn)
+		self._import_settings_btn = PushButton("导入设置")
+		self._import_settings_btn.clicked.connect(self._import_settings)
+		hdr.addWidget(self._import_settings_btn)
 		self._export_btn = PrimaryPushButton("导出 CSV")
 		hdr.addWidget(self._export_btn)
 		self._cancel_btn = PushButton("取消")
@@ -415,7 +415,7 @@ class RaceVideoToLogApp(QMainWindow):
 	# ═══════════════════ 信号连接 + 快捷键 ═══════════════════
 
 	def _connect_signals(self) -> None:
-		self._import_btn.clicked.connect(self._import_video)
+		self._import_video_btn.clicked.connect(self._import_video)
 		self._export_btn.clicked.connect(self._export_csv)
 		self._cancel_btn.clicked.connect(self._cancel_export)
 		self._fmt_ms.clicked.connect(lambda: self._on_fmt("m/s"))
@@ -734,6 +734,7 @@ class RaceVideoToLogApp(QMainWindow):
 					self.roi_x1.setValue(parts[0]); self.roi_y1.setValue(parts[1])
 					for s in [self.roi_x1, self.roi_y1, self.roi_x2, self.roi_y2]:
 						s.blockSignals(False)
+					self._redraw()
 			except ValueError:
 				pass
 		for key, widget, cast in [

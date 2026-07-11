@@ -13,6 +13,46 @@ from ocr_engine import extract_speed_value, build_speed_candidates
 if TYPE_CHECKING:
     from rapidocr_onnxruntime import RapidOCR
 
+def _infer_partial_pattern(ocr_text: str, expected: float, max_speed: float) -> str | None:
+	"""根据 OCR 文本和邻居插值估算，自动推断缺失数字的位置。
+
+	例如 OCR 读到 "21"、邻居速度约 221 → 推断模式 "x21"（首位缺失）。
+	OCR 读到 "20"、邻居速度约 200 → 推断模式 "20x"（末位缺失）。
+
+	Returns: 如 "x21" 的模式字符串，或 None 表示无法可靠推断。
+	"""
+	if not ocr_text or not ocr_text.isdigit():
+		return None
+	if len(ocr_text) > 3:
+		return None
+
+	best_pattern = None
+	best_diff = float("inf")
+
+	# 在每个位置尝试插入 'x'（处理缺失数字）
+	for i in range(len(ocr_text) + 1):
+		pattern = ocr_text[:i] + "x" + ocr_text[i:]
+		for v in expand_partial(pattern, max_speed):
+			diff = abs(v - expected)
+			if diff < best_diff:
+				best_diff = diff
+				best_pattern = pattern
+
+	# 在每个位置替换为 'x'（处理误读数字）
+	for i in range(len(ocr_text)):
+		pattern = ocr_text[:i] + "x" + ocr_text[i + 1:]
+		for v in expand_partial(pattern, max_speed):
+			diff = abs(v - expected)
+			if diff < best_diff:
+				best_diff = diff
+				best_pattern = pattern
+
+	# 仅在与预期值相差 <20% 时才采纳
+	if best_pattern and best_diff < expected * 0.2:
+		return best_pattern
+	return None
+
+
 def expand_partial(pattern: str, max_speed: float) -> list[float]:
     """Generate values matching a partial digit pattern. 'x' = any digit 0-9.
 
@@ -272,27 +312,43 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
 	error_list = sorted(i for i in error_set if i not in anchors)
 	total = len(error_list)
 	for i in error_list:
-		candidates = list(_re_ocr_frame(raw_frames[i][1], ocr, max_speed_kmh, timing=timing))
+		has_partial = partial_corrections and i in partial_corrections
 		interp_cand = _interp_candidate(i, rows, anchors, times, max_speed_kmh)
+		oid = min(i, len(observations) - 1)
+		reocr_set = _re_ocr_frame(raw_frames[i][1], ocr, max_speed_kmh, timing=timing)
+
+		# ── 收集候选值 ──
+		if has_partial:
+			candidates = expand_partial(partial_corrections[i], max_speed_kmh)
+		else:
+			candidates = list(reocr_set)
+			# 混淆字符候选
+			confusion_cands = build_speed_candidates(observations[oid].raw_text, max_speed_kmh)
+			for c in confusion_cands:
+				if c not in candidates:
+					candidates.append(c)
+			# 自动推断部分数字模式：OCR 读到 "21"、邻居约 221 → "x21"
+			if interp_cand is not None:
+				auto_pattern = _infer_partial_pattern(
+					observations[oid].raw_text, interp_cand, max_speed_kmh)
+				if auto_pattern:
+					for c in reversed(expand_partial(auto_pattern, max_speed_kmh)):
+						if c not in candidates:
+							candidates.insert(0, c)
+
+		# 插值候选（所有分支共用）
 		if interp_cand is not None:
 			candidates.append(interp_cand)
-		oid = min(i, len(observations) - 1)
-		confusion_cands = build_speed_candidates(observations[oid].raw_text, max_speed_kmh)
-		candidates.extend(c for c in confusion_cands if c not in candidates)
 
-		# 人工部分模式候选值
-		if partial_corrections and i in partial_corrections:
-			pattern_cands = expand_partial(partial_corrections[i], max_speed_kmh)
-			candidates.extend(c for c in pattern_cands if c not in candidates)
-
+		# ── 选择最佳候选 ──
 		if candidates:
 			raw_val = rows[i][2]
-			reocr_unique = _re_ocr_frame(raw_frames[i][1], ocr, max_speed_kmh, timing=timing)
-			if len(reocr_unique) <= 1 and interp_cand is not None and abs(interp_cand - raw_val) > 10.0:
+			# re-OCR 无结果且插值与当前值差异大 → 直接插值
+			if len(reocr_set) <= 1 and interp_cand is not None and abs(interp_cand - raw_val) > 10.0:
 				if abs(raw_val - interp_cand) > 0.5:
 					rows[i][2] = interp_cand
 					if rows[i][3] == 0:
-						rows[i][3] = 11
+						rows[i][3] = 13 if has_partial else 11
 					fixed += 1
 			else:
 				best_val = None
@@ -308,7 +364,7 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
 				if best_val is not None and abs(rows[i][2] - best_val) > 0.5:
 					rows[i][2] = best_val
 					if rows[i][3] == 0:
-						rows[i][3] = 11
+						rows[i][3] = 13 if has_partial else 11
 					fixed += 1
 
 		progress_done += 1

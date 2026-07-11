@@ -312,21 +312,23 @@ def _parse_int_or_none(s: str) -> int | None:
 
 
 def parse_csv_header(path: str) -> dict[str, str]:
-	"""从 CSV 文件头中提取第 3-4 行的参数。
+	"""从 CSV 文件头中提取所有 # 注释行的 key=value 参数。
 
+	兼容 ", " 和 "," 两种分隔符，正确处理空值、含逗号的值（如 ROI）。
 	Returns: {key: value} dict, e.g. {'roi': '862,945,957,1003', 'max_speed': '400', ...}
 	"""
+	import re
+	_pair = re.compile(r"(\w+)=(.*?)(?=,\s*\w+=|$)")
 	settings: dict[str, str] = {}
 	try:
 		with open(path, "r", encoding="utf-8-sig") as f:
-			for _ in range(2):
-				f.readline()
-			for _ in range(2):
-				line = f.readline().lstrip("#").strip()
-				for part in line.split(", "):
-					if "=" in part:
-						k, v = part.split("=", 1)
-						settings[k.strip()] = v.strip()
+			for line in f:
+				line = line.strip()
+				if not line.startswith("#"):
+					break
+				line = line.lstrip("#").strip()
+				for m in _pair.finditer(line):
+					settings[m.group(1)] = m.group(2).strip()
 	except Exception:
 		pass
 	return settings

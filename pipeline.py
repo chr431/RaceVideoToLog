@@ -92,7 +92,7 @@ class ProcessingPipeline:
             for obs in self._observations:
                 self._rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh, 0])
             self._integrate_distance()
-            self._write_csv(self._rows, Path(output_path), auto_anchor=False)
+            self._write_csv(self._rows, Path(output_path), auto_anchor=True)
         else:
             self._run_correction(Path(output_path), skip_fill=False)
         self._emit("完成", 100.0)
@@ -132,7 +132,7 @@ class ProcessingPipeline:
             self._emit("未发现问题段，无需人工审核。", 98.5)
             self._integrate_distance()
             if output_path is not None:
-                self._write_csv(self._rows, Path(output_path), auto_anchor=False)
+                self._write_csv(self._rows, Path(output_path), auto_anchor=True)
             self._emit("完成", 100.0)
             return None
 
@@ -317,18 +317,19 @@ class ProcessingPipeline:
                    auto_anchor: bool = True, manual_anchor: bool = False) -> None:
         vhash = compute_video_hash(self._video_path)
         r = self._roi
+        tag = "manual_anchor" if manual_anchor else ("auto_anchor" if auto_anchor else "")
         with output_path.open("w", newline="", encoding="utf-8-sig") as fh:
             fh.write("# RaceVideoToLog\n")
             fh.write(f"# video_hash={vhash}, video={self._video_path.name}\n")
-            fh.write(f"# roi={r[0]},{r[1]},{r[2]},{r[3]}, format={self._speed_format}\n")
-            tag = "manual_anchor" if manual_anchor else ("auto_anchor" if auto_anchor else "")
-            fh.write(f"# max_speed={self._max_speed}, max_accel={self._max_accel}, "
-                     f"div={self._frame_div}, target_h={self._target_h}, "
-                     f"pad={self._pad}, backend={self._backend_actual}, "
-                     f"model={self._ocr_model}, buffer={self._buffer_size}, "
-                     f"frame_start={self._frame_start or ''}, "
-                     f"frame_end={self._frame_end or ''}"
-                     + (f", {tag}=1" if tag else "") + "\n")
+            fh.write(f"# roi={r[0]},{r[1]},{r[2]},{r[3]}, format={self._speed_format}"
+                     f", frame_start={self._frame_start or ''}"
+                     f", frame_end={self._frame_end or ''}\n")
+            fh.write(f"# max_speed={self._max_speed}, max_accel={self._max_accel}"
+                     f", div={self._frame_div}, target_h={self._target_h}"
+                     f", pad={self._pad}, buffer={self._buffer_size}\n")
+            fh.write(f"# backend={self._backend_actual}, model={self._ocr_model}\n")
+            if tag:
+                fh.write(f"# {tag}=1\n")
             w = csv.writer(fh)
             for row in rows:
                 w.writerow([f"{row[0]:.2f}", f"{row[1]:.2f}",

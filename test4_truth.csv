@@ -1,7 +1,7 @@
-﻿# RaceVideoToLog\n# video_hash=94ac7e06b58914e7, video=test4.mp4\n# roi=862,943,960,1007, format=km/h\n# max_speed=400.0, max_accel=70.0, manual_anchor=1\n1.95,0.00,2.00,0
+﻿# RaceVideoToLog\n# video_hash=94ac7e06b58914e7,video=test4.mp4\n# roi=862,943,960,1007,format=km/h\n# max_speed=400.0,max_accel=70.0,manual_anchor=1
+# max_speed=400.0,max_accel=70.0,div=1,target_h=24.0,pad=0.0,backend=CUDA,model=v6_small,buffer=1,frame_start=114,frame_end=6318,manual_anchor=1
 1.97,0.01,2.00,0
 1.98,0.02,2.00,0
-2.00,0.03,5.00,0
 2.02,0.06,5.00,0
 2.03,0.08,5.00,0
 2.05,0.11,8.00,0
