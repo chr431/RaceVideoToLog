@@ -41,8 +41,9 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('qfluentwidgets')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
-# PySide6 (Qt 6 GUI) — 只收集核心模块
-for _qt_mod in ['PySide6.QtWidgets', 'PySide6.QtCore', 'PySide6.QtGui']:
+# PySide6 (Qt 6 GUI) — 只收集核心模块 + qfluentwidgets 依赖
+for _qt_mod in ['PySide6.QtWidgets', 'PySide6.QtCore', 'PySide6.QtGui',
+                 'PySide6.QtXml', 'PySide6.QtSvg']:
     _qt_ret = collect_all(_qt_mod)
     datas += _qt_ret[0]; binaries += _qt_ret[1]; hiddenimports += _qt_ret[2]
 
@@ -71,6 +72,16 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 # 二次过滤：matplotlib 可能带回部分之前排除的文件
 datas = [(s, d) for s, d in datas if os.path.basename(s) not in _EXCLUDE_FILES]
 binaries = [(s, d) for s, d in binaries if os.path.basename(s) not in _EXCLUDE_FILES]
+
+# 过滤 onnxruntime 非推理子目录（transformers/tools/quantization 等在 excludes 中已被跳过，
+# 但若以 data 形式被 collect_all 收集则需二次过滤）
+_EXCLUDE_DATAS_SUBDIRS = {
+    'onnxruntime\\transformers', 'onnxruntime\\tools',
+    'onnxruntime\\quantization', 'onnxruntime\\datasets',
+    'onnxruntime\\backend',
+}
+datas = [(s, d) for s, d in datas
+         if not any(e in d.replace('/', '\\') for e in _EXCLUDE_DATAS_SUBDIRS)]
 
 # ── 精简二进制：移除不需要的 DLL ──
 _NVIDIA_DLL_PREFIXES = {
@@ -150,6 +161,20 @@ exe = EXE(
 _EXCLUDE_BINARIES = {
     'DirectML.dll', 'onnxruntime_providers_tensorrt.dll',
     'tcl86t.dll', 'tk86t.dll', '_tkinter.pyd',
+    # Qt6 未使用模块（仅用 Widgets/Core/Gui）
+    'opengl32sw.dll', 'avcodec-61.dll',
+    'Qt6Quick.dll', 'Qt6Qml.dll', 'Qt6Pdf.dll',
+    'Qt6Network.dll', 'Qt6Multimedia.dll',
+    'Qt6Sql.dll', 'Qt6Test.dll',
+    'Qt6QuickWidgets.dll', 'Qt6QmlModels.dll', 'Qt6QmlWorkerScript.dll',
+    'Qt6OpenGL.dll', 'Qt6OpenGLWidgets.dll',
+    'Qt6PrintSupport.dll', 'Qt6WebChannel.dll',
+    'Qt6WebEngine.dll', 'Qt6WebEngineCore.dll', 'Qt6WebEngineQuick.dll',
+    'Qt6Designer.dll', 'Qt6Help.dll', 'Qt6UiTools.dll',
+    # 音频格式
+    'swresample-5.dll', 'swscale-8.dll', 'avformat-61.dll',
+    'avutil-59.dll', 'avdevice-61.dll', 'avfilter-10.dll',
+    'postproc-58.dll',
 }
 a.binaries = [(n, p, t) for n, p, t in a.binaries
               if os.path.basename(p) not in _EXCLUDE_BINARIES]

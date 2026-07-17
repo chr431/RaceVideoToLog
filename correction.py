@@ -4,14 +4,17 @@
 支持 GUI 和无头 CLI 共用同一实现。
 """
 from __future__ import annotations
+import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 import cv2
 import numpy as np
-from ocr_engine import extract_speed_value, build_speed_candidates
+from ocr_engine import extract_speed_value, build_speed_candidates, Flag
 
 if TYPE_CHECKING:
     from rapidocr_onnxruntime import RapidOCR
+
+logger = logging.getLogger("RaceVideoToLog.correction")
 
 def _infer_partial_pattern(ocr_text: str, expected: float, max_speed: float) -> str | None:
 	"""根据 OCR 文本和邻居插值估算，自动推断缺失数字的位置。
@@ -85,22 +88,22 @@ def expand_partial(pattern: str, max_speed: float) -> list[float]:
     return results
 
 
-# 重 OCR 缓存（避免同一帧重复处理）
-_reocr_cache: dict[int, set[float]] = {}
-
-
 def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR",
                          max_speed_kmh: float, max_accel_mps2: float, anchor_indices: set,
                          log_fn: "Callable | None" = None,
                          progress_fn: "Callable | None" = None,
                          skip_fill: bool = False,
                          timing: dict | None = None,
-                         partial_corrections: dict[int, str] | None = None) -> list:
+                         partial_corrections: dict[int, str] | None = None,
+                         reocr_cache: dict | None = None) -> list:
 	"""5 阶段物理约束纠错流水线。
 
 	以 anchor_indices 中帧的速度为硬约束（固定不变），
 	对其余帧进行错误检测、重OCR、最优选择和级联填充。
 
+	Args:
+	    reocr_cache: 可选的重 OCR 缓存字典（帧索引 → 候选值集合），
+	                 绑定到 Pipeline 实例生命周期以避免内存泄漏。
 	progress_fn(done, total): 在每个待修复帧处理完时调用, 提供精确进度。
 	Returns: 修改后的 rows（原地修改）
 	"""
@@ -110,6 +113,8 @@ def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: 
 	n = len(rows)
 	anchors = anchor_indices
 	times = [r[0] for r in rows]
+	# 初始化或复用外部缓存
+	cache: dict = reocr_cache if reocr_cache is not None else {}
 
 	if log_fn:
 		log_fn(f"Correction: {n} rows, {len(anchors)} anchors")
@@ -124,7 +129,8 @@ def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: 
 	# ── 阶段 2+3：重 OCR + 最优选择（首轮）──
 	fixed = _fix_errors(rows, observations, raw_frames, ocr, error_set,
 	                    anchors, times, max_speed_kmh, max_accel_mps2,
-	                    progress_fn=progress_fn, timing=timing, partial_corrections=partial_corrections)
+	                    progress_fn=progress_fn, timing=timing,
+	                    partial_corrections=partial_corrections, reocr_cache=cache)
 	if log_fn:
 		log_fn(f"  Stage 2+3: fixed {fixed} frames in round 1")
 
@@ -136,7 +142,8 @@ def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: 
 			break
 		fixed = _fix_errors(rows, observations, raw_frames, ocr, error_set,
 		                    anchors, times, max_speed_kmh, max_accel_mps2,
-		                    progress_fn=progress_fn, timing=timing, partial_corrections=partial_corrections)
+		                    progress_fn=progress_fn, timing=timing,
+		                    partial_corrections=partial_corrections, reocr_cache=cache)
 		if log_fn:
 			log_fn(f"  Stage 4 round {rnd}: {len(error_set)} errors, fixed {fixed}")
 
@@ -145,7 +152,7 @@ def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: 
 		error_set = _detect_errors(rows, anchors, times, max_speed_kmh, max_accel_mps2)
 		for i in error_set:
 			if i not in anchors and rows[i][3] < 2:
-				rows[i][3] = 30
+				rows[i][3] = Flag.FLAGGED_REVIEW
 		if log_fn:
 			log_fn(f"  Stage 5: {len(error_set)} frames flagged for manual review")
 	else:
@@ -305,7 +312,8 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
                 anchors: set, times: list, max_speed_kmh: float, max_accel_mps2: float,
                 progress_fn: "Callable | None" = None,
                 timing: dict | None = None,
-                partial_corrections: dict[int, str] | None = None) -> int:
+                partial_corrections: dict[int, str] | None = None,
+                reocr_cache: dict | None = None) -> int:
 	"""阶段 2+3：对每个 error 帧重 OCR 获取备选，选最优值填入。"""
 	fixed = 0
 	progress_done = 0
@@ -315,7 +323,8 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
 		has_partial = partial_corrections and i in partial_corrections
 		interp_cand = _interp_candidate(i, rows, anchors, times, max_speed_kmh)
 		oid = min(i, len(observations) - 1)
-		reocr_set = _re_ocr_frame(raw_frames[i][1], ocr, max_speed_kmh, timing=timing)
+		reocr_set = _re_ocr_frame(raw_frames[i][1], ocr, max_speed_kmh,
+		                          timing=timing, cache=reocr_cache)
 
 		# ── 收集候选值 ──
 		if has_partial:
@@ -347,8 +356,8 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
 			if len(reocr_set) <= 1 and interp_cand is not None and abs(interp_cand - raw_val) > 10.0:
 				if abs(raw_val - interp_cand) > 0.5:
 					rows[i][2] = interp_cand
-					if rows[i][3] == 0:
-						rows[i][3] = 13 if has_partial else 11
+					if rows[i][3] == Flag.RAW:
+						rows[i][3] = Flag.PARTIAL_AUTO if has_partial else Flag.REOCR_AUTO
 					fixed += 1
 			else:
 				best_val = None
@@ -363,8 +372,8 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
 
 				if best_val is not None and abs(rows[i][2] - best_val) > 0.5:
 					rows[i][2] = best_val
-					if rows[i][3] == 0:
-						rows[i][3] = 13 if has_partial else 11
+					if rows[i][3] == Flag.RAW:
+						rows[i][3] = Flag.PARTIAL_AUTO if has_partial else Flag.REOCR_AUTO
 					fixed += 1
 
 		progress_done += 1
@@ -374,12 +383,22 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
 
 
 def _re_ocr_frame(crop_bgr: "np.ndarray", ocr: "RapidOCR", max_speed_kmh: float,
-                  timing: dict | None = None) -> set:
-	"""阶段 2：对单帧尝试 3 种预处理变体重 OCR，有缓存。"""
-	global _reocr_cache
-	cache_key = hash(crop_bgr.tobytes()) if crop_bgr is not None and crop_bgr.size > 0 else None
-	if cache_key is not None and cache_key in _reocr_cache:
-		return _reocr_cache[cache_key]
+                  timing: dict | None = None, cache: dict | None = None) -> set:
+	"""阶段 2：对单帧尝试标准预处理重 OCR，有缓存。
+
+	Args:
+	    cache: 可选的外部缓存字典（帧索引 → 候选值集合）。
+	           绑定到 Pipeline 实例生命周期以避免内存泄漏。
+	"""
+	cache = cache if cache is not None else {}
+	# 使用帧图像的轻量哈希作为缓存键（仅首 256 字节避免大数组拷贝）
+	if crop_bgr is not None and crop_bgr.size > 0:
+		raw = crop_bgr.data.tobytes() if hasattr(crop_bgr, 'data') else crop_bgr.tobytes()
+		cache_key = hash(raw[:256])
+	else:
+		cache_key = None
+	if cache_key is not None and cache_key in cache:
+		return cache[cache_key]
 
 	candidates = set()
 	if crop_bgr is None or crop_bgr.size == 0:
@@ -402,7 +421,7 @@ def _re_ocr_frame(crop_bgr: "np.ndarray", ocr: "RapidOCR", max_speed_kmh: float,
 	_do_ocr(cv2.cvtColor(proc, cv2.COLOR_GRAY2BGR))
 
 	if cache_key is not None:
-		_reocr_cache[cache_key] = candidates
+		cache[cache_key] = candidates
 	return candidates
 
 
@@ -525,8 +544,8 @@ def _fill_unrecoverable(rows: list, anchors: set, error_set: set, times: list, m
 		else:
 			val = max(0.0, min(max_speed_kmh, lv + left_max_dv))
 		rows[i][2] = val
-		if rows[i][3] == 0:
-			rows[i][3] = 12
+		if rows[i][3] == Flag.RAW:
+			rows[i][3] = Flag.FILL_INTERP
 
 		progress_done += 1
 		if progress_fn:
@@ -571,7 +590,7 @@ def compute_confidence(rows: list, observations: list, max_speed: float,
 
         cur = vals[i]
         if cur < 0 or cur > max_speed:
-            confidences.append({'index': i, 'score': 0, 'is_corrected': flags[i] >= 1,
+            confidences.append({'index': i, 'score': 0, 'is_corrected': Flag.is_corrected(flags[i]),
                                 'speed': cur, 'reason': '速度超出范围'})
             continue
 
@@ -605,7 +624,7 @@ def compute_confidence(rows: list, observations: list, max_speed: float,
                     reasons.append(r)
 
         # 纠错标记
-        if 10 <= flags[i] <= 19:
+        if Flag.is_corrected(flags[i]):
             score -= 30
             reasons.append('auto-corrected')
 
@@ -618,7 +637,7 @@ def compute_confidence(rows: list, observations: list, max_speed: float,
 
         score = max(0.0, min(100.0, score))
         confidences.append({'index': i, 'score': round(score, 1),
-                            'is_corrected': flags[i] >= 1, 'speed': cur,
+                            'is_corrected': Flag.is_corrected(flags[i]), 'speed': cur,
                             'reason': reasons[0] if reasons else '正常'})
 
     return confidences

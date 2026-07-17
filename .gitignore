@@ -40,4 +40,6 @@ __pycache__/
 *_no_digital*.csv
 *_clean.csv
 444.csv
+444_*.csv
 111.csv
+_patch_*.py

@@ -4,6 +4,7 @@ SpeedObservation, preprocessing, correction algorithms,
 model configuration, and supporting utilities.
 """
 from __future__ import annotations
+import logging
 import math
 import os
 import re
@@ -17,6 +18,9 @@ import matplotlib
 matplotlib.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
 matplotlib.rcParams["axes.unicode_minus"] = False
 
+# ── 模块级 Logger ──
+logger = logging.getLogger("RaceVideoToLog.ocr_engine")
+
 # ── 导出列表：包含 _ 前缀的私有符号供 RaceVideoToLog.py / headless.py 使用 ──
 __all__ = [
 	"SpeedObservation", "VideoMetadata", "RapidOCR",
@@ -28,8 +32,35 @@ __all__ = [
 	"_reset_backend", "_select_backend", "_get_model_kwargs",
 	"_gpu_backend", "_gpu_patched", "_CancelExport",
 	"_parse_int_or_none", "parse_csv_header", "_estimate_raw_trust", "_savgol_filter_np",
-	"_set_rec_keys_path",
+	"_set_rec_keys_path", "Flag", "logger",
 ]
+
+# ═══════════════════ Flag 枚举：速度数据来源标记 ═══════════════════
+
+class Flag:
+    """速度数据 flag 值 — 统一标记每帧数据的来源和可信度。
+
+    用于 CSV 第 4 列和所有相关判断逻辑，消除散布的魔法数字。
+    """
+    RAW: int = 0             # 原始 OCR 输出，未纠错
+    REOCR_AUTO: int = 11     # 重 OCR 自动修正
+    FILL_INTERP: int = 12    # 级联插值填充
+    PARTIAL_AUTO: int = 13   # 部分数字模式自动推断修正
+    ANCHOR_AUTO: int = 21    # 自动锚点帧（硬约束）
+    ANCHOR_MANUAL: int = 22  # 人工修正锚点帧
+    CONFIRMED_SEG: int = 23  # 人工确认段内帧
+    FLAGGED_REVIEW: int = 30 # 标记待人工审核
+
+    @classmethod
+    def is_corrected(cls, flag: int) -> bool:
+        """是否为自动纠错帧 (10-19)。"""
+        return 10 <= flag <= 19
+
+    @classmethod
+    def is_anchor(cls, flag: int) -> bool:
+        """是否为锚点帧 (>=20)。"""
+        return flag >= 20
+
 
 # ═══════════════════ GPU 加速前置：注册 CUDA/cuDNN DLL ═══════════════════
 def _register_gpu_dlls() -> None:
@@ -45,6 +76,7 @@ def _register_gpu_dlls() -> None:
 		# ── 1. 定位 CUDA Toolkit bin 目录 ──
 		_cuda_base = r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA"
 		for _ver in [
+			"v13.3", "v13.2", "v13.1", "v13.0",
 			"v12.9", "v12.8", "v12.7", "v12.6", "v12.5", "v12.4",
 			"v12.3", "v12.2", "v12.1", "v12.0",
 			"v11.8", "v11.7", "v11.6",
@@ -120,6 +152,7 @@ def _register_gpu_dlls() -> None:
 		for _dll_path in _cudnn_dlls:
 			_load_dll(_dll_path)
 
+		# ── 3. 更新 PATH ──
 		_path_extra: list[str] = []
 		if _cuda_bin:
 			_path_extra.append(_cuda_bin)
@@ -130,18 +163,17 @@ def _register_gpu_dlls() -> None:
 			_os.environ["PATH"] = ";".join(_path_extra) + (";" + _existing if _existing else "")
 
 		if _cuda_bin:
-			print(f"[GPU] CUDA: {_cuda_bin}", flush=True)
+			logger.info("CUDA: %s", _cuda_bin)
 		else:
-			print("[GPU] CUDA: 未找到 CUDA Toolkit 安装", flush=True)
+			logger.info("CUDA: 未找到 CUDA Toolkit 安装")
 		if _cudnn_dlls:
-			print(f"[GPU] cuDNN: {len(_cudnn_dlls)} 个 DLL 在 {_cudnn_dir}", flush=True)
+			logger.info("cuDNN: %d 个 DLL 在 %s", len(_cudnn_dlls), _cudnn_dir)
 		else:
-			print("[GPU] cuDNN: 未找到", flush=True)
-		print(f"[GPU] 预加载: {_loaded} 个成功", flush=True)
+			logger.info("cuDNN: 未找到")
+		logger.info("GPU DLL 预加载: %d 个成功", _loaded)
 		if _failed:
-			print(f"[GPU] 预加载失败 ({len(_failed)} 个):", flush=True)
-			for _msg in _failed[:5]:
-				print(f"  {_msg}", flush=True)
+			logger.warning("GPU DLL 预加载失败 (%d 个): %s", len(_failed),
+			               "; ".join(_failed[:5]))
 
 	except Exception:
 		pass
@@ -163,7 +195,12 @@ _BACKEND_FALLBACK: dict[str, list[str]] = {
 	"cpu":  ["CPU"],
 }
 _BACKEND_PROVIDER_MAP = {
-	"CUDA": ("CUDAExecutionProvider", {"device_id": 0, "arena_extend_strategy": "kNextPowerOfTwo", "cudnn_conv_algo_search": "EXHAUSTIVE", "do_copy_in_default_stream": True}),
+	"CUDA": ("CUDAExecutionProvider", {
+	    "device_id": 0,
+	    "arena_extend_strategy": "kNextPowerOfTwo",
+	    "cudnn_conv_algo_search": "EXHAUSTIVE",
+	    "do_copy_in_default_stream": True,
+	}),
 	"CPU":  ("CPUExecutionProvider", {"arena_extend_strategy": "kSameAsRequested"}),
 }
 
@@ -329,8 +366,8 @@ def parse_csv_header(path: str) -> dict[str, str]:
 				line = line.lstrip("#").strip()
 				for m in _pair.finditer(line):
 					settings[m.group(1)] = m.group(2).strip()
-	except Exception:
-		pass
+	except Exception as e:
+		logger.warning("解析 CSV 文件头失败 (%s): %s", path, e)
 	return settings
 
 
@@ -449,8 +486,15 @@ def clamp_region(x1: int, y1: int, x2: int, y2: int, width: int, height: int) ->
 	return x1, y1, x2, y2
 
 
+# ── SG 滤波系数缓存（(window_length, polyorder) → coefficients）──
+_sg_coeff_cache: dict[tuple[int, int], np.ndarray] = {}
+
 def _savgol_filter_np(y: "np.ndarray", window_length: int, polyorder: int) -> "np.ndarray":
-	"""纯 numpy Savitzky-Golay 滤波，等价于 scipy.signal.savgol_filter。"""
+	"""纯 numpy Savitzky-Golay 滤波 — 预计算卷积系数，O(N) 复杂度。
+
+	等价于 scipy.signal.savgol_filter，但无 scipy 依赖。
+	通过预计算伪逆系数 + np.convolve 实现，比逐点 lstsq 快 10-100x。
+	"""
 	if window_length % 2 == 0 or window_length < 1:
 		raise ValueError("window_length must be odd")
 	if window_length <= polyorder:
@@ -460,19 +504,24 @@ def _savgol_filter_np(y: "np.ndarray", window_length: int, polyorder: int) -> "n
 	n = len(y)
 	if n < window_length:
 		return y.copy()
-	x_full = np.arange(-half, half + 1, dtype=float)
-	result = np.zeros(n)
-	for i in range(n):
-		lo = max(0, i - half)
-		hi = min(n, i + half + 1)
-		y_seg = y[lo:hi]
-		if len(y_seg) < window_length:
-			result[i] = y[i]
-		else:
-			x_seg = x_full[lo - (i - half):hi - (i - half)]
-			A = np.vander(x_seg, polyorder + 1, increasing=True)
-			coeffs = np.linalg.lstsq(A, y_seg, rcond=None)[0]
-			result[i] = np.polyval(coeffs[::-1], 0)
+
+	# ── 预计算卷积系数（缓存复用）──
+	cache_key = (window_length, polyorder)
+	if cache_key not in _sg_coeff_cache:
+		x = np.arange(-half, half + 1, dtype=float)
+		A = np.vander(x, polyorder + 1, increasing=True)
+		# pinv(A)[0] = 多项式常数项 a0 的系数 = 中心点的平滑值
+		_sg_coeff_cache[cache_key] = np.linalg.pinv(A)[0]
+	coeffs = _sg_coeff_cache[cache_key]
+
+	# ── 卷积应用（O(N)）──
+	result = np.convolve(y, coeffs[::-1], mode="same")
+
+	# ── 边界处理：用最近的有效滤波值填充 ──
+	if half > 0 and n > half:
+		result[:half] = result[half]
+		result[-half:] = result[-half - 1]
+
 	return result
 
 

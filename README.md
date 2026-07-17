@@ -1,14 +1,16 @@
-# RaceVideoToLog v2.2.0
+# RaceVideoToLog v2.3.0
 
 从赛车游戏视频中提取速度数据，生成时间-速度-距离 CSV 文件。支持 GPU (CUDA) / CPU 后端，提供 PySide6 Fluent Design GUI 和 CLI 两种界面。GUI 与 CLI 共用统一的 `ProcessingPipeline` 后端，保证行为一致。
 
 ## 安装
 
 ```bash
-pip install rapidocr_onnxruntime onnxruntime opencv-python numpy matplotlib pyside6 qfluentwidgets
+pip install rapidocr_onnxruntime onnxruntime-gpu opencv-python-headless numpy matplotlib pyside6 qfluentwidgets pyclipper shapely
 ```
 
-**GPU 加速**（可选）：安装 NVIDIA CUDA Toolkit 12.x + cuDNN 9.x，程序自动检测。
+**GPU 加速**：安装 NVIDIA CUDA Toolkit 12.x + cuDNN 9.x，程序自动检测并预加载。也可纯 CPU 运行（`--backend cpu`）。
+
+**注**：`onnxruntime-gpu` 已内置 CPU 推理能力，无需单独安装 `onnxruntime`。
 
 ## 使用方式
 
@@ -57,10 +59,11 @@ RaceVideoToLog/
 ├── gui.py               # PySide6 主窗口 (Fluent Design)
 ├── gui_review.py        # 人工审核对话框
 ├── gui_analysis.py      # 数据分析 Tab
+├── widget_utils.py      # 共享 GUI 组件 (make_static_card, chart zoom/pan)
 ├── analysis.py          # 数据分析业务逻辑
 ├── pipeline.py          # 统一处理流水线 (GUI/CLI 共用)
-├── correction.py        # 物理约束纠错流水线
-├── ocr_engine.py        # OCR 引擎、预处理、锚点选择、CSV 解析
+├── correction.py        # 物理约束纠错流水线 (5阶段)
+├── ocr_engine.py        # OCR 引擎、预处理、锚点选择、Flag 枚举
 ├── theme_manager.py     # 主题回调管理器
 ├── headless.py          # CLI 入口 (委托给 pipeline)
 ├── RaceVideoToLog.spec  # PyInstaller 打包配置
@@ -69,31 +72,33 @@ RaceVideoToLog/
 
 ## 输出格式
 
-CSV 头包含完整处理参数，按语义分行（时空范围 → 处理参数 → 推理引擎 → 纠错模式）：
+CSV 头包含完整处理参数和统计信息：
 
 ```csv
-# RaceVideoToLog
+# RaceVideoToLog v2.3.0
 # video_hash=94ac7e06b58914e7, video=test4.mp4
 # roi=862,945,957,1003, format=km/h, frame_start=114, frame_end=6317
 # max_speed=400.0, max_accel=70.0, div=1, target_h=24.0, pad=0.0, buffer=8
 # backend=CUDA, model=v6_small
 # auto_anchor=1
+# stats: total=6203, anchors=4265, corrected=318
+# timing: ocr=23.5s, correction=0.4s, integrate_write=0.0s
 1.90,0.00,0.00,0
 1.92,0.00,3.00,0
 ```
 
-**Flag 定义**（可追溯数据溯源）：
+**Flag 定义**（定义于 `ocr_engine.Flag` 枚举）：
 
-| Flag | 含义 |
-| ---- | ---- |
-| 0    | 原始 OCR |
-| 11   | re-OCR 自动修正 |
-| 12   | 插值填充 |
-| 13   | 部分数字自动修正 |
-| 21   | 自动锚点帧 |
-| 22   | 人工修正帧 |
-| 23   | 人工确认段 |
-| 30   | 待人工审核（skip_fill 模式） |
+| Flag | 常量 | 含义 |
+| ---- | ---- | ---- |
+| 0 | `Flag.RAW` | 原始 OCR |
+| 11 | `Flag.REOCR_AUTO` | re-OCR 自动修正 |
+| 12 | `Flag.FILL_INTERP` | 插值填充 |
+| 13 | `Flag.PARTIAL_AUTO` | 部分数字自动修正 |
+| 21 | `Flag.ANCHOR_AUTO` | 自动锚点帧 |
+| 22 | `Flag.ANCHOR_MANUAL` | 人工修正帧 |
+| 23 | `Flag.CONFIRMED_SEG` | 人工确认段 |
+| 30 | `Flag.FLAGGED_REVIEW` | 待人工审核 |
 
 ## 部分数字修正
 
@@ -131,9 +136,12 @@ python RaceVideoToLog.py [video] [options]
 
 ## 性能
 
-- 原生 `threading.Thread` 替代 QThread，消除 CUDA ONNX 推理的 4.6× 性能损失
-- 原始 BGR resize 预处理（无灰度转换、无 OTSU），最大化推理速度
-- 解码 + OCR 合并为流水线循环，生产者线程解码预处理，消费者线程推理
+- ONNX Runtime 1.27 + CUDA 12.x，PP-OCRv6_small 模型（~2M 检测 + ~5M 识别参数）
+- 单帧推理 ~4ms（~250 fps），GTX/RTX GPU 上轻松满足实时处理
+- 原生 `threading.Thread` 解码 + Queue 流水线，I/O 与推理重叠
+- Savitzky-Golay 滤波预计算卷积系数（O(N) 复杂度，缓存复用）
+- 重 OCR 缓存绑定 Pipeline 实例生命周期，避免内存泄漏
+- 日志系统（`logging` 模块）替代 `print()`，支持分级输出
 
 ## 打包
 
@@ -142,7 +150,9 @@ pip install pyinstaller
 python -m PyInstaller RaceVideoToLog.spec --noconfirm
 ```
 
-生成 `dist/RaceVideoToLog/` (onedir 模式)。GPU 用户需自行安装 CUDA Toolkit + cuDNN。
+生成 `dist/RaceVideoToLog/` (onedir 模式，~567 MB)。GPU 用户需自行安装 CUDA Toolkit + cuDNN。
+
+打包已排除：TensorRT/DirectML 后端、未使用的 ONNX 模型（v3/v5/medium）、Qt6 Quick/Qml/Pdf/Network 等模块、scipy、tk/tcl。参见 `RaceVideoToLog.spec`。
 
 ## License
 
