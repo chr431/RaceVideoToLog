@@ -14,7 +14,8 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 from qfluentwidgets import (PushButton, PrimaryPushButton, CompactSpinBox,
-	RadioButton, CheckBox, BodyLabel, CardWidget, Slider)
+	RadioButton, CheckBox, BodyLabel, Slider)
+from widget_utils import make_static_card, setup_chart_zoom_pan
 
 from analysis import parse_csv, smooth_data, plot_segmented
 
@@ -56,7 +57,7 @@ class AnalysisTab:
 		cl.setContentsMargins(0, 0, 0, 0)
 
 		for i in range(3):
-			slot = CardWidget()
+			slot = make_static_card()
 			sl = QHBoxLayout(slot)
 			btn_import = PushButton("导入")
 			btn_import.clicked.connect(lambda checked, idx=i: self._import(idx))
@@ -328,35 +329,8 @@ class AnalysisTab:
 			button=1)  # type: ignore[arg-type]
 		delta_text.set_text(f"← 拖拽选择范围查看{delta_label}")
 
-		# 滚轮缩放 + 右键平移
-		_px = [None, None]
-
-		def _on_scroll(event: object) -> None:
-			s = 0.85 if getattr(event, 'button', '') == 'up' else 1.15
-			xl = ax.get_xlim(); yl = ax.get_ylim()
-			xm = (xl[0] + xl[1]) / 2; ym = (yl[0] + yl[1]) / 2
-			ax.set_xlim(xm - (xm - xl[0]) * s, xm + (xl[1] - xm) * s)
-			ax.set_ylim(ym - (ym - yl[0]) * s, ym + (yl[1] - ym) * s)
-			canvas.draw_idle()
-
-		def _on_press(event: object) -> None:
-			if getattr(event, 'button', 0) == 3:
-				_px[0], _px[1] = getattr(event, 'xdata', None), getattr(event, 'ydata', None)
-
-		def _on_motion(event: object) -> None:
-			if getattr(event, 'button', 0) == 3 and _px[0] is not None:
-				xd = getattr(event, 'xdata', None)
-				if xd is not None:
-					dx = _px[0] - xd
-					dy = (_px[1] or 0) - (getattr(event, 'ydata', None) or 0)
-					xl = ax.get_xlim(); yl = ax.get_ylim()
-					ax.set_xlim(xl[0] + dx, xl[1] + dx)
-					ax.set_ylim(yl[0] + dy, yl[1] + dy)
-					canvas.draw_idle()
-
-		fig.canvas.mpl_connect("scroll_event", _on_scroll)
-		fig.canvas.mpl_connect("button_press_event", _on_press)
-		fig.canvas.mpl_connect("motion_notify_event", _on_motion)
+		# 滚轮缩放 + 右键平移（使用共享工具函数，无节流以保持分析 Tab 的即时响应）
+		setup_chart_zoom_pan(ax, canvas, throttle_ms=0)
 
 		fig.tight_layout()
 		if not is_dtx:

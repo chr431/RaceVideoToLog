@@ -11,18 +11,11 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QPixmap, QImage, QPalette, QColor
 from qfluentwidgets import (BodyLabel, StrongBodyLabel, CaptionLabel,
-    PrimaryPushButton, PushButton, CardWidget, isDarkTheme)
+    PrimaryPushButton, PushButton, isDarkTheme)
 from theme_manager import ThemeManager
+from widget_utils import make_static_card, setup_chart_zoom_pan
 
 import cv2
-
-def _make_static_card(parent=None):
-    """创建禁用 hover 高亮的 CardWidget — 与主窗口一致。"""
-    w = CardWidget(parent)
-    w.enterEvent = lambda e: None
-    w.leaveEvent = lambda e: None
-    return w
-import numpy as np
 
 class ReviewDialog(QDialog):
     """人工审核对话框 — 左侧问题段列表，右侧速度曲线 + 图像 + 修正控件。"""
@@ -102,7 +95,7 @@ class ReviewDialog(QDialog):
         rl = QVBoxLayout(right); rl.setContentsMargins(8, 0, 0, 0); rl.setSpacing(6)
 
         # 速度曲线
-        chart_card = _make_static_card()
+        chart_card = make_static_card()
         cl = QVBoxLayout(chart_card); cl.setContentsMargins(8, 8, 8, 4)
         cl.addWidget(CaptionLabel("速度曲线（当前段加粗高亮，红色=问题段，绿色=已确认，蓝点=已修正）"))
         self._figure, self._ax, self._canvas = self._create_chart()
@@ -113,7 +106,7 @@ class ReviewDialog(QDialog):
         bottom_row = QHBoxLayout(); bottom_row.setSpacing(8)
 
         # 原始图像预览（较小宽度，匹配 ROI 裁剪实际比例）
-        img_card = _make_static_card()
+        img_card = make_static_card()
         il = QVBoxLayout(img_card); il.setContentsMargins(8, 8, 8, 4)
         il.addWidget(CaptionLabel("当前帧原始图像（ROI 裁剪区域）"))
         self._img_label = QLabel("选择帧后显示")
@@ -124,7 +117,7 @@ class ReviewDialog(QDialog):
         bottom_row.addWidget(img_card, 1)
 
         # 修正控件
-        ctrl_card = _make_static_card()
+        ctrl_card = make_static_card()
         ctrl = QVBoxLayout(ctrl_card); ctrl.setContentsMargins(8, 8, 8, 4)
 
         cf_row = QHBoxLayout()
@@ -216,53 +209,9 @@ class ReviewDialog(QDialog):
         return fig, ax, canvas
 
     def _setup_chart_zoom_pan(self, ax, canvas) -> None:
-        """配置滚轮缩放 + 右键拖拽平移，带 40ms 节流。"""
-        import time as _time
-        self._user_zoomed = False
-        self._saved_xlim: tuple | None = None
-        self._saved_ylim: tuple | None = None
-        _pan_start = [None, None]
-        _last_draw = [0.0]
-
-        def _throttled_draw() -> None:
-            now = _time.time()
-            if now - _last_draw[0] >= 0.04:
-                canvas.draw_idle()
-                _last_draw[0] = now
-
-        def _on_scroll(event: object) -> None:
-            s = 0.85 if getattr(event, 'button', '') == 'up' else 1.15
-            xl = ax.get_xlim(); yl = ax.get_ylim()
-            xm = (xl[0] + xl[1]) / 2; ym = (yl[0] + yl[1]) / 2
-            ax.set_xlim(xm - (xm - xl[0]) * s, xm + (xl[1] - xm) * s)
-            ax.set_ylim(ym - (ym - yl[0]) * s, ym + (yl[1] - ym) * s)
-            self._user_zoomed = True
-            self._saved_xlim = tuple(ax.get_xlim())
-            self._saved_ylim = tuple(ax.get_ylim())
-            canvas.draw_idle()
-
-        def _on_press(event: object) -> None:
-            if getattr(event, 'button', 0) == 3:
-                _pan_start[0] = getattr(event, 'xdata', None)
-                _pan_start[1] = getattr(event, 'ydata', None)
-
-        def _on_motion(event: object) -> None:
-            if getattr(event, 'button', 0) == 3 and _pan_start[0] is not None:
-                xd = getattr(event, 'xdata', None)
-                if xd is not None:
-                    dx = _pan_start[0] - xd
-                    dy = (_pan_start[1] or 0) - (getattr(event, 'ydata', None) or 0)
-                    xl = ax.get_xlim(); yl = ax.get_ylim()
-                    ax.set_xlim(xl[0] + dx, xl[1] + dx)
-                    ax.set_ylim(yl[0] + dy, yl[1] + dy)
-                    self._user_zoomed = True
-                    self._saved_xlim = tuple(ax.get_xlim())
-                    self._saved_ylim = tuple(ax.get_ylim())
-                    _throttled_draw()
-
-        canvas.mpl_connect("scroll_event", _on_scroll)
-        canvas.mpl_connect("button_press_event", _on_press)
-        canvas.mpl_connect("motion_notify_event", _on_motion)
+        """配置滚轮缩放 + 右键拖拽平移（使用共享工具函数）。"""
+        self._user_zoomed_ref, self._saved_limits = setup_chart_zoom_pan(
+            ax, canvas, throttle_ms=40)
 
     def _redraw_chart(self, ax=None, fig=None) -> None:
         if ax is None:
@@ -271,10 +220,11 @@ class ReviewDialog(QDialog):
             fig = self._figure
 
         # 仅在用户手动缩放/平移后才恢复，首次绘制使用数据范围
-        user_zoomed = getattr(self, '_user_zoomed', False)
+        user_zoomed = (hasattr(self, '_user_zoomed_ref')
+                       and self._user_zoomed_ref[0])
         if user_zoomed:
-            saved_xlim = self._saved_xlim
-            saved_ylim = self._saved_ylim
+            saved_xlim = self._saved_limits["xlim"]
+            saved_ylim = self._saved_limits["ylim"]
 
         ax.clear()
         dark = isDarkTheme()

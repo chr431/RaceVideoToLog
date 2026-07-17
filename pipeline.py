@@ -3,6 +3,8 @@
 """
 from __future__ import annotations
 import csv
+import logging
+import time as _time
 from pathlib import Path
 from collections.abc import Callable
 
@@ -13,11 +15,13 @@ from rapidocr_onnxruntime import RapidOCR
 import ocr_engine as _oe
 from ocr_engine import (
     auto_select_anchors, clamp_region, compute_video_hash,
-    extract_speed_value, SpeedObservation,
+    extract_speed_value, SpeedObservation, Flag,
     SOURCE_TO_KMH, _parse_int_or_none,
     _reset_backend, _select_backend, _get_model_kwargs,
 )
 from correction import correct_with_anchors, compute_confidence, find_problem_segments
+
+logger = logging.getLogger("RaceVideoToLog.pipeline")
 
 
 def _preprocess_standard(crop: np.ndarray, target_h: float, pad: float) -> np.ndarray:
@@ -74,11 +78,18 @@ class ProcessingPipeline:
         self._rows: list[list] = []
         self._anchor_indices: set[int] = set()
         self._segments: list[dict] = []
+        # ── 性能计时 ──
+        self._timing: dict[str, float] = {}
+        # ── 重 OCR 缓存（绑定到 Pipeline 实例生命周期）──
+        self._reocr_cache: dict[int, set[float]] = {}
+        # ── 调试模式：在 CSV 中输出原始 OCR 文本 ──
+        self._debug_raw_text: bool = False
 
     # ═══════════════ 公开接口 ═══════════════
 
     def run_auto(self, output_path: str | Path) -> None:
         """自动锚点模式：完整流水线 → 写 CSV。"""
+        t_total = _time.perf_counter()
         self._emit("加载 OCR 引擎...", 1.0)
         self._ensure_ocr()
         self._run_ocr()
@@ -90,11 +101,15 @@ class ProcessingPipeline:
             self._emit("跳过纠错（原始OCR输出）...", 95.0)
             self._rows = []
             for obs in self._observations:
-                self._rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh, 0])
+                self._rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh, Flag.RAW])
             self._integrate_distance()
             self._write_csv(self._rows, Path(output_path), auto_anchor=True)
         else:
             self._run_correction(Path(output_path), skip_fill=False)
+        self._timing["total"] = _time.perf_counter() - t_total
+        logger.info("流水线完成: 总计 %.1fs (%s)",
+                     self._timing["total"],
+                     ", ".join(f"{k}={v:.1f}s" for k, v in self._timing.items()))
         self._emit("完成", 100.0)
 
     def run_review_pass1(self, output_path: str | Path | None = None) -> tuple | None:
@@ -116,7 +131,7 @@ class ProcessingPipeline:
         self._rows = []
         for i, obs in enumerate(self._observations):
             self._rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh,
-                               21 if i in self._anchor_indices else 0])
+                               Flag.ANCHOR_AUTO if i in self._anchor_indices else Flag.RAW])
 
         self._emit("计算置信度...", 97.5)
         confidences = compute_confidence(self._rows, self._observations,
@@ -144,7 +159,7 @@ class ProcessingPipeline:
         for fi, v in corrections.items():
             if 0 <= fi < len(self._rows):
                 self._rows[fi][2] = v
-                self._rows[fi][3] = 22
+                self._rows[fi][3] = Flag.ANCHOR_MANUAL
                 self._anchor_indices.add(fi)
 
         for seg_start in confirmed_segments:
@@ -152,7 +167,7 @@ class ProcessingPipeline:
                 if seg["start"] == seg_start:
                     for fi in range(seg["start"], seg["end"] + 1):
                         if fi not in corrections and 0 <= fi < len(self._rows):
-                            self._rows[fi][3] = 23
+                            self._rows[fi][3] = Flag.CONFIRMED_SEG
                             self._anchor_indices.add(fi)
                     break
 
@@ -195,8 +210,9 @@ class ProcessingPipeline:
             self._rows = []
             for i, obs in enumerate(self._observations):
                 self._rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh,
-                                   21 if i in self._anchor_indices else 0])
+                                   Flag.ANCHOR_AUTO if i in self._anchor_indices else Flag.RAW])
 
+        t0 = _time.perf_counter()
         self._emit("纠错: 检测误差...", progress_base + 1.0)
         corr_timing: dict[str, float] = {}
         def _prog(done: int, total: int) -> None:
@@ -208,19 +224,27 @@ class ProcessingPipeline:
             self._rows, self._observations, self._raw_frames, self._ocr,
             self._max_speed, self._max_accel, self._anchor_indices,
             progress_fn=_prog, timing=corr_timing, skip_fill=skip_fill,
-            partial_corrections=partial_corrections)
+            partial_corrections=partial_corrections,
+            reocr_cache=self._reocr_cache)
+        self._timing["correction"] = _time.perf_counter() - t0
         if corr_timing.get("re_ocr", 0) > 0:
-            print(f"  [重OCR] {corr_timing['re_ocr']:.2f}s")
+            logger.info("重OCR 耗时: %.2fs", corr_timing["re_ocr"])
 
     def _run_correction(self, output_path: Path, skip_fill: bool) -> None:
         """自动锚点模式的完整纠错 + 写 CSV（调用 _correct 后继续）。"""
         self._correct(91.0, 6.0, skip_fill=skip_fill)
+        t1 = _time.perf_counter()
         self._integrate_distance()
         self._write_csv(self._rows, output_path, auto_anchor=True)
-        self._emit("完成", 100.0)
+        self._timing["integrate_write"] = _time.perf_counter() - t1
 
     def _run_ocr(self) -> None:
-        """解码 + OCR：producer 线程解码并预处理，consumer 做 ONNX 推理。"""
+        """解码 + OCR：producer 解码/预处理 → consumer 做 ONNX 推理。
+
+        Queue 流水线重叠 I/O 与 GPU 推理。对于小 ROI 裁切 (~4ms/帧)，
+        单 ONNX 会话已使 GPU 饱和，多消费者增加协调开销而无收益。
+        ORT 1.27 支持多会话并发（不再 crash），需要时可启用。
+        """
         import threading
         from queue import Queue
 
@@ -229,6 +253,7 @@ class ProcessingPipeline:
         target_h = self._target_h
         pad = self._pad
         frame_step = max(1, self._frame_div)
+        t_start = _time.perf_counter()
 
         cap = cv2.VideoCapture(str(self._video_path))
         total_video_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
@@ -301,6 +326,9 @@ class ProcessingPipeline:
         if errors:
             raise errors[0]
         self._observations = observations
+        self._timing["ocr"] = _time.perf_counter() - t_start
+        logger.info("OCR 完成: %d 帧, 耗时 %.1fs",
+                     len(observations), self._timing["ocr"])
 
     def _integrate_distance(self) -> None:
         dist = 0.0; prev_t = prev_v = None
@@ -318,8 +346,13 @@ class ProcessingPipeline:
         vhash = compute_video_hash(self._video_path)
         r = self._roi
         tag = "manual_anchor" if manual_anchor else ("auto_anchor" if auto_anchor else "")
+        # ── 统计信息 ──
+        n_total = len(rows)
+        n_anchors = sum(1 for row in rows if Flag.is_anchor(row[3]))
+        n_corrected = sum(1 for row in rows if Flag.is_corrected(row[3]))
+        timing_str = ", ".join(f"{k}={v:.1f}s" for k, v in self._timing.items())
         with output_path.open("w", newline="", encoding="utf-8-sig") as fh:
-            fh.write("# RaceVideoToLog\n")
+            fh.write("# RaceVideoToLog v2.2.0\n")
             fh.write(f"# video_hash={vhash}, video={self._video_path.name}\n")
             fh.write(f"# roi={r[0]},{r[1]},{r[2]},{r[3]}, format={self._speed_format}"
                      f", frame_start={self._frame_start or ''}"
@@ -330,7 +363,19 @@ class ProcessingPipeline:
             fh.write(f"# backend={self._backend_actual}, model={self._ocr_model}\n")
             if tag:
                 fh.write(f"# {tag}=1\n")
+            fh.write(f"# stats: total={n_total}, anchors={n_anchors},"
+                     f" corrected={n_corrected}\n")
+            if timing_str:
+                fh.write(f"# timing: {timing_str}\n")
             w = csv.writer(fh)
-            for row in rows:
-                w.writerow([f"{row[0]:.2f}", f"{row[1]:.2f}",
-                           f"{row[2]:.2f}", str(row[3])])
+            # 调试模式：增加 raw_text 列
+            if self._debug_raw_text and self._observations:
+                for i, row in enumerate(rows):
+                    raw_text = (self._observations[i].raw_text
+                                if i < len(self._observations) else "")
+                    w.writerow([f"{row[0]:.2f}", f"{row[1]:.2f}",
+                               f"{row[2]:.2f}", str(row[3]), raw_text])
+            else:
+                for row in rows:
+                    w.writerow([f"{row[0]:.2f}", f"{row[1]:.2f}",
+                               f"{row[2]:.2f}", str(row[3])])

@@ -16,14 +16,19 @@ from PySide6.QtWidgets import (
 	QDialog, QFileDialog, QMessageBox, QHBoxLayout, QVBoxLayout, QGridLayout,
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QThread
-import threading
+from widget_utils import make_static_card
 from pipeline import ProcessingPipeline
 from PySide6.QtGui import (
 	QPixmap, QImage, QPainter, QPen, QColor, QKeySequence, QShortcut,
 )
 
-import ocr_engine
-from ocr_engine import *  # noqa: F403, F405
+import ocr_engine as _oe
+from ocr_engine import (
+    RapidOCR, VideoMetadata, SpeedObservation,
+    codec_from_fourcc, format_duration,
+    _reset_backend, _select_backend, _get_model_kwargs,
+    _CancelExport,
+)
 from gui_analysis import AnalysisTab
 from gui_review import ReviewDialog
 from theme_manager import ThemeManager
@@ -31,9 +36,6 @@ from theme_manager import ThemeManager
 from qfluentwidgets import (setTheme, Theme, isDarkTheme,
 	PushButton, PrimaryPushButton, LineEdit, ComboBox, CheckBox, RadioButton,
 	BodyLabel, StrongBodyLabel, CaptionLabel, CardWidget, Slider, ProgressBar, CompactSpinBox, Pivot)
-
-
-
 
 
 class _ExportThread(QThread):
@@ -185,6 +187,7 @@ class RaceVideoToLogApp(QMainWindow):
 		self._preview_scale: float = 1.0
 		self._preview_ox: float = 0.0
 		self._preview_oy: float = 0.0
+		self._redraw_timer: QTimer | None = None  # ROI 拖拽重绘节流
 
 		self._build_ui()
 		self._connect_signals()
@@ -265,7 +268,7 @@ class RaceVideoToLogApp(QMainWindow):
 		layout.addLayout(hdr)
 
 		# 视频信息 Card
-		info = self._make_static_card()
+		info = make_static_card()
 		il = QHBoxLayout(info)
 		self._dur_label = BodyLabel("-"); self._res_label = BodyLabel("-")
 		self._fps_label = BodyLabel("-"); self._codec_label = BodyLabel("-")
@@ -293,7 +296,7 @@ class RaceVideoToLogApp(QMainWindow):
 
 	def _build_left_panel(self, ll: QVBoxLayout) -> None:
 		# 速度格式 Card
-		fmt_card = self._make_static_card()
+		fmt_card = make_static_card()
 		gl = QVBoxLayout(fmt_card)
 		gl.addWidget(StrongBodyLabel("速度格式"))
 		r = QHBoxLayout()
@@ -304,7 +307,7 @@ class RaceVideoToLogApp(QMainWindow):
 		gl.addLayout(r)
 		gl.addWidget(CaptionLabel("输出统一转换为 km/h。"))
 
-		cg = self._make_static_card()
+		cg = make_static_card()
 		cl = QGridLayout(cg)
 		cl.addWidget(BodyLabel("最大速度 (km/h)"), 0, 0)
 		self.max_speed_edit = LineEdit(); self.max_speed_edit.setText("400"); self.max_speed_edit.setFixedWidth(50)
@@ -316,7 +319,7 @@ class RaceVideoToLogApp(QMainWindow):
 		ll.addWidget(fmt_card)
 
 		# 性能 Card
-		perf_card = self._make_static_card()
+		perf_card = make_static_card()
 		pl = QGridLayout(perf_card)
 		pl.addWidget(StrongBodyLabel("性能"), 0, 0, 1, 4)
 		pl.addWidget(BodyLabel("采样率 1/"), 1, 0)
@@ -340,7 +343,7 @@ class RaceVideoToLogApp(QMainWindow):
 		ll.addWidget(perf_card)
 
 		# 纠错模式 Card
-		mode_card = self._make_static_card()
+		mode_card = make_static_card()
 		ml = QVBoxLayout(mode_card)
 		ml.addWidget(StrongBodyLabel("纠错模式"))
 		self.mode_auto = RadioButton("自动锚点纠错（全自动，推荐）")
@@ -350,7 +353,7 @@ class RaceVideoToLogApp(QMainWindow):
 		ll.addWidget(mode_card)
 
 		# 时间轴范围 Card
-		time_card = self._make_static_card()
+		time_card = make_static_card()
 		tl = QGridLayout(time_card)
 		tl.addWidget(StrongBodyLabel("时间轴范围"), 0, 0, 1, 6)
 		tl.addWidget(BodyLabel("起始帧"), 1, 0)
@@ -371,7 +374,7 @@ class RaceVideoToLogApp(QMainWindow):
 
 	def _build_right_panel(self, rl: QVBoxLayout) -> None:
 		# 识别范围 Card
-		roi_card = self._make_static_card()
+		roi_card = make_static_card()
 		rgl = QGridLayout(roi_card)
 		rgl.addWidget(StrongBodyLabel("识别范围（像素）"), 0, 0, 1, 4)
 		self.roi_x1 = CompactSpinBox(); self.roi_y1 = CompactSpinBox()
@@ -388,7 +391,7 @@ class RaceVideoToLogApp(QMainWindow):
 		rl.addWidget(roi_card)
 
 		# 预览 Card
-		pv = self._make_static_card()
+		pv = make_static_card()
 		pvl = QVBoxLayout(pv)
 		pvl.addWidget(StrongBodyLabel("识别范围预览"))
 		self._preview_label = BodyLabel()
@@ -447,12 +450,6 @@ class RaceVideoToLogApp(QMainWindow):
 			pass
 		spin._showFlyout = lambda: None
 
-	@staticmethod
-	def _make_static_card(parent=None):
-		w = CardWidget(parent)
-		w.enterEvent = lambda e: None   # 完全禁用 hover
-		w.leaveEvent = lambda e: None
-		return w
 
 	def _register_theme_callbacks(self) -> None:
 		# 主窗口背景色
@@ -572,7 +569,7 @@ class RaceVideoToLogApp(QMainWindow):
 		x2 = max(self._drag_start[0], x); y2 = max(self._drag_start[1], y)
 		for s, v in [(self.roi_x1, x1), (self.roi_y1, y1), (self.roi_x2, x2), (self.roi_y2, y2)]:
 				s.blockSignals(True); s.setValue(v); s.blockSignals(False)
-		self._redraw()
+		self._schedule_redraw()
 
 	def _on_roi_spin(self, spin) -> None:
 		if spin is self.roi_x1 and self.roi_x1.value() > self.roi_x2.value() - 1:
@@ -583,7 +580,7 @@ class RaceVideoToLogApp(QMainWindow):
 			spin.blockSignals(True); spin.setValue(self.roi_y2.value() - 1); spin.blockSignals(False)
 		elif spin is self.roi_y2 and self.roi_y2.value() < self.roi_y1.value() + 1:
 			spin.blockSignals(True); spin.setValue(self.roi_y1.value() + 1); spin.blockSignals(False)
-		self._redraw()
+		self._schedule_redraw()
 
 	def _on_pv_release(self, event) -> None:
 		self._drag_active = False
@@ -635,6 +632,19 @@ class RaceVideoToLogApp(QMainWindow):
 		if not self.metadata: return
 		v = max(0, min(self.metadata.frame_count - 1, self._slider.value() + delta))
 		self._slider.setValue(v)
+
+	def _schedule_redraw(self) -> None:
+		"""节流重绘：16ms 单次定时器，避免拖拽时过度调用 _redraw。"""
+		if self._redraw_timer is not None:
+			return  # 定时器已在运行，跳过
+		self._redraw_timer = QTimer(self)
+		self._redraw_timer.setSingleShot(True)
+		self._redraw_timer.timeout.connect(self._do_throttled_redraw)
+		self._redraw_timer.start(16)  # ~60fps
+
+	def _do_throttled_redraw(self) -> None:
+		self._redraw_timer = None
+		self._redraw()
 
 	def _redraw(self) -> None:
 		if self._preview_pm is None: return
