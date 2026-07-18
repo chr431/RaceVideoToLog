@@ -863,41 +863,45 @@ class RaceVideoToLogApp(QMainWindow):
 
 	def _continue_with_manual_anchors(self, corrections: dict[int, float],
 	                                   partial_corrections: dict[int, str] | None = None) -> None:
+		"""非阻塞执行 pass2：使用 QThread 避免 GUI 冻结。"""
 		pipeline = getattr(self, "_pipeline", None)
 		if pipeline is None:
 			self._status_label.setText("错误: 处理状态丢失"); return
-		import threading
-		done = threading.Event()
-		error_container: list[Exception] = []
 
-		def _worker() -> None:
-			try:
-				assert self.video_path is not None
-				out_path = getattr(self, "_review_output_path",
-					self.video_path.parent / f"{self.video_path.stem}_log.csv")
-				pipeline.run_review_pass2(
-					corrections=corrections,
-					confirmed_segments=getattr(self, "_review_confirmed", set()),
-					output_path=out_path,
-					partial_corrections=partial_corrections or None,
-				)
-			except Exception as exc:
-				import traceback; traceback.print_exc()
-				error_container.append(exc)
-			finally:
-				done.set()
+		self._export_btn.setEnabled(False)
+		self._status_label.setText("正在应用审核修正...")
+		self._progress_bar.setValue(0)
 
-		t = threading.Thread(target=_worker)
-		t.start()
-		done.wait()
-		t.join()
+		app = self  # 捕获 RaceVideoToLogApp 引用
+		out_path = getattr(app, "_review_output_path",
+			app.video_path.parent / f"{app.video_path.stem}_log.csv")
+		confirmed = getattr(app, "_review_confirmed", set())
 
-		if error_container:
-			self._progress_bar.setValue(0)
-			self._status_label.setText(f"审核失败: {error_container[0]}")
-		else:
-			self._progress_bar.setValue(100)
-			self._status_label.setText(f"人工审核完成 — {len(corrections)} 帧已修正，结果已保存。")
+		class _Pass2Thread(QThread):
+			_finished = Signal(bool, str)
+
+			def run(self):
+				try:
+					pipeline.run_review_pass2(
+						corrections=corrections,
+						confirmed_segments=confirmed,
+						output_path=out_path,
+						partial_corrections=partial_corrections or None,
+					)
+					self._finished.emit(True,
+						f"人工审核完成 — {len(corrections)} 帧已修正，结果已保存。")
+				except Exception as exc:
+					import traceback; traceback.print_exc()
+					self._finished.emit(False, f"审核失败: {exc}")
+		self._pass2_thread = _Pass2Thread(self)
+		self._pass2_thread._finished.connect(self._on_pass2_done)
+		self._pass2_thread.start()
+
+	def _on_pass2_done(self, success: bool, message: str) -> None:
+		self._export_btn.setEnabled(True)
+		self._progress_bar.setValue(100 if success else 0)
+		self._status_label.setText(message)
+		self._pass2_thread = None
 
 	def _finish_export(self) -> None:
 		self._export_btn.setEnabled(True); self._cancel_btn.setEnabled(False)

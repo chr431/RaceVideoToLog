@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
-    from matplotlib.axes import Axes
+	from matplotlib.axes import Axes
 
 from ocr_engine import _savgol_filter_np
 
@@ -95,7 +95,7 @@ def smooth_data(xv: "np.ndarray | list[float]", yv: "np.ndarray | list[float]", 
 
 
 def plot_segmented(ax: "Axes", x: "np.ndarray | list[float]", y: "np.ndarray | list[float]", flags: "list[int]", normal_color: str, show_red: bool,
-                   smooth_strength: int) -> None:
+				   smooth_strength: int) -> None:
 	"""平滑 + 纠错段着色。
 
 	- red (#F44336): auto-corrected (flag 11-19)
@@ -201,7 +201,7 @@ def run_analysis_headless(args) -> None:
 	# ── v-t ──
 	fig, ax = plt.subplots(figsize=(10, 6))
 	for data, times, name, c in [(s1, t1, name1, "#2196F3"), (s2, t2, name2, "#FF5722")]:
-		_, sy = smooth_data(times, data, 25)
+		_, sy = smooth_data(times, data, 0)
 		ax.plot(times, sy, color=c, linewidth=0.8, label=name)
 	ax.set_xlabel("时间 (s)"); ax.set_ylabel("速度 (km/h)")
 	ax.set_title("速度-时间曲线"); ax.legend(); ax.grid(True, alpha=0.3)
@@ -213,7 +213,7 @@ def run_analysis_headless(args) -> None:
 	# ── v-x ──
 	fig, ax = plt.subplots(figsize=(10, 6))
 	for data, dists, name, c in [(s1, d1, name1, "#2196F3"), (s2, d2, name2, "#FF5722")]:
-		_, sy = smooth_data(dists, data, 25)
+		_, sy = smooth_data(dists, data, 0)
 		ax.plot(dists, sy, color=c, linewidth=0.8, label=name)
 	ax.set_xlabel("距离 (m)"); ax.set_ylabel("速度 (km/h)")
 	ax.set_title("速度-距离曲线"); ax.legend(); ax.grid(True, alpha=0.3)
@@ -226,7 +226,7 @@ def run_analysis_headless(args) -> None:
 	fig, ax = plt.subplots(figsize=(10, 6))
 	t2_interp = np.interp(d1, d2, t2)
 	dt = np.array(t1) - t2_interp
-	_, sdt = smooth_data(d1, dt, 25)
+	_, sdt = smooth_data(d1, dt, 0)
 	ax.plot(d1, sdt, color="#2196F3", linewidth=0.8, label=f"{name1} - {name2}")
 	ax.axhline(y=0, color="#888888", linewidth=1.2, linestyle="--", alpha=0.7)
 	ax.set_xlabel("距离 (m)"); ax.set_ylabel("Δt (s)")

@@ -40,7 +40,7 @@ class AnalysisTab:
 		self._show_corrected: bool = False
 		self._saved_limits: dict[str, tuple | None] = {}
 		self._last_mode: str | None = None
-		self._smooth_str: int = 25
+		self._smooth_str: int = 0
 		self._span_selector = None
 
 		self._build_tab()
@@ -85,12 +85,12 @@ class AnalysisTab:
 
 		row2.addWidget(BodyLabel("平滑"))
 		self._smooth_slider = Slider(Qt.Orientation.Horizontal)
-		self._smooth_slider.setRange(0, 100); self._smooth_slider.setValue(25)
+		self._smooth_slider.setRange(0, 100); self._smooth_slider.setValue(0)
 		self._smooth_slider.setFixedWidth(100)
 		self._smooth_slider.valueChanged.connect(lambda v: (setattr(self, '_smooth_str', v), self._render()))
 		row2.addWidget(self._smooth_slider)
 
-		self._smooth_spin = CompactSpinBox(); self._smooth_spin.setRange(0, 100); self._smooth_spin.setValue(25); self._smooth_spin.setFixedWidth(70)
+		self._smooth_spin = CompactSpinBox(); self._smooth_spin.setRange(0, 100); self._smooth_spin.setValue(0); self._smooth_spin.setFixedWidth(70)
 		try:
 			self._smooth_spin.compactSpinButton.clicked.disconnect()
 		except Exception:

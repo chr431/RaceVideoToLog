@@ -38,28 +38,28 @@ __all__ = [
 # ═══════════════════ Flag 枚举：速度数据来源标记 ═══════════════════
 
 class Flag:
-    """速度数据 flag 值 — 统一标记每帧数据的来源和可信度。
+	"""速度数据 flag 值 — 统一标记每帧数据的来源和可信度。
 
-    用于 CSV 第 4 列和所有相关判断逻辑，消除散布的魔法数字。
-    """
-    RAW: int = 0             # 原始 OCR 输出，未纠错
-    REOCR_AUTO: int = 11     # 重 OCR 自动修正
-    FILL_INTERP: int = 12    # 级联插值填充
-    PARTIAL_AUTO: int = 13   # 部分数字模式自动推断修正
-    ANCHOR_AUTO: int = 21    # 自动锚点帧（硬约束）
-    ANCHOR_MANUAL: int = 22  # 人工修正锚点帧
-    CONFIRMED_SEG: int = 23  # 人工确认段内帧
-    FLAGGED_REVIEW: int = 30 # 标记待人工审核
+	用于 CSV 第 4 列和所有相关判断逻辑，消除散布的魔法数字。
+	"""
+	RAW: int = 0             # 原始 OCR 输出，未纠错
+	REOCR_AUTO: int = 11     # 重 OCR 自动修正
+	FILL_INTERP: int = 12    # 级联插值填充
+	PARTIAL_AUTO: int = 13   # 部分数字模式自动推断修正
+	ANCHOR_AUTO: int = 21    # 自动锚点帧（硬约束）
+	ANCHOR_MANUAL: int = 22  # 人工修正锚点帧
+	CONFIRMED_SEG: int = 23  # 人工确认段内帧
+	FLAGGED_REVIEW: int = 30 # 标记待人工审核
 
-    @classmethod
-    def is_corrected(cls, flag: int) -> bool:
-        """是否为自动纠错帧 (10-19)。"""
-        return 10 <= flag <= 19
+	@classmethod
+	def is_corrected(cls, flag: int) -> bool:
+		"""是否为自动纠错帧 (10-19)。"""
+		return 10 <= flag <= 19
 
-    @classmethod
-    def is_anchor(cls, flag: int) -> bool:
-        """是否为锚点帧 (>=20)。"""
-        return flag >= 20
+	@classmethod
+	def is_anchor(cls, flag: int) -> bool:
+		"""是否为锚点帧 (>=20)。"""
+		return flag >= 20
 
 
 # ═══════════════════ GPU 加速前置：注册 CUDA/cuDNN DLL ═══════════════════
