@@ -198,19 +198,153 @@ def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: 
 	return rows
 
 
-def _detect_errors(rows: list, anchors: set, times: list, max_speed_kmh: float, max_accel_mps2: float) -> set:
-	"""阶段 1：错误检测。6 种检测器并行标记异常帧。
+# ── 错误检测器（6 种独立策略）──
 
-	A. 邻帧跳变 — 与前后邻帧的加速度超限
-	A2. V 字形 — 急减速后立即急加速（OCR 误读特征）
-	A3. 悬崖 — 单侧极端跳变 + 对侧平坦
-	B. 锚点趋势偏离 — 偏离锚点间线性插值过多
-	C. 孤立离群 — 与两边都冲突但邻居彼此一致
-	D. 局部趋势偏离 — 5 帧中位数偏离
+def _detect_neighbor_jump(i: int, v: float, n: int, raw_vals: list[float],
+                           times: list[float], max_speed_kmh: float,
+                           max_accel_mps2: float) -> bool:
+	"""A. 邻帧跳变：与前后邻帧的加速度超限（需双向都失败）。"""
+	fwd_fail = False
+	bwd_fail = False
+	if i > 0:
+		prev_v = raw_vals[i - 1]
+		if prev_v >= 0 and prev_v <= max_speed_kmh:
+			dt = max(times[i] - times[i - 1], 0.001)
+			max_dv = max_accel_mps2 * dt * MPS_TO_KMH * 1.2
+			if abs(v - prev_v) > max_dv:
+				if not (i + 1 < n and v == raw_vals[i + 1]
+				        and times[i + 1] - times[i] < 0.15):
+					fwd_fail = True
+	if i + 1 < n:
+		next_v = raw_vals[i + 1]
+		if next_v >= 0 and next_v <= max_speed_kmh:
+			dt = max(times[i + 1] - times[i], 0.001)
+			max_dv = max_accel_mps2 * dt * MPS_TO_KMH * 1.2
+			if abs(next_v - v) > max_dv:
+				if not (i > 0 and v == raw_vals[i - 1]
+				        and times[i] - times[i - 1] < 0.15):
+					bwd_fail = True
+	return fwd_fail and bwd_fail
+
+
+def _detect_v_shape(i: int, v: float, n: int, raw_vals: list[float],
+                    times: list[float], max_accel_mps2: float) -> bool:
+	"""A2. V 字形：急减速后立即急加速（OCR 误读特征）。"""
+	if i <= 0 or i + 1 >= n:
+		return False
+	prev_v = raw_vals[i - 1]
+	next_v = raw_vals[i + 1]
+	if prev_v <= 0 or next_v <= 0:
+		return False
+	dt_left = max(times[i] - times[i - 1], 0.001)
+	dt_right = max(times[i + 1] - times[i], 0.001)
+	accel_left = (v - prev_v) / dt_left
+	accel_right = (next_v - v) / dt_right
+	accel_limit = max_accel_mps2 * MPS_TO_KMH * 2.5
+	if abs(accel_left) > accel_limit and accel_left * accel_right < 0:
+		if not (i + 1 < n and v == raw_vals[i + 1]
+		        and times[i + 1] - times[i] < 0.15):
+			return True
+	if abs(accel_right) > accel_limit and accel_right * accel_left < 0:
+		if not (i > 0 and v == raw_vals[i - 1]
+		        and times[i] - times[i - 1] < 0.15):
+			return True
+	return False
+
+
+def _detect_cliff(i: int, v: float, n: int, raw_vals: list[float],
+                  times: list[float], max_accel_mps2: float) -> bool:
+	"""A3. 悬崖：单侧极端跳变 + 对侧平坦。"""
+	if i <= 0 or i + 1 >= n:
+		return False
+	prev_v = raw_vals[i - 1]
+	next_v = raw_vals[i + 1]
+	if prev_v <= 0 or next_v <= 0:
+		return False
+	dt_left = max(times[i] - times[i - 1], 0.001)
+	dt_right = max(times[i + 1] - times[i], 0.001)
+	accel_left = (v - prev_v) / dt_left
+	accel_right = (next_v - v) / dt_right
+	cliff_limit = max_accel_mps2 * MPS_TO_KMH * 3.0
+	if abs(accel_left) > cliff_limit and abs(accel_right) < cliff_limit * 0.3:
+		return True
+	if abs(accel_right) > cliff_limit and abs(accel_left) < cliff_limit * 0.3:
+		return True
+	return False
+
+
+def _detect_anchor_trend(i: int, v: float, n: int, rows: list,
+                          times: list[float], anchors: set[int],
+                          max_accel_mps2: float) -> bool:
+	"""B. 锚点趋势偏离：偏离锚点间线性插值过多。"""
+	la, ra = _find_neighbor_anchors(i, n, anchors)
+	if la is None or ra is None:
+		return False
+	lv = rows[la][2]; rv = rows[ra][2]
+	lt = rows[la][0]; rt = rows[ra][0]
+	total_dt = max(rt - lt, 0.001)
+	frac = (times[i] - lt) / total_dt
+	interp = lv + (rv - lv) * frac
+	seg_dt = times[i] - lt
+	threshold = max(5.0, 3.0 * max_accel_mps2 * max(seg_dt, 0.1) * MPS_TO_KMH)
+	return abs(v - interp) > threshold
+
+
+def _detect_isolated_spike(i: int, v: float, n: int, raw_vals: list[float],
+                            times: list[float], max_accel_mps2: float) -> bool:
+	"""C. 孤立离群：与两边都冲突但邻居彼此一致。"""
+	if i < 2 or i + 2 >= n:
+		return False
+	left_v = (raw_vals[i - 1] if raw_vals[i - 1] >= 0
+	          else (raw_vals[i - 2] if raw_vals[i - 2] >= 0 else None))
+	right_v = (raw_vals[i + 1] if raw_vals[i + 1] >= 0
+	           else (raw_vals[i + 2] if raw_vals[i + 2] >= 0 else None))
+	if left_v is None or right_v is None:
+		return False
+	dt_cross = max(times[i + 2] - times[i - 2], 0.01)
+	max_dv_cross = max_accel_mps2 * dt_cross * MPS_TO_KMH * 1.5
+	if abs(right_v - left_v) > max_dv_cross:
+		return False
+	dt_left = max(times[i] - times[i - 1], 0.001)
+	dt_right = max(times[i + 1] - times[i], 0.001)
+	max_dv_l = max_accel_mps2 * dt_left * MPS_TO_KMH * 1.5
+	max_dv_r = max_accel_mps2 * dt_right * MPS_TO_KMH * 1.5
+	return abs(v - left_v) > max_dv_l and abs(right_v - v) > max_dv_r
+
+
+def _detect_local_trend(i: int, v: float, n: int, raw_vals: list[float],
+                         max_speed_kmh: float) -> bool:
+	"""D. 局部趋势偏离：5 帧中位数偏离，且左右邻帧均接近中位数。"""
+	if i < 2 or i + 2 >= n:
+		return False
+	window = []
+	for j in range(max(0, i - 2), min(n, i + 3)):
+		if j != i and raw_vals[j] >= 0 and raw_vals[j] <= max_speed_kmh:
+			window.append(raw_vals[j])
+	if len(window) < 3:
+		return False
+	window.sort()
+	local_median = window[len(window) // 2]
+	dev = abs(v - local_median)
+	if dev <= 3.0:
+		return False
+	left_ok = (i >= 1 and raw_vals[i - 1] >= 0
+	           and abs(raw_vals[i - 1] - local_median) < 2.0)
+	right_ok = (i + 1 < n and raw_vals[i + 1] >= 0
+	            and abs(raw_vals[i + 1] - local_median) < 2.0)
+	return left_ok and right_ok
+
+
+def _detect_errors(rows: list, anchors: set, times: list,
+                   max_speed_kmh: float, max_accel_mps2: float) -> set:
+	"""阶段 1：错误检测。6 种独立检测器并行标记异常帧。
+
+	A. 邻帧跳变  A2. V 字形  A3. 悬崖
+	B. 锚点趋势偏离  C. 孤立离群  D. 局部趋势偏离
 	"""
 	n = len(rows)
 	raw_vals = [r[2] for r in rows]
-	error_set = set()
+	error_set: set[int] = set()
 
 	for i in range(n):
 		if i in anchors:
@@ -220,116 +354,20 @@ def _detect_errors(rows: list, anchors: set, times: list, max_speed_kmh: float, 
 			error_set.add(i)
 			continue
 
-		# ── A. 邻帧跳变检测 ──
-		fwd_fail = False
-		bwd_fail = False
-
-		if i > 0:
-			prev_v = raw_vals[i - 1]
-			if prev_v >= 0 and prev_v <= max_speed_kmh:
-				dt = max(times[i] - times[i - 1], 0.001)
-				max_dv = max_accel_mps2 * dt * MPS_TO_KMH * 1.2
-				if abs(v - prev_v) > max_dv:
-					if not (i + 1 < n and v == raw_vals[i + 1] and times[i + 1] - times[i] < 0.15):
-						fwd_fail = True
-
-		if i + 1 < n:
-			next_v = raw_vals[i + 1]
-			if next_v >= 0 and next_v <= max_speed_kmh:
-				dt = max(times[i + 1] - times[i], 0.001)
-				max_dv = max_accel_mps2 * dt * MPS_TO_KMH * 1.2
-				if abs(next_v - v) > max_dv:
-					if not (i > 0 and v == raw_vals[i - 1] and times[i] - times[i - 1] < 0.15):
-						bwd_fail = True
-
-		if fwd_fail and bwd_fail:
-			error_set.add(i)
-			continue
-
-		# ── A2. V 字形检测 ──
-		if i > 0 and i + 1 < n:
-			prev_v = raw_vals[i - 1]
-			next_v = raw_vals[i + 1]
-			if prev_v > 0 and next_v > 0:
-				dt_left = max(times[i] - times[i - 1], 0.001)
-				dt_right = max(times[i + 1] - times[i], 0.001)
-				accel_left = (v - prev_v) / dt_left
-				accel_right = (next_v - v) / dt_right
-				accel_limit = max_accel_mps2 * MPS_TO_KMH * 2.5
-				if abs(accel_left) > accel_limit and accel_left * accel_right < 0:
-					if not (i + 1 < n and v == raw_vals[i + 1] and times[i + 1] - times[i] < 0.15):
-						error_set.add(i)
-						continue
-				if abs(accel_right) > accel_limit and accel_right * accel_left < 0:
-					if not (i > 0 and v == raw_vals[i - 1] and times[i] - times[i - 1] < 0.15):
-						error_set.add(i)
-						continue
-
-		# ── A3. 悬崖检测 ──
-		if i > 0 and i + 1 < n:
-			prev_v = raw_vals[i - 1]
-			next_v = raw_vals[i + 1]
-			if prev_v > 0 and next_v > 0:
-				dt_left = max(times[i] - times[i - 1], 0.001)
-				dt_right = max(times[i + 1] - times[i], 0.001)
-				accel_left = (v - prev_v) / dt_left
-				accel_right = (next_v - v) / dt_right
-				cliff_limit = max_accel_mps2 * MPS_TO_KMH * 3.0
-				if abs(accel_left) > cliff_limit and abs(accel_right) < cliff_limit * 0.3:
-					error_set.add(i)
-					continue
-				if abs(accel_right) > cliff_limit and abs(accel_left) < cliff_limit * 0.3:
-					error_set.add(i)
-					continue
-
-		# ── B. 锚点趋势偏离 ──
-		la, ra = _find_neighbor_anchors(i, n, anchors)
-		if la is not None and ra is not None:
-			lv = rows[la][2]; rv = rows[ra][2]
-			lt = rows[la][0]; rt = rows[ra][0]
-			total_dt = max(rt - lt, 0.001)
-			frac = (times[i] - lt) / total_dt
-			interp = lv + (rv - lv) * frac
-			seg_dt = times[i] - lt
-			threshold = max(5.0, 3.0 * max_accel_mps2 * max(seg_dt, 0.1) * MPS_TO_KMH)
-			if abs(v - interp) > threshold:
-				error_set.add(i)
-				continue
-
-		# ── C. 孤立离群 (spike) ──
-		if i >= 2 and i + 2 < n:
-			left_v = raw_vals[i - 1] if raw_vals[i - 1] >= 0 else (raw_vals[i - 2] if raw_vals[i - 2] >= 0 else None)
-			right_v = raw_vals[i + 1] if raw_vals[i + 1] >= 0 else (raw_vals[i + 2] if raw_vals[i + 2] >= 0 else None)
-			if left_v is not None and right_v is not None:
-				dt_cross = max(times[i + 2] - times[i - 2], 0.01)
-				max_dv_cross = max_accel_mps2 * dt_cross * MPS_TO_KMH * 1.5
-				if abs(right_v - left_v) <= max_dv_cross:
-					dt_left = max(times[i] - times[i - 1], 0.001)
-					dt_right = max(times[i + 1] - times[i], 0.001)
-					max_dv_l = max_accel_mps2 * dt_left * MPS_TO_KMH * 1.5
-					max_dv_r = max_accel_mps2 * dt_right * MPS_TO_KMH * 1.5
-					if abs(v - left_v) > max_dv_l and abs(right_v - v) > max_dv_r:
-						error_set.add(i)
-
-		# ── D. 局部趋势偏离 ──
-		if i >= 2 and i + 2 < n:
-			window = []
-			for j in range(max(0, i - 2), min(n, i + 3)):
-				if j != i and raw_vals[j] >= 0 and raw_vals[j] <= max_speed_kmh:
-					window.append(raw_vals[j])
-			if len(window) >= 3:
-				window.sort()
-				local_median = window[len(window) // 2]
-				dev = abs(v - local_median)
-				if dev > 3.0:
-					left_ok = (i >= 1 and raw_vals[i - 1] >= 0 and abs(raw_vals[i - 1] - local_median) < 2.0)
-					right_ok = (i + 1 < n and raw_vals[i + 1] >= 0 and abs(raw_vals[i + 1] - local_median) < 2.0)
-					if left_ok and right_ok:
-						error_set.add(i)
+		if _detect_neighbor_jump(i, v, n, raw_vals, times, max_speed_kmh, max_accel_mps2):
+			error_set.add(i); continue
+		if _detect_v_shape(i, v, n, raw_vals, times, max_accel_mps2):
+			error_set.add(i); continue
+		if _detect_cliff(i, v, n, raw_vals, times, max_accel_mps2):
+			error_set.add(i); continue
+		if _detect_anchor_trend(i, v, n, rows, times, anchors, max_accel_mps2):
+			error_set.add(i); continue
+		if _detect_isolated_spike(i, v, n, raw_vals, times, max_accel_mps2):
+			error_set.add(i); continue
+		if _detect_local_trend(i, v, n, raw_vals, max_speed_kmh):
+			error_set.add(i); continue
 
 	return error_set
-
-
 def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR", error_set: set,
 				anchors: set, times: list, max_speed_kmh: float, max_accel_mps2: float,
 				progress_fn: "Callable | None" = None,

@@ -19,6 +19,7 @@ from config import (COLOR_BG_DARK, COLOR_BG_LIGHT, COLOR_FG_DARK, COLOR_FG_LIGHT
                      COLOR_LIGHT_GRAY, COLOR_LIGHTER_GRAY, chart_colors)
 
 import cv2
+import numpy as np
 
 class ReviewDialog(QDialog):
 	"""人工审核对话框 — 左侧问题段列表，右侧速度曲线 + 图像 + 修正控件。"""
@@ -213,82 +214,156 @@ class ReviewDialog(QDialog):
 			ax, canvas, throttle_ms=40)
 
 	def _redraw_chart(self, ax=None, fig=None) -> None:
+		"""高性能图表渲染：预创建艺术家实例，后续调用仅更新数据。
+
+		首次调用：创建所有 scatter/span 艺术家并缓存。
+		后续调用：通过 set_offsets() 就地更新数据，避免 ax.clear() + 重建。
+		仅当前选中段变化或强制刷新时才完全重建。
+		"""
 		if ax is None:
 			ax = self._ax
 		if fig is None:
 			fig = self._figure
 
-		# 仅在用户手动缩放/平移后才恢复，首次绘制使用数据范围
+		# 仅在用户手动缩放/平移后才恢复
 		user_zoomed = (hasattr(self, '_user_zoomed_ref')
 					   and self._user_zoomed_ref[0])
 		if user_zoomed:
 			saved_xlim = self._saved_limits["xlim"]
 			saved_ylim = self._saved_limits["ylim"]
 
-		ax.clear()
 		dark = isDarkTheme()
 		bg, fg = chart_colors(dark)
-		
-		self._chart_params = {'dark': dark, 'bg': bg, 'fg': fg}
 
-		times = [r[0] for r in self._rows]
-		speeds = [r[2] for r in self._rows]
+		# ── 检查是否需要完全重建（选中段变化 / 首次 / 主题变化）──
 		cur_row = self._list.currentRow()
 		cur_seg = None
 		if cur_row >= 0:
 			cur_seg = self._list.item(cur_row).data(Qt.ItemDataRole.UserRole)
+		cur_seg_start = cur_seg['start'] if cur_seg else -1
+		prev_dark = getattr(self, '_chart_params', {}).get('dark')
+		prev_seg = getattr(self, '_chart_seg_start', -2)
+		needs_rebuild = (prev_dark != dark or prev_seg != cur_seg_start
+		                 or not hasattr(self, '_chart_cache'))
 
-		# 全曲线（极淡灰散点）
-		bg_gray = COLOR_LIGHT_GRAY if not dark else COLOR_LIGHTER_GRAY
-		ax.scatter(times, speeds, c=bg_gray, s=1, alpha=0.5, zorder=0, linewidths=0, rasterized=True)
+		# ── 缓存 times/speeds（不变）──
+		if not hasattr(self, '_chart_cache'):
+			times = [r[0] for r in self._rows]
+			speeds = [r[2] for r in self._rows]
+			self._chart_cache = {'times': times, 'speeds': speeds}
+		times = self._chart_cache['times']
+		speeds = self._chart_cache['speeds']
 
-		# 当前段背景高亮
-		if cur_seg:
-			s, e = cur_seg['start'], cur_seg['end']
-			ax.axvspan(times[s], times[min(e, len(times) - 1)],
-					   facecolor=COLOR_ORANGE, alpha=0.08, zorder=0)
+		if needs_rebuild:
+			ax.clear()
+			self._chart_params = {'dark': dark, 'bg': bg, 'fg': fg}
+			self._chart_seg_start = cur_seg_start
+			self._chart_artists = {}
 
-		# 各问题段着色（散点）
-		for seg in self._segments:
-			s, e = seg['start'], seg['end']
-			seg_t = times[s:e+1]; seg_v = speeds[s:e+1]
-			is_cur = cur_seg and seg['start'] == cur_seg['start']
-			# 已修正帧数超过段内一半 → 绿色标记
-			seg_corrected = sum(1 for fi in range(s, e+1) if fi in self._corrections)
-			if seg_corrected >= max(1, seg['count'] // 2):
-				ax.scatter(seg_t, seg_v, c=COLOR_GREEN, s=3, alpha=0.6, zorder=1, linewidths=0)
-			elif is_cur:
-				ax.scatter(seg_t, seg_v, c=COLOR_ORANGE, s=12, zorder=4, linewidths=0)
-			else:
-				ax.scatter(seg_t, seg_v, c=COLOR_RED, s=3, alpha=0.7, zorder=2, linewidths=0)
+			# ── 全曲线背景散点（创建一次，永不重建）──
+			bg_gray = COLOR_LIGHT_GRAY if not dark else COLOR_LIGHTER_GRAY
+			self._chart_artists['bg'] = ax.plot(
+				times, speeds, ".", color=bg_gray, markersize=1, alpha=0.5,
+				zorder=0, rasterized=True)
 
-		# 已修正帧
-		if self._corrections:
-			cx = [times[fi] for fi in self._corrections if fi < len(times)]
-			cy = [self._corrections[fi] for fi in self._corrections if fi < len(times)]
+			# ── 当前段背景高亮 ──
+			self._chart_artists['vspan'] = None
+			if cur_seg:
+				s, e = cur_seg['start'], cur_seg['end']
+				self._chart_artists['vspan'] = ax.axvspan(
+					times[s], times[min(e, len(times) - 1)],
+					facecolor=COLOR_ORANGE, alpha=0.08, zorder=0)
+
+			# ── 各问题段散点（按段索引存储）──
+			self._chart_artists['segments'] = {}
+			for seg in self._segments:
+				s, e = seg['start'], seg['end']
+				seg_t = times[s:e+1]; seg_v = speeds[s:e+1]
+				is_cur = cur_seg and seg['start'] == cur_seg['start']
+				seg_corrected = self._seg_corrected_count(seg)
+				if seg_corrected >= max(1, seg['count'] // 2):
+					color, sz, alpha, zo = COLOR_GREEN, 3, 0.6, 1
+				elif is_cur:
+					color, sz, alpha, zo = COLOR_ORANGE, 12, 1.0, 4
+				else:
+					color, sz, alpha, zo = COLOR_RED, 3, 0.7, 2
+				artist = ax.scatter(seg_t, seg_v, c=color, s=sz,
+				                    alpha=alpha, zorder=zo, linewidths=0)
+				self._chart_artists['segments'][seg['start']] = artist
+
+			# ── 已修正帧散点（可能为空）──
+			cx, cy = self._get_correction_xy(times)
+			self._chart_artists['corrections'] = ax.scatter(
+				cx, cy, c=COLOR_BLUE, s=12, zorder=5, marker='o',
+				edgecolors='white', linewidths=0.5) if cx else None
+
+			# ── 轴样式（重建时设置）──
+			ax.set_facecolor(bg)
+			fig.set_facecolor(bg)
+			ax.set_xlabel("时间 (s)", color=fg)
+			ax.set_ylabel("速度 (km/h)", color=fg)
+			ax.tick_params(colors=fg, labelsize=8)
+			ax.spines["bottom"].set_color(fg if dark else "#888")
+			ax.spines["left"].set_color(fg if dark else "#888")
+			ax.spines["top"].set_visible(False)
+			ax.spines["right"].set_visible(False)
+			ax.grid(True, alpha=0.15 if dark else 0.25)
+			ax.set_aspect("auto")
+			ax.autoscale_view()
+
+		else:
+			# ── 增量更新：仅更新段颜色 + 修正帧位置 ──
+			artists_seg = self._chart_artists.get('segments', {})
+			for seg in self._segments:
+				artist = artists_seg.get(seg['start'])
+				if artist is None:
+					continue
+				s, e = seg['start'], seg['end']
+				is_cur = cur_seg and seg['start'] == cur_seg['start']
+				seg_corrected = self._seg_corrected_count(seg)
+				if seg_corrected >= max(1, seg['count'] // 2):
+					color, sz, alpha, zo = COLOR_GREEN, 3, 0.6, 1
+				elif is_cur:
+					color, sz, alpha, zo = COLOR_ORANGE, 12, 1.0, 4
+				else:
+					color, sz, alpha, zo = COLOR_RED, 3, 0.7, 2
+				artist.set_facecolor(color)
+				artist.set_sizes([sz] * (e - s + 1))
+				artist.set_alpha(alpha)
+				artist.set_zorder(zo)
+
+			# 更新修正帧散点
+			cx, cy = self._get_correction_xy(times)
+			corr_artist = self._chart_artists.get('corrections')
 			if cx:
-				ax.scatter(cx, cy, c=COLOR_BLUE, s=12, zorder=5, marker='o',
-						   edgecolors='white', linewidths=0.5)
+				if corr_artist is None:
+					self._chart_artists['corrections'] = ax.scatter(
+						cx, cy, c=COLOR_BLUE, s=12, zorder=5, marker='o',
+						edgecolors='white', linewidths=0.5)
+				else:
+					corr_artist.set_offsets(np.column_stack([cx, cy]) if cx
+					                        else np.empty((0, 2)))
+			elif corr_artist is not None:
+				corr_artist.set_offsets(np.empty((0, 2)))
 
-		ax.set_facecolor(bg)
-		fig.set_facecolor(bg)
-		ax.set_xlabel("时间 (s)", color=fg)
-		ax.set_ylabel("速度 (km/h)", color=fg)
-		ax.tick_params(colors=fg, labelsize=8)
-		ax.spines["bottom"].set_color(fg if dark else "#888")
-		ax.spines["left"].set_color(fg if dark else "#888")
-		ax.spines["top"].set_visible(False)
-		ax.spines["right"].set_visible(False)
-		ax.grid(True, alpha=0.15 if dark else 0.25)
-		ax.set_aspect("auto")
-		ax.autoscale_view()
-
-		# 恢复用户缩放/平移状态
+		# ── 恢复用户缩放 ──
 		if user_zoomed:
 			ax.set_xlim(saved_xlim)
 			ax.set_ylim(saved_ylim)
 
 		self._canvas.draw_idle()
+
+	def _seg_corrected_count(self, seg: dict) -> int:
+		"""统计段内已修正帧数。"""
+		return sum(1 for fi in range(seg['start'], seg['end'] + 1)
+		           if fi in self._corrections)
+
+	def _get_correction_xy(self, times: list[float]
+	                        ) -> tuple[list[float], list[float]]:
+		"""从 _corrections 提取修正帧的 (x, y) 坐标。"""
+		cx = [times[fi] for fi in self._corrections if fi < len(times)]
+		cy = [self._corrections[fi] for fi in self._corrections if fi < len(times)]
+		return cx, cy
 
 	def _show_frame_image(self, frame_index: int) -> None:
 		"""显示指定帧的原始 ROI 图像。"""
@@ -324,18 +399,30 @@ class ReviewDialog(QDialog):
 		else:
 			super().keyPressEvent(event)
 
+	@staticmethod
+	def _speed_display(val: float) -> str:
+		"""格式化速度显示：-1 → 空字符串，正常值 → 整数。"""
+		return "" if val < 0 else str(int(val))
+
+	@staticmethod
+	def _speed_label(val: float) -> str:
+		"""格式化速度标签：-1 → '失败'，正常值 → '{val:.0f}km/h'。"""
+		return "失败" if val < 0 else f"{val:.0f}km/h"
+
+	def _speed_input_text(self, fi: int) -> str:
+		"""获取指定帧应显示在输入框中的文本。"""
+		if fi in self._partial_corrections:
+			return self._partial_corrections[fi]
+		if fi in self._corrections:
+			return str(int(self._corrections[fi]))
+		return self._speed_display(self._rows[fi][2])
+
 	def _navigate_to(self, fi: int) -> None:
 		"""导航到指定帧并更新控件。"""
 		self._current_frame = fi
 		self._frame_label.setText(f"#{fi}")
 		self._show_frame_image(fi)
-		# 更新速度输入框
-		if fi in self._partial_corrections:
-			self._speed_edit.setText(self._partial_corrections[fi])
-		elif fi in self._corrections:
-			self._speed_edit.setText(str(int(self._corrections[fi])))
-		else:
-			self._speed_edit.setText(str(int(self._rows[fi][2])))
+		self._speed_edit.setText(self._speed_input_text(fi))
 		self._btn_delete.setEnabled(
 			fi in self._corrections or fi in self._partial_corrections)
 
@@ -363,7 +450,7 @@ class ReviewDialog(QDialog):
 
 		for fi in seg['suggested']:
 			v = self._corrections.get(fi, self._rows[fi][2])
-			btn = PushButton(f"#{fi} ({v:.0f}km/h)")
+			btn = PushButton(f"#{fi} ({self._speed_label(v)})")
 			btn.setFixedWidth(110)
 			btn.setProperty("frame_idx", fi)
 			btn.clicked.connect(lambda checked, f=fi, val=v: self._quick_correct(f, val))
@@ -383,12 +470,7 @@ class ReviewDialog(QDialog):
 		self._current_frame = target_frame
 		self._frame_label.setText(f"#{target_frame}")
 		self._show_frame_image(target_frame)
-		if target_frame in self._partial_corrections:
-			self._speed_edit.setText(self._partial_corrections[target_frame])
-		elif target_frame in self._corrections:
-			self._speed_edit.setText(str(int(self._corrections[target_frame])))
-		else:
-			self._speed_edit.setText(str(int(self._rows[target_frame][2])))
+		self._speed_edit.setText(self._speed_input_text(target_frame))
 		self._btn_delete.setEnabled(
 			target_frame in self._corrections or target_frame in self._partial_corrections)
 		self._redraw_chart()
@@ -399,7 +481,7 @@ class ReviewDialog(QDialog):
 		# 自动存储为修正值
 		self._corrections[fi] = val
 		self._partial_corrections.pop(fi, None)
-		self._speed_edit.setText(str(int(val)))
+		self._speed_edit.setText(self._speed_display(val))
 		self._btn_delete.setEnabled(True)
 		self._show_frame_image(fi)
 		self._redraw_chart()
@@ -410,7 +492,7 @@ class ReviewDialog(QDialog):
 			except Exception:
 				continue
 			if f == fi:
-				btn.setText(f"#{fi} ({val:.0f}km/h)")
+				btn.setText(f"#{fi} ({self._speed_label(val)})")
 				break
 
 	def _add_correction(self) -> None:
@@ -430,7 +512,7 @@ class ReviewDialog(QDialog):
 				return
 			self._corrections[fi] = v
 			self._partial_corrections.pop(fi, None)
-			label = f"{v:.0f}km/h"
+			label = self._speed_label(v)
 		self._redraw_chart()
 		for btn in self._suggested_btns:
 			try:
@@ -450,14 +532,14 @@ class ReviewDialog(QDialog):
 		self._corrections.pop(fi, None)
 		self._partial_corrections.pop(fi, None)
 		orig = self._rows[fi][2]
-		self._speed_edit.setText(str(int(orig)))
+		self._speed_edit.setText(self._speed_display(orig))
 		for btn in self._suggested_btns:
 			try:
 				f = btn.property("frame_idx")
 			except Exception:
 				continue
 			if f == fi:
-				btn.setText(f"#{fi} ({orig:.0f}km/h)")
+				btn.setText(f"#{fi} ({self._speed_label(orig)})")
 				break
 		self._redraw_chart()
 		self._btn_delete.setEnabled(False)

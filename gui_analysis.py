@@ -18,7 +18,7 @@ from qfluentwidgets import (PushButton, PrimaryPushButton, CompactSpinBox,
 from widget_utils import make_static_card, setup_chart_zoom_pan
 
 from analysis import parse_csv, smooth_data, plot_segmented
-from config import COLOR_BLUE, COLOR_ORANGE, COLOR_GREEN, chart_colors
+from config import (COLOR_BLUE, COLOR_ORANGE, COLOR_GREEN, MPS_TO_KMH, chart_colors)
 
 
 class AnalysisTab:
@@ -177,109 +177,14 @@ class AnalysisTab:
 
 	# ═══════════════════ 渲染 ═══════════════════
 
-	def _render(self) -> None:
-		if not self._ready:
-			return
-		from matplotlib.widgets import SpanSelector
-
-		fig = self._figure
-		canvas = self._canvas
-		if fig is None or canvas is None:
-			return
-
-		# 无 CSV 数据时不碰 figure，保留旧图
-		if not any(self._csvs):
-			return
-
-		if fig.axes and self._last_mode and self._last_mode != "dt-x":
-			self._saved_limits[self._last_mode] = (
-				fig.axes[0].get_xlim(), fig.axes[0].get_ylim())
-
-		fig.clear()
-		# 新建 axes 前设置背景色（后续 _sync_figure_theme 会同步完整主题）
-		from qfluentwidgets import isDarkTheme
-		dark = isDarkTheme()
-		fig.set_facecolor("#2a2a2a" if dark else "#ffffff")
-		ax = fig.add_subplot(111)
-		colors = [COLOR_BLUE, COLOR_ORANGE, COLOR_GREEN]
-		mode = self._chart_mode
-		show_cd = self._show_corrected
-		smooth_str = self._smooth_str
-
-		all_x: list[list[float]] = [[], [], []]
-		all_y: list[list[float]] = [[], [], []]
-		all_flags: list[list[int]] = [[], [], []]
-		is_vt = (mode == "v-t")
-		is_dtx = (mode == "dt-x")
-		name1 = name2 = label = ""
-		has_data = False
-
-		if is_dtx:
-			if not self._csvs[0] or not self._csvs[1]:
-				QMessageBox.warning(self._stack, "数据不足",
-					"Δt-x 需要 CSV 1 和 CSV 2 均已导入。")
-				return
-			t1, d1, s1, _ = parse_csv(self._csvs[0])
-			t2, d2, s2, _ = parse_csv(self._csvs[1])
-			t2_interp = np.interp(d1, d2, t2)
-			dt = np.array(t1) - t2_interp
-			all_x[0] = d1; all_y[0] = dt.tolist()
-			name1 = Path(self._csvs[0]).stem
-			name2 = Path(self._csvs[1]).stem
-			label = f"{name1} - {name2}"
-			if smooth_str > 0:
-				sx, sy = smooth_data(d1, dt.tolist(), smooth_str)
-				ax.plot(sx, sy, color=colors[0], linewidth=0.8)
-			else:
-				ax.plot(d1, dt.tolist(), color=colors[0], linewidth=0.8)
-			ax.plot([], [], color=colors[0], linewidth=0.8, label=label)
-			has_data = True
-		else:
-			for i, csv_path in enumerate(self._csvs):
-				if not csv_path:
-					continue
-				try:
-					times, dists, speeds, flags = parse_csv(csv_path)
-					name = Path(csv_path).stem
-					x_data = times if is_vt else dists
-					all_x[i] = x_data; all_y[i] = speeds; all_flags[i] = flags
-					if show_cd or smooth_str > 0:
-						plot_segmented(ax, x_data, speeds, flags,
-							colors[i], show_cd, smooth_str)
-					else:
-						ax.plot(x_data, speeds, color=colors[i], linewidth=0.8)
-					ax.plot([], [], color=colors[i], linewidth=0.8, label=name)
-					has_data = True
-				except Exception as e:
-					QMessageBox.critical(self._stack, "解析失败",
-						f"{Path(csv_path).name}: {e}")
-					return
-
-		if not has_data:
-			return
-
-		if is_dtx:
-			xlabel, ylabel = "距离 (m)", "Δt (s)"
-			title = f"时间差-距离 ({name1} vs {name2})"
-			delta_label = "Δ(Δt)"
-		elif is_vt:
-			xlabel, ylabel = "时间 (s)", "速度 (km/h)"
-			title = "速度-时间曲线"; delta_label = "行驶距离"
-		else:
-			xlabel, ylabel = "距离 (m)", "速度 (km/h)"
-			title = "速度-距离曲线"; delta_label = "用时"
-
-		ax.set_xlabel(xlabel); ax.set_ylabel(ylabel)
-		ax.set_title(title)
-		ax.legend(loc="upper right"); ax.grid(True, alpha=0.3)
-		if is_dtx:
-			ax.axhline(y=0, color="#888888", linewidth=1.2, linestyle="--", alpha=0.7)
-
+	
+	def _setup_chart_interactions(self, ax, canvas, all_x, all_y, is_dtx, is_vt,
+	                              delta_label, label, name1, name2):
+		"""配置图表交互：SpanSelector 范围选择 + 缩放/平移。"""
 		delta_text = ax.text(0.02, 0.97, "", transform=ax.transAxes,
 			va="top", fontsize=9, color="#333333",
 			bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
 
-		# SpanSelector 回调
 		def _on_select(xmin: float, xmax: float) -> None:
 			if xmin > xmax:
 				xmin, xmax = xmax, xmin
@@ -304,11 +209,11 @@ class AnalysisTab:
 						if xmin <= x <= xmax and j > 0:
 							if is_vt:
 								dt_v = xd[j] - xd[j - 1]
-								avg = (all_y[i][j] + all_y[i][j - 1]) / 2 / 3.6
+								avg = (all_y[i][j] + all_y[i][j - 1]) / 2 / MPS_TO_KMH
 								total += avg * dt_v
 							else:
 								dx_v = xd[j] - xd[j - 1]
-								avg = ((all_y[i][j] + all_y[i][j - 1]) / 2) / 3.6
+								avg = ((all_y[i][j] + all_y[i][j - 1]) / 2) / MPS_TO_KMH
 								total += dx_v / avg if avg > 0 and dx_v > 0 else 0
 				if is_dtx:
 					sign = "+" if total >= 0 else ""
@@ -323,24 +228,208 @@ class AnalysisTab:
 				self._span_selector.disconnect_events()
 			except Exception:
 				pass
+		from matplotlib.widgets import SpanSelector
 		self._span_selector = SpanSelector(ax, _on_select, "horizontal",
 			props=dict(facecolor=COLOR_BLUE, alpha=0.15),
 			interactive=True, drag_from_anywhere=True,
-			button=1)  # type: ignore[arg-type]
+			button=1)
 		delta_text.set_text(f"← 拖拽选择范围查看{delta_label}")
 
-		# 滚轮缩放 + 右键平移（使用共享工具函数，无节流以保持分析 Tab 的即时响应）
+		# 滚轮缩放 + 右键平移
 		setup_chart_zoom_pan(ax, canvas, throttle_ms=0)
 
-		fig.tight_layout()
-		if not is_dtx:
-			saved = self._saved_limits.get(mode)
-			if saved is not None:
-				ax.set_xlim(saved[0]); ax.set_ylim(saved[1])
+	def _render(self) -> None:
+		"""高性能渲染：缓存 CSV 解析结果，smooth 变化时仅更新线数据。
 
-		canvas.draw()
-		self._last_mode = mode
-		self._sync_figure_theme()
+		仅在 CSV 文件变更或模式切换时完全重建图表。
+		"""
+		if not self._ready:
+			return
+
+		fig = self._figure
+		canvas = self._canvas
+		if fig is None or canvas is None:
+			return
+
+		if not any(self._csvs):
+			return
+
+		mode = self._chart_mode
+		show_cd = self._show_corrected
+		smooth_str = self._smooth_str
+		is_dtx = (mode == "dt-x")
+		is_vt = (mode == "v-t")
+		colors = [COLOR_BLUE, COLOR_ORANGE, COLOR_GREEN]
+
+		# ── 检测是否需要完全重建 ──
+		csv_key = tuple(self._csvs)
+		last_key = getattr(self, '_render_cache_key', None)
+		needs_rebuild = (csv_key != last_key or mode != getattr(self, '_render_last_mode', '') or show_cd != getattr(self, '_render_last_cd', None))
+		smooth_changed = (smooth_str != getattr(self, '_render_last_smooth', -1))
+
+		if not needs_rebuild and not smooth_changed:
+			return  # nothing changed
+
+		if needs_rebuild:
+			# ── 解析 + 缓存 CSV 数据 ──
+			all_x: list[list[float]] = [[], [], []]
+			all_y: list[list[float]] = [[], [], []]
+			all_flags: list[list[int]] = [[], [], []]
+			all_raw: list = [None, None, None]
+			name1 = name2 = label = ""
+			has_data = False
+
+			if is_dtx:
+				if not self._csvs[0] or not self._csvs[1]:
+					QMessageBox.warning(self._stack, "数据不足",
+						"Δt-x 需要 CSV 1 和 CSV 2 均已导入。")
+					return
+				t1, d1, s1, _ = parse_csv(self._csvs[0])
+				t2, d2, s2, _ = parse_csv(self._csvs[1])
+				t2_interp = np.interp(d1, d2, t2)
+				dt = np.array(t1) - t2_interp
+				all_x[0] = d1; all_y[0] = dt.tolist()
+				all_raw[0] = (d1, dt.tolist(), None)
+				name1 = Path(self._csvs[0]).stem
+				name2 = Path(self._csvs[1]).stem
+				label = f"{name1} - {name2}"
+				has_data = True
+			else:
+				for i, csv_path in enumerate(self._csvs):
+					if not csv_path:
+						continue
+					try:
+						times, dists, speeds, flags = parse_csv(csv_path)
+						name = Path(csv_path).stem
+						x_data = times if is_vt else dists
+						all_x[i] = x_data; all_y[i] = speeds
+						all_flags[i] = flags
+						all_raw[i] = (x_data, speeds, flags)
+						has_data = True
+					except Exception as e:
+						QMessageBox.critical(self._stack, "解析失败",
+							f"{Path(csv_path).name}: {e}")
+						return
+
+			if not has_data:
+				return
+
+			# ── 缓存原始数据 ──
+			self._render_cache = {
+				'all_x': all_x, 'all_y': all_y, 'all_flags': all_flags,
+				'all_raw': all_raw, 'is_dtx': is_dtx, 'is_vt': is_vt,
+				'name1': name1, 'name2': name2, 'label': label,
+			}
+			self._render_cache_key = csv_key
+			self._render_last_mode = mode
+			self._render_last_smooth = smooth_str
+			self._render_last_cd = show_cd
+
+			# ── 保存当前视图 ──
+			if fig.axes and self._last_mode and self._last_mode != "dt-x":
+				self._saved_limits[self._last_mode] = (
+					fig.axes[0].get_xlim(), fig.axes[0].get_ylim())
+
+			# ── 完全重建 ──
+			fig.clear()
+			from qfluentwidgets import isDarkTheme
+			dark = isDarkTheme()
+			fig.set_facecolor(chart_colors(dark)[0])
+			ax = fig.add_subplot(111)
+
+			# ── 绘制主曲线 ──
+			self._chart_lines = []  # 缓存线条引用用于增量更新
+			if is_dtx:
+				d1 = all_x[0]; dt_list = all_y[0]
+				x_vals, y_vals = smooth_data(d1, dt_list, smooth_str) if smooth_str > 0 else (d1, dt_list)
+				line, = ax.plot(x_vals, y_vals, color=colors[0], linewidth=0.8)
+				self._chart_lines.append((line, 0, d1, dt_list, None))
+				ax.plot([], [], color=colors[0], linewidth=0.8, label=label)
+			else:
+				for i, raw in enumerate(all_raw):
+					if raw is None:
+						continue
+					x_data, speeds, flags = raw
+					ln_refs = plot_segmented(ax, x_data, speeds, flags,
+					                          colors[i], show_cd, smooth_str)
+					# Cache for smooth updates
+					self._chart_lines.append((ax.lines[-2] if len(ax.lines) >= 2 else ax.lines[-1],
+					                          i, x_data, speeds, flags))
+					ax.plot([], [], color=colors[i], linewidth=0.8,
+					        label=Path(self._csvs[i] or "").stem)
+
+			# ── 标签 ──
+			if is_dtx:
+				xlabel, ylabel = "距离 (m)", "Δt (s)"
+				title = f"时间差-距离 ({name1} vs {name2})"
+				delta_label = "Δ(Δt)"
+			elif is_vt:
+				xlabel, ylabel = "时间 (s)", "速度 (km/h)"
+				title = "速度-时间曲线"; delta_label = "行驶距离"
+			else:
+				xlabel, ylabel = "距离 (m)", "速度 (km/h)"
+				title = "速度-距离曲线"; delta_label = "用时"
+
+			ax.set_xlabel(xlabel); ax.set_ylabel(ylabel)
+			ax.set_title(title)
+			ax.legend(loc="upper right"); ax.grid(True, alpha=0.3)
+			if is_dtx:
+				ax.axhline(y=0, color="#888888", linewidth=1.2, linestyle="--", alpha=0.7)
+
+			# ── 交互 ──
+			self._setup_chart_interactions(ax, canvas, all_x, all_y,
+				is_dtx, is_vt, delta_label, label, name1, name2)
+
+			fig.tight_layout()
+			if not is_dtx:
+				saved = self._saved_limits.get(mode)
+				if saved is not None:
+					ax.set_xlim(saved[0]); ax.set_ylim(saved[1])
+
+			canvas.draw()
+			self._last_mode = mode
+			self._sync_figure_theme()
+
+		elif smooth_changed:
+			# ── 增量更新或诊断切换：重建线条 ──
+			self._render_last_smooth = smooth_str
+			self._render_last_cd = show_cd
+			ax = fig.axes[0]
+			cache = self._render_cache
+			is_dtx = cache['is_dtx']; is_vt = cache['is_vt']
+			all_raw = cache['all_raw']
+
+			if ax.lines and not is_dtx:
+				# 清除旧诊断段（红色/绿色）— 重建非平滑基线
+				pass  # plot_segmented handles this internally
+
+			# 重建：清除所有 lines，保留非-line artists
+			for line in ax.lines[:]:
+				line.remove()
+			# 重建图例占位
+			self._chart_lines = []
+
+			if is_dtx:
+				d1 = cache['all_x'][0]; dt_list = cache['all_y'][0]
+				x_vals, y_vals = smooth_data(d1, dt_list, smooth_str) if smooth_str > 0 else (d1, dt_list)
+				line, = ax.plot(x_vals, y_vals, color=colors[0], linewidth=0.8)
+				self._chart_lines.append((line, 0, d1, dt_list, None))
+			else:
+				for i, raw in enumerate(all_raw):
+					if raw is None:
+						continue
+					x_data, speeds, flags = raw
+					_ = plot_segmented(ax, x_data, speeds, flags,
+					                    colors[i], show_cd, smooth_str)
+					self._chart_lines.append((ax.lines[-2] if len(ax.lines) >= 2 else ax.lines[-1],
+					                          i, x_data, speeds, flags))
+				# 恢复图例
+				for i, raw in enumerate(all_raw):
+					if raw is not None:
+						ax.plot([], [], color=colors[i], linewidth=0.8,
+						        label=Path(self._csvs[i] or "").stem)
+
+			canvas.draw_idle()
 
 	# ═══════════════════ 其他 ═══════════════════
 

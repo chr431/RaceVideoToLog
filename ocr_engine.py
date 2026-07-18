@@ -486,114 +486,137 @@ def compute_video_hash(video_path: str | Path, chunk_size: int = 1_048_576) -> s
 
 
 
-def auto_select_anchors(observations: list["SpeedObservation"], max_speed_kmh: float = 400.0, window: int = 0, max_dev: float = 4.0, max_accel_mps2: float = 50.0) -> set[int]:
-	"""Select reliable OCR frames as Correction B anchors.
+def _anchor_adaptive_window(times: list[float], n: int) -> int:
+	"""计算自适应窗口大小：覆盖约 0.3s 的数据，最小 5 帧。"""
+	typical_dt = (times[-1] - times[0]) / max(n - 1, 1) if n > 1 else 0.017
+	return max(5, int(0.3 / max(typical_dt, 0.001)) | 1)
 
-	Uses local median filter: for each frame, compute median in an adaptive
-	sliding window. If frame value deviates <= max_dev from median, it is reliable.
 
-	If window=0 (default), auto-computes window size to cover ~0.3s of data,
-	making the filter robust at both high and low sampling rates.
-
-	Returns set of trusted frame indices."""
-	n = len(observations)
-	raw_vals = [o.raw_speed_kmh for o in observations]
-	anchors: set[int] = set()
-	times = [o.timestamp for o in observations]
-
-	# Adaptive window: cover ~0.3s regardless of sampling rate
-	if window <= 0:
-		typical_dt = (times[-1] - times[0]) / max(n - 1, 1) if n > 1 else 0.017
-		window = max(5, int(0.3 / max(typical_dt, 0.001)) | 1)  # odd, min 5
+def _anchor_select_center(raw_vals: list[float], times: list[float], n: int,
+                           window: int, max_speed_kmh: float,
+                           max_dev: float) -> set[int]:
+	"""Center region: median filter anchor selection."""
 	half = window // 2
-
+	anchors: set[int] = set()
 	for i in range(half, n - half):
 		if raw_vals[i] <= 0:
 			continue
-		local = []
-		for j in range(i - half, i + half + 1):
-			if j != i and raw_vals[j] > 0 and raw_vals[j] <= max_speed_kmh:
-				local.append(raw_vals[j])
+		local = [raw_vals[j] for j in range(i - half, i + half + 1)
+		          if j != i and 0 < raw_vals[j] <= max_speed_kmh]
 		if len(local) < 3:
 			continue
 		local.sort()
 		median = local[len(local) // 2]
 		if abs(raw_vals[i] - median) <= max_dev:
 			anchors.add(i)
+	return anchors
 
-	# Head boundary frames
-	for i in range(0, half):
+
+def _anchor_select_boundaries(raw_vals: list[float], n: int, window: int,
+                               max_speed_kmh: float, max_dev: float) -> set[int]:
+	"""Head and tail boundary anchor selection."""
+	anchors: set[int] = set()
+	# Head
+	for i in range(0, window // 2):
 		if raw_vals[i] <= 0:
 			continue
 		local = [raw_vals[j] for j in range(0, min(window, n))
-		         if j != i and raw_vals[j] > 0 and raw_vals[j] <= max_speed_kmh]
+		          if j != i and 0 < raw_vals[j] <= max_speed_kmh]
 		if len(local) < 2:
 			continue
 		local.sort()
 		median = local[len(local) // 2]
 		if abs(raw_vals[i] - median) <= max_dev:
 			anchors.add(i)
-
-	# Tail boundary frames
-	for i in range(n - half, n):
+	# Tail
+	for i in range(n - window // 2, n):
 		if raw_vals[i] <= 0:
 			continue
 		local = [raw_vals[j] for j in range(max(0, n - window), n)
-		         if j != i and raw_vals[j] > 0 and raw_vals[j] <= max_speed_kmh]
+		          if j != i and 0 < raw_vals[j] <= max_speed_kmh]
 		if len(local) < 2:
 			continue
 		local.sort()
 		median = local[len(local) // 2]
 		if abs(raw_vals[i] - median) <= max_dev:
 			anchors.add(i)
+	return anchors
 
-	# Post-filter: remove anchors that are extreme outliers vs immediate neighbors
-	# An anchor must be within 10 km/h of at least one immediate neighbor
-	anchors_filtered = set()
+
+def _anchor_validate_neighbors(anchors: set[int], raw_vals: list[float],
+                                n: int) -> set[int]:
+	"""Remove anchors that are extreme outliers vs immediate neighbors."""
+	filtered: set[int] = set()
 	for i in anchors:
-		keep = True
 		v = raw_vals[i]
-		# Check against both neighbors
-		left_ok = (i > 0 and raw_vals[i - 1] > 0 and abs(v - raw_vals[i - 1]) <= 10.0)
-		right_ok = (i + 1 < n and raw_vals[i + 1] > 0 and abs(raw_vals[i + 1] - v) <= 10.0)
-		# Keep if at least one neighbor is within 10 km/h
-		if not left_ok and not right_ok:
-			# Extreme outlier: not close to either neighbor
-			keep = False
-		if keep:
-			anchors_filtered.add(i)
+		left_ok = (i > 0 and raw_vals[i - 1] > 0
+		           and abs(v - raw_vals[i - 1]) <= 10.0)
+		right_ok = (i + 1 < n and raw_vals[i + 1] > 0
+		            and abs(raw_vals[i + 1] - v) <= 10.0)
+		if left_ok or right_ok:
+			filtered.add(i)
+	return filtered
 
-	# ═══ Acceleration validation ═══
-	# Check acceleration to nearest frame with >2 km/h difference (any frame,
-	# not just anchors) — avoids "same-cluster" OCR repeat errors fooling the check.
-	max_dv_per_sec = max_accel_mps2 * MPS_TO_KMH * 2.0  # km/h/s (2x safety margin)
-	anchors_validated: set[int] = set()
-	for i in anchors_filtered:
+
+def _anchor_validate_accel(anchors: set[int], raw_vals: list[float],
+                            times: list[float], n: int,
+                            max_accel_mps2: float) -> set[int]:
+	"""Acceleration validation: remove anchors with unrealistic accel."""
+	max_dv_per_sec = max_accel_mps2 * MPS_TO_KMH * 2.0
+	validated: set[int] = set()
+	for i in anchors:
 		v = raw_vals[i]
 		left_fail = right_fail = False
-
-		# Left: nearest frame (any valid speed) with >2 km/h difference
+		# Left
 		for j in range(i - 1, -1, -1):
 			if raw_vals[j] > 0 and abs(raw_vals[j] - v) > 2.0:
 				dt = times[i] - times[j]
 				if abs(v - raw_vals[j]) / max(dt, 0.001) > max_dv_per_sec:
 					left_fail = True
 				break
-
-		# Right: nearest frame (any valid speed) with >2 km/h difference
+		# Right
 		for j in range(i + 1, n):
 			if raw_vals[j] > 0 and abs(raw_vals[j] - v) > 2.0:
 				dt = times[j] - times[i]
 				if abs(raw_vals[j] - v) / max(dt, 0.001) > max_dv_per_sec:
 					right_fail = True
 				break
-
-		if not (left_fail or right_fail):  # keep only if NEITHER side fails accel check
-			anchors_validated.add(i)
-
-	return anchors_validated
+		if not (left_fail or right_fail):
+			validated.add(i)
+	return validated
 
 
+def auto_select_anchors(observations: list["SpeedObservation"],
+                         max_speed_kmh: float = 400.0, window: int = 0,
+                         max_dev: float = 4.0,
+                         max_accel_mps2: float = 50.0) -> set[int]:
+	"""Select reliable OCR frames as Correction B anchors.
+
+	4 阶段流水线：自适应窗口 → 中位数筛选 → 邻居验证 → 加速度验证。
+	Returns: trusted frame indices.
+	"""
+	n = len(observations)
+	raw_vals = [o.raw_speed_kmh for o in observations]
+	times = [o.timestamp for o in observations]
+
+	# 阶段 1: 自适应窗口
+	if window <= 0:
+		window = _anchor_adaptive_window(times, n)
+
+	# 阶段 2: 中位数筛选 (center + boundaries)
+	anchors = _anchor_select_center(raw_vals, times, n, window,
+                                    max_speed_kmh, max_dev)
+	anchors |= _anchor_select_boundaries(raw_vals, n, window,
+                                         max_speed_kmh, max_dev)
+
+	# 阶段 3: 邻居验证
+	anchors = _anchor_validate_neighbors(anchors, raw_vals, n)
+
+	# 阶段 4: 加速度验证
+	anchors = _anchor_validate_accel(anchors, raw_vals, times, n,
+                                     max_accel_mps2)
+
+	return anchors
 
 class _CancelExport(Exception):
 	"""内部异常：用户取消了导出任务。"""
