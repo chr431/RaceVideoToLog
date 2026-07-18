@@ -19,7 +19,9 @@ from ocr_engine import (
 	SOURCE_TO_KMH, _parse_int_or_none,
 	_reset_backend, _select_backend, _get_model_kwargs,
 )
+from config import MPS_TO_KMH
 from correction import correct_with_anchors, compute_confidence, find_problem_segments
+from gpu_setup import get_gpu_backend
 
 logger = logging.getLogger("RaceVideoToLog.pipeline")
 
@@ -342,7 +344,7 @@ class ProcessingPipeline:
 			done += 1
 			if done % 10 == 0 or done <= 3 or done == est_total:
 				pct = 3.0 + (done / max(est_total, 1)) * 87.0
-				self._emit(f"[{_oe._gpu_backend}] OCR: {done}/{est_total}", pct)
+				self._emit(f"[{get_gpu_backend()}] OCR: {done}/{est_total}", pct)
 		t.join()
 		if errors:
 			raise errors[0]
@@ -354,7 +356,7 @@ class ProcessingPipeline:
 	def _integrate_distance(self) -> None:
 		dist = 0.0; prev_t = prev_v = None
 		for r in self._rows:
-			v = r[2] / 3.6 if r[2] >= 0 else 0.0
+			v = r[2] / MPS_TO_KMH if r[2] >= 0 else 0.0
 			if prev_t is not None and prev_v is not None:
 				dt = r[0] - prev_t
 				if dt > 0:

@@ -1,0 +1,22 @@
+[project]
+name = "RaceVideoToLog"
+version = "2.3.0"
+description = "从赛车视频中 OCR 提取速度数据，生成时间-速度-距离 CSV"
+requires-python = ">=3.11"
+dependencies = [
+    "rapidocr-onnxruntime>=1.2",
+    "onnxruntime-gpu>=1.27",
+    "opencv-python-headless>=5",
+    "numpy>=2",
+    "matplotlib>=3.10",
+    "PySide6>=6.11",
+    "qfluentwidgets>=1.11",
+    "pyclipper",
+    "shapely",
+]
+
+[project.scripts]
+racevideotolog = "RaceVideoToLog:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

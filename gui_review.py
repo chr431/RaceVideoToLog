@@ -14,6 +14,9 @@ from qfluentwidgets import (BodyLabel, StrongBodyLabel, CaptionLabel,
 	PrimaryPushButton, PushButton, isDarkTheme)
 from theme_manager import ThemeManager
 from widget_utils import make_static_card, setup_chart_zoom_pan
+from config import (COLOR_BG_DARK, COLOR_BG_LIGHT, COLOR_FG_DARK, COLOR_FG_LIGHT,
+                     COLOR_RED, COLOR_ORANGE, COLOR_GREEN, COLOR_BLUE,
+                     COLOR_LIGHT_GRAY, COLOR_LIGHTER_GRAY, chart_colors)
 
 import cv2
 
@@ -188,8 +191,8 @@ class ReviewDialog(QDialog):
 		fig.subplots_adjust(left=0.08, right=0.98, top=0.95, bottom=0.15)
 		ax = fig.add_subplot(111)
 		dark = isDarkTheme()
-		bg = "#2a2a2a" if dark else "#ffffff"
-		fg = "#e0e0e0" if dark else "#333333"
+		bg, fg = chart_colors(dark)
+		
 		fig.set_facecolor(bg)
 		ax.set_facecolor(bg)
 		self._chart_params = {'dark': dark, 'bg': bg, 'fg': fg}
@@ -224,8 +227,8 @@ class ReviewDialog(QDialog):
 
 		ax.clear()
 		dark = isDarkTheme()
-		bg = "#2a2a2a" if dark else "#ffffff"
-		fg = "#e0e0e0" if dark else "#333333"
+		bg, fg = chart_colors(dark)
+		
 		self._chart_params = {'dark': dark, 'bg': bg, 'fg': fg}
 
 		times = [r[0] for r in self._rows]
@@ -236,14 +239,14 @@ class ReviewDialog(QDialog):
 			cur_seg = self._list.item(cur_row).data(Qt.ItemDataRole.UserRole)
 
 		# 全曲线（极淡灰散点）
-		bg_gray = "#666666" if not dark else "#aaaaaa"
+		bg_gray = COLOR_LIGHT_GRAY if not dark else COLOR_LIGHTER_GRAY
 		ax.scatter(times, speeds, c=bg_gray, s=1, alpha=0.5, zorder=0, linewidths=0, rasterized=True)
 
 		# 当前段背景高亮
 		if cur_seg:
 			s, e = cur_seg['start'], cur_seg['end']
 			ax.axvspan(times[s], times[min(e, len(times) - 1)],
-					   facecolor="#FF9800", alpha=0.08, zorder=0)
+					   facecolor=COLOR_ORANGE, alpha=0.08, zorder=0)
 
 		# 各问题段着色（散点）
 		for seg in self._segments:
@@ -253,18 +256,18 @@ class ReviewDialog(QDialog):
 			# 已修正帧数超过段内一半 → 绿色标记
 			seg_corrected = sum(1 for fi in range(s, e+1) if fi in self._corrections)
 			if seg_corrected >= max(1, seg['count'] // 2):
-				ax.scatter(seg_t, seg_v, c="#4CAF50", s=3, alpha=0.6, zorder=1, linewidths=0)
+				ax.scatter(seg_t, seg_v, c=COLOR_GREEN, s=3, alpha=0.6, zorder=1, linewidths=0)
 			elif is_cur:
-				ax.scatter(seg_t, seg_v, c="#FF9800", s=12, zorder=4, linewidths=0)
+				ax.scatter(seg_t, seg_v, c=COLOR_ORANGE, s=12, zorder=4, linewidths=0)
 			else:
-				ax.scatter(seg_t, seg_v, c="#F44336", s=3, alpha=0.7, zorder=2, linewidths=0)
+				ax.scatter(seg_t, seg_v, c=COLOR_RED, s=3, alpha=0.7, zorder=2, linewidths=0)
 
 		# 已修正帧
 		if self._corrections:
 			cx = [times[fi] for fi in self._corrections if fi < len(times)]
 			cy = [self._corrections[fi] for fi in self._corrections if fi < len(times)]
 			if cx:
-				ax.scatter(cx, cy, c="#2196F3", s=12, zorder=5, marker='o',
+				ax.scatter(cx, cy, c=COLOR_BLUE, s=12, zorder=5, marker='o',
 						   edgecolors='white', linewidths=0.5)
 
 		ax.set_facecolor(bg)

@@ -18,6 +18,7 @@ from qfluentwidgets import (PushButton, PrimaryPushButton, CompactSpinBox,
 from widget_utils import make_static_card, setup_chart_zoom_pan
 
 from analysis import parse_csv, smooth_data, plot_segmented
+from config import COLOR_BLUE, COLOR_ORANGE, COLOR_GREEN, chart_colors
 
 
 class AnalysisTab:
@@ -128,8 +129,7 @@ class AnalysisTab:
 		from PySide6.QtGui import QPalette, QColor
 		from qfluentwidgets import isDarkTheme
 		dark = isDarkTheme()
-		bg = "#2a2a2a" if dark else "#ffffff"
-		fg = "#e0e0e0" if dark else "#333333"
+		bg, fg = chart_colors(dark)
 		if self._figure:
 			self._figure.set_facecolor(bg)
 			if self._figure.axes:
@@ -201,7 +201,7 @@ class AnalysisTab:
 		dark = isDarkTheme()
 		fig.set_facecolor("#2a2a2a" if dark else "#ffffff")
 		ax = fig.add_subplot(111)
-		colors = ["#2196F3", "#FF5722", "#4CAF50"]
+		colors = [COLOR_BLUE, COLOR_ORANGE, COLOR_GREEN]
 		mode = self._chart_mode
 		show_cd = self._show_corrected
 		smooth_str = self._smooth_str
@@ -324,7 +324,7 @@ class AnalysisTab:
 			except Exception:
 				pass
 		self._span_selector = SpanSelector(ax, _on_select, "horizontal",
-			props=dict(facecolor="#2196F3", alpha=0.15),
+			props=dict(facecolor=COLOR_BLUE, alpha=0.15),
 			interactive=True, drag_from_anywhere=True,
 			button=1)  # type: ignore[arg-type]
 		delta_text.set_text(f"← 拖拽选择范围查看{delta_label}")

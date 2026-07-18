@@ -10,11 +10,27 @@ from typing import TYPE_CHECKING
 import cv2
 import numpy as np
 from ocr_engine import extract_speed_value, build_speed_candidates, Flag
+from config import MPS_TO_KMH
 
 if TYPE_CHECKING:
 	from rapidocr_onnxruntime import RapidOCR
 
 logger = logging.getLogger("RaceVideoToLog.correction")
+
+def _find_neighbor_anchors(i: int, n: int, anchors: set[int]) -> tuple[int | None, int | None]:
+	"""Find nearest left and right anchor indices for frame i."""
+	la = None
+	for j in range(i - 1, -1, -1):
+		if j in anchors:
+			la = j
+			break
+	ra = None
+	for j in range(i + 1, n):
+		if j in anchors:
+			ra = j
+			break
+	return la, ra
+
 
 def _infer_partial_pattern(ocr_text: str, expected: float, max_speed: float) -> str | None:
 	"""根据 OCR 文本和邻居插值估算，自动推断缺失数字的位置。
@@ -212,7 +228,7 @@ def _detect_errors(rows: list, anchors: set, times: list, max_speed_kmh: float, 
 			prev_v = raw_vals[i - 1]
 			if prev_v >= 0 and prev_v <= max_speed_kmh:
 				dt = max(times[i] - times[i - 1], 0.001)
-				max_dv = max_accel_mps2 * dt * 3.6 * 1.2
+				max_dv = max_accel_mps2 * dt * MPS_TO_KMH * 1.2
 				if abs(v - prev_v) > max_dv:
 					if not (i + 1 < n and v == raw_vals[i + 1] and times[i + 1] - times[i] < 0.15):
 						fwd_fail = True
@@ -221,7 +237,7 @@ def _detect_errors(rows: list, anchors: set, times: list, max_speed_kmh: float, 
 			next_v = raw_vals[i + 1]
 			if next_v >= 0 and next_v <= max_speed_kmh:
 				dt = max(times[i + 1] - times[i], 0.001)
-				max_dv = max_accel_mps2 * dt * 3.6 * 1.2
+				max_dv = max_accel_mps2 * dt * MPS_TO_KMH * 1.2
 				if abs(next_v - v) > max_dv:
 					if not (i > 0 and v == raw_vals[i - 1] and times[i] - times[i - 1] < 0.15):
 						bwd_fail = True
@@ -239,7 +255,7 @@ def _detect_errors(rows: list, anchors: set, times: list, max_speed_kmh: float, 
 				dt_right = max(times[i + 1] - times[i], 0.001)
 				accel_left = (v - prev_v) / dt_left
 				accel_right = (next_v - v) / dt_right
-				accel_limit = max_accel_mps2 * 3.6 * 2.5
+				accel_limit = max_accel_mps2 * MPS_TO_KMH * 2.5
 				if abs(accel_left) > accel_limit and accel_left * accel_right < 0:
 					if not (i + 1 < n and v == raw_vals[i + 1] and times[i + 1] - times[i] < 0.15):
 						error_set.add(i)
@@ -258,7 +274,7 @@ def _detect_errors(rows: list, anchors: set, times: list, max_speed_kmh: float, 
 				dt_right = max(times[i + 1] - times[i], 0.001)
 				accel_left = (v - prev_v) / dt_left
 				accel_right = (next_v - v) / dt_right
-				cliff_limit = max_accel_mps2 * 3.6 * 3.0
+				cliff_limit = max_accel_mps2 * MPS_TO_KMH * 3.0
 				if abs(accel_left) > cliff_limit and abs(accel_right) < cliff_limit * 0.3:
 					error_set.add(i)
 					continue
@@ -267,13 +283,7 @@ def _detect_errors(rows: list, anchors: set, times: list, max_speed_kmh: float, 
 					continue
 
 		# ── B. 锚点趋势偏离 ──
-		la = None; ra = None
-		for j in range(i - 1, -1, -1):
-			if j in anchors:
-				la = j; break
-		for j in range(i + 1, n):
-			if j in anchors:
-				ra = j; break
+		la, ra = _find_neighbor_anchors(i, n, anchors)
 		if la is not None and ra is not None:
 			lv = rows[la][2]; rv = rows[ra][2]
 			lt = rows[la][0]; rt = rows[ra][0]
@@ -281,7 +291,7 @@ def _detect_errors(rows: list, anchors: set, times: list, max_speed_kmh: float, 
 			frac = (times[i] - lt) / total_dt
 			interp = lv + (rv - lv) * frac
 			seg_dt = times[i] - lt
-			threshold = max(5.0, 3.0 * max_accel_mps2 * max(seg_dt, 0.1) * 3.6)
+			threshold = max(5.0, 3.0 * max_accel_mps2 * max(seg_dt, 0.1) * MPS_TO_KMH)
 			if abs(v - interp) > threshold:
 				error_set.add(i)
 				continue
@@ -292,12 +302,12 @@ def _detect_errors(rows: list, anchors: set, times: list, max_speed_kmh: float, 
 			right_v = raw_vals[i + 1] if raw_vals[i + 1] >= 0 else (raw_vals[i + 2] if raw_vals[i + 2] >= 0 else None)
 			if left_v is not None and right_v is not None:
 				dt_cross = max(times[i + 2] - times[i - 2], 0.01)
-				max_dv_cross = max_accel_mps2 * dt_cross * 3.6 * 1.5
+				max_dv_cross = max_accel_mps2 * dt_cross * MPS_TO_KMH * 1.5
 				if abs(right_v - left_v) <= max_dv_cross:
 					dt_left = max(times[i] - times[i - 1], 0.001)
 					dt_right = max(times[i + 1] - times[i], 0.001)
-					max_dv_l = max_accel_mps2 * dt_left * 3.6 * 1.5
-					max_dv_r = max_accel_mps2 * dt_right * 3.6 * 1.5
+					max_dv_l = max_accel_mps2 * dt_left * MPS_TO_KMH * 1.5
+					max_dv_r = max_accel_mps2 * dt_right * MPS_TO_KMH * 1.5
 					if abs(v - left_v) > max_dv_l and abs(right_v - v) > max_dv_r:
 						error_set.add(i)
 
@@ -445,13 +455,7 @@ def _re_ocr_frame(crop_bgr: "np.ndarray", ocr: "RapidOCR", max_speed_kmh: float,
 def _interp_candidate(i: int, rows: list, anchors: set, times: list, max_speed_kmh: float) -> float | None:
 	"""计算帧 i 在左右锚点间的线性插值估计。"""
 	n = len(rows)
-	la = None; ra = None
-	for j in range(i - 1, -1, -1):
-		if j in anchors:
-			la = j; break
-	for j in range(i + 1, n):
-		if j in anchors:
-			ra = j; break
+	la, ra = _find_neighbor_anchors(i, n, anchors)
 	if la is not None and ra is not None:
 		lv = rows[la][2]; rv = rows[ra][2]
 		lt = rows[la][0]; rt = rows[ra][0]
@@ -477,7 +481,7 @@ def _score_candidate(val: float, i: int, rows: list, anchors: set, error_set: se
 		if j in error_set or rows[j][2] < 0 or rows[j][2] > max_speed_kmh:
 			continue
 		dt = max(times[i] - times[j], 0.001)
-		max_dv = max_accel_mps2 * dt * 3.6
+		max_dv = max_accel_mps2 * dt * MPS_TO_KMH
 		dv = abs(val - rows[j][2])
 		neighbor_score += 1.0 - dv / max(max_dv, 0.1) if dv <= max_dv else 0.0
 		count += 1
@@ -486,7 +490,7 @@ def _score_candidate(val: float, i: int, rows: list, anchors: set, error_set: se
 		if j in error_set or rows[j][2] < 0 or rows[j][2] > max_speed_kmh:
 			continue
 		dt = max(times[j] - times[i], 0.001)
-		max_dv = max_accel_mps2 * dt * 3.6
+		max_dv = max_accel_mps2 * dt * MPS_TO_KMH
 		dv = abs(rows[j][2] - val)
 		neighbor_score += 1.0 - dv / max(max_dv, 0.1) if dv <= max_dv else 0.0
 		count += 1
@@ -498,7 +502,7 @@ def _score_candidate(val: float, i: int, rows: list, anchors: set, error_set: se
 	interp = _interp_candidate(i, rows, anchors, times, max_speed_kmh)
 	if interp is not None:
 		dev = abs(val - interp)
-		threshold = max(5.0, max_accel_mps2 * 3.6)
+		threshold = max(5.0, max_accel_mps2 * MPS_TO_KMH)
 		anchor_score = max(0.0, 1.0 - dev / threshold)
 
 	# 3. smoothness_score
@@ -515,7 +519,7 @@ def _score_candidate(val: float, i: int, rows: list, anchors: set, error_set: se
 		if prev_v is not None and next_v is not None:
 			expected = (prev_v + next_v) / 2.0
 			dev2 = abs(val - expected)
-			smoothness_score = max(0.0, 1.0 - dev2 / max(10.0, max_accel_mps2 * 1.8 * 3.6))
+			smoothness_score = max(0.0, 1.0 - dev2 / max(10.0, max_accel_mps2 * 1.8 * MPS_TO_KMH))
 
 	return neighbor_score * 0.4 + anchor_score * 0.35 + smoothness_score * 0.25
 
@@ -544,11 +548,11 @@ def _fill_unrecoverable(rows: list, anchors: set, error_set: set, times: list, m
 				ra = j; break
 
 		left_dt = max(times[i] - lt, 0.001)
-		left_max_dv = max_accel_mps2 * left_dt * 3.6
+		left_max_dv = max_accel_mps2 * left_dt * MPS_TO_KMH
 		if ra is not None:
 			rv = rows[ra][2]; rt = rows[ra][0]
 			right_dt = max(rt - times[i], 0.001)
-			right_max_dv = max_accel_mps2 * right_dt * 3.6
+			right_max_dv = max_accel_mps2 * right_dt * MPS_TO_KMH
 			# Range reachable from left anchor
 			lo = max(0.0, lv - left_max_dv)
 			hi = min(max_speed_kmh, lv + left_max_dv)
@@ -624,7 +628,7 @@ def compute_confidence(rows: list, observations: list, max_speed: float,
 		# 邻帧加速度
 		if i > 0 and vals[i - 1] >= 0:
 			dt = max(rows[i][0] - rows[i - 1][0], 0.001)
-			accel = abs(cur - vals[i - 1]) / dt / 3.6
+			accel = abs(cur - vals[i - 1]) / dt / MPS_TO_KMH
 			if accel > max_accel:
 				penalty = 0.4 * min(40, (accel / max_accel - 1) * 50)
 				score -= penalty
@@ -632,7 +636,7 @@ def compute_confidence(rows: list, observations: list, max_speed: float,
 
 		if i + 1 < n and vals[i + 1] >= 0:
 			dt = max(rows[i + 1][0] - rows[i][0], 0.001)
-			accel = abs(vals[i + 1] - cur) / dt / 3.6
+			accel = abs(vals[i + 1] - cur) / dt / MPS_TO_KMH
 			if accel > max_accel:
 				penalty = 0.4 * min(40, (accel / max_accel - 1) * 50)
 				score -= penalty

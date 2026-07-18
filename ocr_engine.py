@@ -14,9 +14,26 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-import matplotlib
-matplotlib.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
-matplotlib.rcParams["axes.unicode_minus"] = False
+import config
+from config import MPS_TO_KMH, SOURCE_TO_KMH
+
+# Lazy matplotlib font config (no import-time side effects)
+_matplotlib_configured = False
+
+def _ensure_matplotlib_fonts() -> None:
+	"""配置 matplotlib 中文字体支持（幂等，可多次调用）。"""
+	global _matplotlib_configured
+	if not _matplotlib_configured:
+		try:
+			import matplotlib
+			matplotlib.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
+			matplotlib.rcParams["axes.unicode_minus"] = False
+		except ImportError:
+			pass
+		_matplotlib_configured = True
+
+# 确保字体配置在 import 时生效（所有模块在创建 Figure 前都已导入 ocr_engine）
+_ensure_matplotlib_fonts()
 
 # ── 模块级 Logger ──
 logger = logging.getLogger("RaceVideoToLog.ocr_engine")
@@ -62,220 +79,22 @@ class Flag:
 		return flag >= 20
 
 
-# ═══════════════════ GPU 加速前置：注册 CUDA/cuDNN DLL ═══════════════════
-def _register_gpu_dlls() -> None:
-	"""将 CUDA 和 cuDNN DLL 按依赖顺序预加载到进程内存。"""
-	try:
-		import ctypes as _ct
-		import os as _os
+# ═══════════════════ GPU 加速：由 gpu_setup.py 延迟初始化 ═══════════════════
+from gpu_setup import select_backend as _select_backend, reset_backend as _reset_backend
 
-		_cuda_bin: str | None = None
-		_cudnn_dir: str | None = None
-		_cudnn_dlls: list[str] = []
+# 兼容性：pipeline.py 通过 _oe._gpu_backend 读取后端名
+# select_backend() 会通过 config._gpu_backend 同步此值
+def _sync_gpu_backend() -> str:
+	import config
+	return config._gpu_backend
 
-		# ── 1. 定位 CUDA Toolkit bin 目录 ──
-		_cuda_base = r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA"
-		for _ver in [
-			"v13.3", "v13.2", "v13.1", "v13.0",
-			"v12.9", "v12.8", "v12.7", "v12.6", "v12.5", "v12.4",
-			"v12.3", "v12.2", "v12.1", "v12.0",
-			"v11.8", "v11.7", "v11.6",
-		]:
-			_cb = _os.path.join(_cuda_base, _ver, "bin")
-			if _os.path.isdir(_cb):
-				_cuda_bin = _cb
-				break
-		if not _cuda_bin:
-			for _env in ("CUDA_PATH", "CUDA_HOME", "CUDA_ROOT"):
-				_val = _os.environ.get(_env, "")
-				if _val:
-					_cb = _os.path.join(_val, "bin")
-					if _os.path.isdir(_cb):
-						_cuda_bin = _cb
-						break
-
-		# ── 2. 定位 cuDNN DLL（匹配 CUDA 版本）──
-		_cuda_major = ""
-		if _cuda_bin:
-			import re as _re
-			_m = _re.search(r"v(\d+\.\d+)", _cuda_bin.replace("\\", "/"))
-			if _m:
-				_cuda_major = _m.group(1)
-
-		_cudnn_base = r"C:\Program Files\NVIDIA\CUDNN"
-		if _os.path.isdir(_cudnn_base):
-			_candidates: list[tuple[str, str]] = []
-			for _root, _dirs, _files in _os.walk(_cudnn_base):
-				for _f in _files:
-					if _f.lower().startswith("cudnn") and _f.endswith(".dll"):
-						_candidates.append((_root, _f))
-			if _cuda_major and _candidates:
-				_matched = [(r, f) for r, f in _candidates if _cuda_major in r.replace("\\", "/")]
-				if _matched:
-					_candidates = _matched
-			for _root, _f in _candidates:
-				if _cudnn_dir is None:
-					_cudnn_dir = _root
-				_cudnn_dlls.append(_os.path.join(_root, _f))
-
-		# ── 3. 按依赖顺序预加载 DLL ──
-		_loaded = 0
-		_failed: list[str] = []
-
-		def _load_dll(_path: str) -> bool:
-			nonlocal _loaded
-			try:
-				_ct.CDLL(_path)
-				_loaded += 1
-				return True
-			except OSError as _e:
-				_failed.append(f"{_os.path.basename(_path)}: {_e}")
-				return False
-			except Exception:
-				return False
-
-		if _cuda_bin:
-			for _prefix in ("cudart64_", "cudart32_"):
-				for _f in _os.listdir(_cuda_bin):
-					if _f.lower().startswith(_prefix) and _f.endswith(".dll"):
-						_load_dll(_os.path.join(_cuda_bin, _f))
-			for _f in sorted(_os.listdir(_cuda_bin)):
-				_fl = _f.lower()
-				if _fl.endswith(".dll") and not _fl.startswith("cudart"):
-					if any(_fl.startswith(p) for p in (
-						"cublas", "cufft", "curand", "cusparse", "cusolver",
-						"npp", "nvjpeg", "nvrtc", "nvblas", "nvjitlink",
-						"zlibwapi",
-					)):
-						_load_dll(_os.path.join(_cuda_bin, _f))
-
-		for _dll_path in _cudnn_dlls:
-			_load_dll(_dll_path)
-
-		# ── 3. 更新 PATH ──
-		_path_extra: list[str] = []
-		if _cuda_bin:
-			_path_extra.append(_cuda_bin)
-		if _cudnn_dir:
-			_path_extra.append(_cudnn_dir)
-		if _path_extra:
-			_existing = _os.environ.get("PATH", "")
-			_os.environ["PATH"] = ";".join(_path_extra) + (";" + _existing if _existing else "")
-
-		if _cuda_bin:
-			logger.info("CUDA: %s", _cuda_bin)
-		else:
-			logger.info("CUDA: 未找到 CUDA Toolkit 安装")
-		if _cudnn_dlls:
-			logger.info("cuDNN: %d 个 DLL 在 %s", len(_cudnn_dlls), _cudnn_dir)
-		else:
-			logger.info("cuDNN: 未找到")
-		logger.info("GPU DLL 预加载: %d 个成功", _loaded)
-		if _failed:
-			logger.warning("GPU DLL 预加载失败 (%d 个): %s", len(_failed),
-			               "; ".join(_failed[:5]))
-
-	except Exception:
-		pass
-
-_register_gpu_dlls()
-# ═══════════════════════════════════════════════════════════
+_gpu_backend: str = "CPU"
+_gpu_patched: bool = False
 
 from rapidocr_onnxruntime import RapidOCR
+# ═══════════════════════════════════════════════════════════
 
-
-_gpu_patched = False
-_gpu_backend = "CPU"
-
-
-# 后端优先级：用户选择 → 回退链
-_BACKEND_FALLBACK: dict[str, list[str]] = {
-	"auto": ["CUDA", "CPU"],
-	"cuda": ["CUDA", "CPU"],
-	"cpu":  ["CPU"],
-}
-_BACKEND_PROVIDER_MAP = {
-	"CUDA": ("CUDAExecutionProvider", {
-	    "device_id": 0,
-	    "arena_extend_strategy": "kNextPowerOfTwo",
-	    "cudnn_conv_algo_search": "EXHAUSTIVE",
-	    "do_copy_in_default_stream": True,
-	}),
-	"CPU":  ("CPUExecutionProvider", {"arena_extend_strategy": "kSameAsRequested"}),
-}
-
-
-def _select_backend(preferred: str = "auto") -> str:
-	"""按用户偏好选择 OCR 后端，不可用时自动回退。
-
-	preferred: "auto" | "cuda" | "cpu"
-	返回实际使用的后端名称: "CUDA" | "CPU"
-	"""
-	global _gpu_patched, _gpu_backend
-
-	if _gpu_patched:
-		return _gpu_backend
-	_gpu_patched = True
-
-	try:
-		import onnxruntime as ort
-	except Exception:
-		_gpu_backend = "CPU"
-		return _gpu_backend
-
-	available = set(ort.get_available_providers())
-
-	chain = _BACKEND_FALLBACK.get(preferred.lower(), _BACKEND_FALLBACK["auto"])
-	chosen: str | None = None
-
-	for candidate in chain:
-		ep_name = _BACKEND_PROVIDER_MAP[candidate][0]
-		if ep_name in available:
-			chosen = candidate
-			break
-	if chosen is None:
-		chosen = "CPU"
-
-	# Monkey-patch OrtInferSession 以使用选定后端
-	from rapidocr_onnxruntime.utils import OrtInferSession
-
-	ep_name, ep_opts = _BACKEND_PROVIDER_MAP[chosen]
-	cpu_ep_name, cpu_opts = _BACKEND_PROVIDER_MAP["CPU"]
-
-	def _patched_init(self, config):  # type: ignore[no-untyped-def]
-		from onnxruntime import (
-			SessionOptions, InferenceSession, GraphOptimizationLevel,
-		)
-		sess_opt = SessionOptions()
-		sess_opt.log_severity_level = 4
-		sess_opt.enable_cpu_mem_arena = False
-		sess_opt.graph_optimization_level = GraphOptimizationLevel.ORT_ENABLE_ALL
-
-		EP_list: list = [(ep_name, ep_opts)] if ep_name != cpu_ep_name else []
-		EP_list.append((cpu_ep_name, cpu_opts))
-		self._verify_model(config['model_path'])
-		self.session = InferenceSession(
-			config['model_path'], sess_options=sess_opt, providers=EP_list,
-		)
-
-	OrtInferSession.__init__ = _patched_init  # type: ignore[method-assign]
-
-	_gpu_backend = chosen
-	return _gpu_backend
-
-
-def _reset_backend() -> None:
-	"""重置后端选择状态，允许用户在运行时切换后端。"""
-	global _gpu_patched, _gpu_backend
-	_gpu_patched = False
-	_gpu_backend = "CPU"
-
-
-SOURCE_TO_KMH = {
-	"m/s": 3.6,
-	"km/h": 1.0,
-	"mile/h": 1.609344,
-}
+# SOURCE_TO_KMH 已从 config 导入
 
 OCR_NUMBER_RE = re.compile(r"\d+(?:[\.,]\d+)?")
 
@@ -747,7 +566,7 @@ def auto_select_anchors(observations: list["SpeedObservation"], max_speed_kmh: f
 	# ═══ Acceleration validation ═══
 	# Check acceleration to nearest frame with >2 km/h difference (any frame,
 	# not just anchors) — avoids "same-cluster" OCR repeat errors fooling the check.
-	max_dv_per_sec = max_accel_mps2 * 3.6 * 2.0  # km/h/s (2x safety margin)
+	max_dv_per_sec = max_accel_mps2 * MPS_TO_KMH * 2.0  # km/h/s (2x safety margin)
 	anchors_validated: set[int] = set()
 	for i in anchors_filtered:
 		v = raw_vals[i]

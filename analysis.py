@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 	from matplotlib.axes import Axes
 
 from ocr_engine import _savgol_filter_np
+from config import COLOR_BLUE, COLOR_ORANGE, COLOR_GRAY
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -200,7 +201,7 @@ def run_analysis_headless(args) -> None:
 
 	# ── v-t ──
 	fig, ax = plt.subplots(figsize=(10, 6))
-	for data, times, name, c in [(s1, t1, name1, "#2196F3"), (s2, t2, name2, "#FF5722")]:
+	for data, times, name, c in [(s1, t1, name1, COLOR_BLUE), (s2, t2, name2, COLOR_ORANGE)]:
 		_, sy = smooth_data(times, data, 0)
 		ax.plot(times, sy, color=c, linewidth=0.8, label=name)
 	ax.set_xlabel("时间 (s)"); ax.set_ylabel("速度 (km/h)")
@@ -212,7 +213,7 @@ def run_analysis_headless(args) -> None:
 
 	# ── v-x ──
 	fig, ax = plt.subplots(figsize=(10, 6))
-	for data, dists, name, c in [(s1, d1, name1, "#2196F3"), (s2, d2, name2, "#FF5722")]:
+	for data, dists, name, c in [(s1, d1, name1, COLOR_BLUE), (s2, d2, name2, COLOR_ORANGE)]:
 		_, sy = smooth_data(dists, data, 0)
 		ax.plot(dists, sy, color=c, linewidth=0.8, label=name)
 	ax.set_xlabel("距离 (m)"); ax.set_ylabel("速度 (km/h)")
@@ -227,8 +228,8 @@ def run_analysis_headless(args) -> None:
 	t2_interp = np.interp(d1, d2, t2)
 	dt = np.array(t1) - t2_interp
 	_, sdt = smooth_data(d1, dt, 0)
-	ax.plot(d1, sdt, color="#2196F3", linewidth=0.8, label=f"{name1} - {name2}")
-	ax.axhline(y=0, color="#888888", linewidth=1.2, linestyle="--", alpha=0.7)
+	ax.plot(d1, sdt, color=COLOR_BLUE, linewidth=0.8, label=f"{name1} - {name2}")
+	ax.axhline(y=0, color=COLOR_GRAY, linewidth=1.2, linestyle="--", alpha=0.7)
 	ax.set_xlabel("距离 (m)"); ax.set_ylabel("Δt (s)")
 	ax.set_title(f"时间差-距离 ({name1} vs {name2})"); ax.legend(); ax.grid(True, alpha=0.3)
 	fig.tight_layout()
