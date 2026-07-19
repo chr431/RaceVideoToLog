@@ -161,7 +161,7 @@ OCR 读到不完整数字 (如 "21" 而邻居约 221) 时自动推断缺失位�
 ## CSV 格式
 
 ```
-# RaceVideoToLog v2.3.0
+# RaceVideoToLog v2.4.0
 # video_hash=..., video=...
 # roi=..., format=..., frame_start=, frame_end=
 # max_speed=..., max_accel=..., div=..., target_h=..., pad=..., buffer=...

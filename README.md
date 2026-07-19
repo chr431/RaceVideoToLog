@@ -1,4 +1,4 @@
-# RaceVideoToLog v2.3.0
+# RaceVideoToLog v2.4.0
 
 从赛车游戏视频中提取速度数据，生成时间-速度-距离 CSV 文件。支持 GPU (CUDA) / CPU 后端，提供 PySide6 Fluent Design GUI 和 CLI 两种界面。GUI 与 CLI 共用统一的 `ProcessingPipeline` 后端，保证行为一致。
 
@@ -77,7 +77,7 @@ RaceVideoToLog/
 CSV 头包含完整处理参数和统计信息：
 
 ```csv
-# RaceVideoToLog v2.3.0
+# RaceVideoToLog v2.4.0
 # video_hash=94ac7e06b58914e7, video=test4.mp4
 # roi=862,945,957,1003, format=km/h, frame_start=114, frame_end=6317
 # max_speed=400.0, max_accel=70.0, div=1, target_h=24.0, pad=0.0, buffer=8

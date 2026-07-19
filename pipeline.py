@@ -384,7 +384,7 @@ class ProcessingPipeline:
 		n_corrected = sum(1 for row in rows if Flag.is_corrected(row[3]))
 		timing_str = ", ".join(f"{k}={v:.1f}s" for k, v in self._timing.items())
 		with output_path.open("w", newline="", encoding="utf-8-sig") as fh:
-			fh.write("# RaceVideoToLog v2.3.0\n")
+			fh.write("# RaceVideoToLog v2.4.0\n")
 			fh.write(f"# video_hash={vhash}, video={self._video_path.name}\n")
 			fh.write(f"# roi={r[0]},{r[1]},{r[2]},{r[3]}, format={self._speed_format}"
 					 f", frame_start={self._frame_start or ''}"
