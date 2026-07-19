@@ -21,7 +21,7 @@ python RaceVideoToLog.py
 ```
 
 1. 导入视频文件，框选仪表盘数字区域
-2. 选择纠错模式（自动锚点纠错 / 人工辅助纠错）
+2. 选择 OCR 模型（v6_tiny 更快 / v6_small 更准）和纠错模式
 3. 设置参数，导出 CSV
 
 **导入设置**：可从已有 CSV 文件头一键导入所有参数（ROI、采样率、后端等）。
@@ -53,19 +53,21 @@ python RaceVideoToLog.py --analysis csv1.csv csv2.csv --analysis-out prefix
 
 ## 项目结构
 
-```
+```text
 RaceVideoToLog/
 ├── RaceVideoToLog.py    # 入口: arg 解析 + GUI/CLI 调度
 ├── gui.py               # PySide6 主窗口 (Fluent Design)
 ├── gui_review.py        # 人工审核对话框
 ├── gui_analysis.py      # 数据分析 Tab
-├── widget_utils.py      # 共享 GUI 组件 (make_static_card, chart zoom/pan)
+├── widget_utils.py      # 共享 GUI 组件
 ├── analysis.py          # 数据分析业务逻辑
 ├── pipeline.py          # 统一处理流水线 (GUI/CLI 共用)
-├── correction.py        # 物理约束纠错流水线 (5阶段)
+├── correction.py        # 物理约束纠错流水线
 ├── ocr_engine.py        # OCR 引擎、预处理、锚点选择、Flag 枚举
+├── config.py            # 集中配置（常量、颜色、默认值）
+├── gpu_setup.py         # GPU DLL 加载 + ONNX 后端选择
 ├── theme_manager.py     # 主题回调管理器
-├── headless.py          # CLI 入口 (委托给 pipeline)
+├── headless.py          # CLI 入口
 ├── RaceVideoToLog.spec  # PyInstaller 打包配置
 └── README.md
 ```
@@ -109,7 +111,7 @@ OCR 读到的数字可能缺失部分位（如 `221` 被识别为 `21`），系�
 
 ## CLI 参数
 
-```
+```text
 python RaceVideoToLog.py [video] [options]
 
 位置参数:
@@ -125,7 +127,7 @@ python RaceVideoToLog.py [video] [options]
   --pad N                    边缘填充 px (默认: 0)
   --buffer N                 缓冲队列大小 (默认: 8)
   --backend {auto,cuda,cpu}  OCR 后端 (默认: auto)
-  --ocr-model {v6_small}     OCR 模型 (默认: v6_small)
+  --ocr-model {v6_tiny,v6_small}  OCR 模型 (默认: v6_small)
   --from-csv PATH            从 CSV 文件头导入设置
   -o, --output PATH          输出 CSV 路径
   --frame-start N            起始帧号
@@ -136,12 +138,10 @@ python RaceVideoToLog.py [video] [options]
 
 ## 性能
 
-- ONNX Runtime 1.27 + CUDA 12.x，PP-OCRv6_small 模型（~2M 检测 + ~5M 识别参数）
-- 单帧推理 ~4ms（~250 fps），GTX/RTX GPU 上轻松满足实时处理
-- 原生 `threading.Thread` 解码 + Queue 流水线，I/O 与推理重叠
-- Savitzky-Golay 滤波预计算卷积系数（O(N) 复杂度，缓存复用）
-- 重 OCR 缓存绑定 Pipeline 实例生命周期，避免内存泄漏
-- 日志系统（`logging` 模块）替代 `print()`，支持分级输出
+- ONNX Runtime 1.27 + CUDA 12.x，PP-OCRv6_small 模型
+- 单帧推理 ~4ms（~250 fps），满足实时处理需求
+- 可选 `v6_tiny` 模型：推理速度提升 ~39%，适合低配置 GPU
+- 视频解码与 OCR 推理流水线并行，最大化 GPU 利用率
 
 ## 打包
 
@@ -150,9 +150,9 @@ pip install pyinstaller
 python -m PyInstaller RaceVideoToLog.spec --noconfirm
 ```
 
-生成 `dist/RaceVideoToLog/` (onedir 模式，~567 MB)。GPU 用户需自行安装 CUDA Toolkit + cuDNN。
+生成 `dist/RaceVideoToLog/` (onedir 模式)。GPU 用户需自行安装 CUDA Toolkit + cuDNN。
 
-打包已排除：TensorRT/DirectML 后端、未使用的 ONNX 模型（v3/v5/medium）、Qt6 Quick/Qml/Pdf/Network 等模块、scipy、tk/tcl。参见 `RaceVideoToLog.spec`。
+也可双击 `build_exe.bat` 一键构建。
 
 ## License
 

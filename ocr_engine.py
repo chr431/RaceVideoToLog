@@ -436,13 +436,18 @@ def _estimate_raw_trust(samples: list[SpeedObservation], window: int = 3) -> lis
 
 
 def _get_model_kwargs(variant: str, models_dir: str | None = None) -> dict | None:
-	"""Get RapidOCR kwargs for the model. Returns None if files missing."""
+	"""Get RapidOCR kwargs for the model. Returns None if files missing.
+
+	variant: "v6_small" | "v6_medium" — 去掉 v6_ 前缀后匹配模型文件名。
+	"""
 	import rapidocr_onnxruntime as rr
 	if models_dir is None:
 		models_dir = str(Path(rr.__file__).parent / "models")
+	# 将 v6_small → small, v6_medium → medium
+	size = variant.replace("v6_", "")
 	cfg = {
-		"det_model_path": f"{models_dir}/PP-OCRv6_det_small.onnx",
-		"rec_model_path": f"{models_dir}/PP-OCRv6_rec_small.onnx",
+		"det_model_path": f"{models_dir}/PP-OCRv6_det_{size}.onnx",
+		"rec_model_path": f"{models_dir}/PP-OCRv6_rec_{size}.onnx",
 		"text_score": 0.6, "use_angle_cls": False, "rec_batch_num": 12,
 	}
 	for key in ("det_model_path", "rec_model_path"):

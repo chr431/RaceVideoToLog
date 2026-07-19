@@ -57,7 +57,8 @@ class ProcessingPipeline:
 				 frame_div: int, target_h: float, pad: float, buffer_size: int,
 				 backend: str, ocr_model: str, speed_format: str,
 				 frame_start: str = "", frame_end: str = "",
-				 progress_cb: ProgressFn | None = None):
+				 progress_cb: ProgressFn | None = None,
+				 reocr_model: str | None = None):
 		self._video_path = Path(video_path)
 		self._roi = roi
 		self._max_speed = max_speed
@@ -66,6 +67,7 @@ class ProcessingPipeline:
 		self._target_h = target_h
 		self._pad = pad
 		self._buffer_size = buffer_size
+		self._reocr_model = reocr_model  # None = 使用 ocr_model
 		self._backend = backend
 		self._ocr_model = ocr_model
 		self._speed_format = speed_format
@@ -75,6 +77,7 @@ class ProcessingPipeline:
 
 		# 状态
 		self._ocr: RapidOCR | None = None
+		self._reocr: RapidOCR | None = None  # 重 OCR 引擎
 		self._raw_frames: list[tuple[float, np.ndarray]] = []
 		self._observations: list[SpeedObservation] = []
 		self._rows: list[list] = []
@@ -147,7 +150,7 @@ class ProcessingPipeline:
 				return
 			self._emit(f"轻量纠错: {done}/{total} 帧", 88.0 + (done / max(total, 1)) * 4.0)
 		self._rows = correct_with_anchors(
-			self._rows, self._observations, self._raw_frames, self._ocr,
+			self._rows, self._observations, self._raw_frames, self._reocr,
 			self._max_speed, self._max_accel, self._anchor_indices,
 			progress_fn=_prog, skip_fill=True, light_mode=True,
 			reocr_cache=self._reocr_cache)
@@ -214,6 +217,13 @@ class ProcessingPipeline:
 			self._backend_actual = _select_backend(self._backend)
 			kw = _get_model_kwargs(self._ocr_model)
 			self._ocr = RapidOCR(**(kw or {}))
+			# 若指定了不同的重 OCR 模型，创建独立引擎
+			_reocr_model = self._reocr_model or self._ocr_model
+			if _reocr_model != self._ocr_model:
+				kw2 = _get_model_kwargs(_reocr_model)
+				self._reocr = RapidOCR(**(kw2 or {}))
+			else:
+				self._reocr = self._ocr
 		return self._ocr
 
 	def _correct(self, progress_base: float, progress_span: float,
@@ -244,7 +254,7 @@ class ProcessingPipeline:
 			pct = done / max(total, 1)
 			self._emit(f"纠错: {done}/{total} 帧", progress_base + 1.0 + pct * progress_span)
 		self._rows = correct_with_anchors(
-			self._rows, self._observations, self._raw_frames, self._ocr,
+			self._rows, self._observations, self._raw_frames, self._reocr,
 			self._max_speed, self._max_accel, self._anchor_indices,
 			progress_fn=_prog, timing=corr_timing, skip_fill=skip_fill,
 			partial_corrections=partial_corrections,

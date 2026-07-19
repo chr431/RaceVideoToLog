@@ -90,7 +90,7 @@ class _ExportThread(QThread):
 					pad=self._pad_px,
 					buffer_size=self._buffer_size,
 					backend=self._backend,
-					ocr_model="v6_small",
+					ocr_model=self.app.model_combo.currentText(),
 					speed_format=self.app.speed_format,
 					frame_start=self.app.frame_start_edit.text(),
 					frame_end=self.app.frame_end_edit.text(),
@@ -343,6 +343,12 @@ class RaceVideoToLogApp(QMainWindow):
 		self.backend_combo.addItems(["自动", "CUDA", "CPU"]); self.backend_combo.setCurrentIndex(0)
 		pl.addWidget(self.backend_combo, 3, 1)
 		self.debug_cb = CheckBox("调试日志"); pl.addWidget(self.debug_cb, 3, 2, 1, 2)
+		pl.addWidget(BodyLabel("OCR 模型"), 4, 0)
+		self.model_combo = ComboBox()
+		self.model_combo.addItems(["v6_tiny", "v6_small"])
+		self.model_combo.setCurrentIndex(1)  # default: small
+		self.model_combo.setFixedWidth(120)
+		pl.addWidget(self.model_combo, 4, 1)
 		ll.addWidget(perf_card)
 
 		# 纠错模式 Card
@@ -714,7 +720,7 @@ class RaceVideoToLogApp(QMainWindow):
 		_reset_backend()
 		keys = ["auto", "cuda", "cpu"]; key = keys[self.backend_combo.currentIndex()]
 		_select_backend(key)
-		kw = _get_model_kwargs("v6_small")
+		kw = _get_model_kwargs(self.model_combo.currentText())
 		return RapidOCR(**(kw or {}))
 
 	def _release_engines(self) -> None:
@@ -773,6 +779,10 @@ class RaceVideoToLogApp(QMainWindow):
 			be = settings["backend"].lower()
 			idx = {"auto": 0, "cuda": 1, "cpu": 2}.get(be, 0)
 			self.backend_combo.setCurrentIndex(idx)
+		if "model" in settings:
+			model = settings["model"]
+			idx = {"v6_tiny": 0, "v6_small": 1}.get(model, 1)
+			self.model_combo.setCurrentIndex(idx)
 		if "format" in settings:
 			fmt = settings["format"].lower()
 			for rb, key in [(self._fmt_ms, "m/s"), (self._fmt_kmh, "km/h"),
