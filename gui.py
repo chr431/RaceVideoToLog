@@ -4,9 +4,7 @@
 """
 from __future__ import annotations
 
-import csv
 from pathlib import Path
-import traceback
 
 import cv2
 import numpy as np
@@ -22,9 +20,8 @@ from PySide6.QtGui import (
 	QPixmap, QImage, QPainter, QPen, QColor, QKeySequence, QShortcut,
 )
 
-import ocr_engine as _oe
 from ocr_engine import (
-    RapidOCR, VideoMetadata, SpeedObservation,
+    RapidOCR, VideoMetadata,
     codec_from_fourcc, format_duration,
     _reset_backend, _select_backend, _get_model_kwargs,
     _CancelExport,
@@ -39,7 +36,10 @@ from qfluentwidgets import (setTheme, Theme, isDarkTheme,
 
 
 class _ExportThread(QThread):
-	"""Run OCR/correction pipeline on a native thread to avoid QThread slowdown."""
+	"""后台导出线程：在原生线程中运行 Pipeline，通过信号与 GUI 通信。
+
+	避免 QThread 导致的 CUDA ONNX 推理性能损失（~4.6x）。
+	"""
 
 	_progress = Signal(str, float)
 	_finished = Signal(str)
@@ -87,7 +87,8 @@ class _ExportThread(QThread):
 					pad=self._pad_px,
 					buffer_size=self._buffer_size,
 					backend=self._backend,
-					ocr_model="v6_small",
+					ocr_model=self.app.model_combo.currentText(),
+					reocr_model=self.app._reocr_model(),
 					speed_format=self.app.speed_format,
 					frame_start=self.app.frame_start_edit.text(),
 					frame_end=self.app.frame_end_edit.text(),
@@ -340,6 +341,18 @@ class RaceVideoToLogApp(QMainWindow):
 		self.backend_combo.addItems(["自动", "CUDA", "CPU"]); self.backend_combo.setCurrentIndex(0)
 		pl.addWidget(self.backend_combo, 3, 1)
 		self.debug_cb = CheckBox("调试日志"); pl.addWidget(self.debug_cb, 3, 2, 1, 2)
+		pl.addWidget(BodyLabel("OCR 模型"), 4, 0)
+		self.model_combo = ComboBox()
+		self.model_combo.addItems(["v6_tiny", "v6_small"])
+		self.model_combo.setCurrentIndex(0)  # default: tiny
+		self.model_combo.setFixedWidth(95)
+		pl.addWidget(self.model_combo, 4, 1)
+		pl.addWidget(BodyLabel("重OCR"), 4, 2)
+		self.reocr_model_combo = ComboBox()
+		self.reocr_model_combo.addItems(["同主模型", "v6_tiny", "v6_small"])
+		self.reocr_model_combo.setCurrentIndex(2)  # default: v6_small
+		self.reocr_model_combo.setFixedWidth(120)
+		pl.addWidget(self.reocr_model_combo, 4, 3)
 		ll.addWidget(perf_card)
 
 		# 纠错模式 Card
@@ -707,11 +720,16 @@ class RaceVideoToLogApp(QMainWindow):
 		if self.ocr_engine is None: self.ocr_engine = self._create_ocr()
 		return self.ocr_engine
 
+	def _reocr_model(self) -> str | None:
+		"""解析重 OCR 模型选择：'同主模型' → None，否则返回模型名。"""
+		text = self.reocr_model_combo.currentText()
+		return None if text == "同主模型" else text
+
 	def _create_ocr(self) -> "RapidOCR":
 		_reset_backend()
 		keys = ["auto", "cuda", "cpu"]; key = keys[self.backend_combo.currentIndex()]
 		_select_backend(key)
-		kw = _get_model_kwargs("v6_small")
+		kw = _get_model_kwargs(self.model_combo.currentText())
 		return RapidOCR(**(kw or {}))
 
 	def _release_engines(self) -> None:
@@ -770,6 +788,14 @@ class RaceVideoToLogApp(QMainWindow):
 			be = settings["backend"].lower()
 			idx = {"auto": 0, "cuda": 1, "cpu": 2}.get(be, 0)
 			self.backend_combo.setCurrentIndex(idx)
+		if "model" in settings:
+			model = settings["model"]
+			idx = {"v6_tiny": 0, "v6_small": 1}.get(model, 1)
+			self.model_combo.setCurrentIndex(idx)
+		if "reocr_model" in settings:
+			rmodel = settings["reocr_model"]
+			idx = {"v6_tiny": 1, "v6_small": 2}.get(rmodel, 0)
+			self.reocr_model_combo.setCurrentIndex(idx)
 		if "format" in settings:
 			fmt = settings["format"].lower()
 			for rb, key in [(self._fmt_ms, "m/s"), (self._fmt_kmh, "km/h"),
@@ -863,41 +889,45 @@ class RaceVideoToLogApp(QMainWindow):
 
 	def _continue_with_manual_anchors(self, corrections: dict[int, float],
 	                                   partial_corrections: dict[int, str] | None = None) -> None:
+		"""非阻塞执行 pass2：使用 QThread 避免 GUI 冻结。"""
 		pipeline = getattr(self, "_pipeline", None)
 		if pipeline is None:
 			self._status_label.setText("错误: 处理状态丢失"); return
-		import threading
-		done = threading.Event()
-		error_container: list[Exception] = []
 
-		def _worker() -> None:
-			try:
-				assert self.video_path is not None
-				out_path = getattr(self, "_review_output_path",
-					self.video_path.parent / f"{self.video_path.stem}_log.csv")
-				pipeline.run_review_pass2(
-					corrections=corrections,
-					confirmed_segments=getattr(self, "_review_confirmed", set()),
-					output_path=out_path,
-					partial_corrections=partial_corrections or None,
-				)
-			except Exception as exc:
-				import traceback; traceback.print_exc()
-				error_container.append(exc)
-			finally:
-				done.set()
+		self._export_btn.setEnabled(False)
+		self._status_label.setText("正在应用审核修正...")
+		self._progress_bar.setValue(0)
 
-		t = threading.Thread(target=_worker)
-		t.start()
-		done.wait()
-		t.join()
+		app = self  # 捕获 RaceVideoToLogApp 引用
+		out_path = getattr(app, "_review_output_path",
+			app.video_path.parent / f"{app.video_path.stem}_log.csv")
+		confirmed = getattr(app, "_review_confirmed", set())
 
-		if error_container:
-			self._progress_bar.setValue(0)
-			self._status_label.setText(f"审核失败: {error_container[0]}")
-		else:
-			self._progress_bar.setValue(100)
-			self._status_label.setText(f"人工审核完成 — {len(corrections)} 帧已修正，结果已保存。")
+		class _Pass2Thread(QThread):
+			_finished = Signal(bool, str)
+
+			def run(self):
+				try:
+					pipeline.run_review_pass2(
+						corrections=corrections,
+						confirmed_segments=confirmed,
+						output_path=out_path,
+						partial_corrections=partial_corrections or None,
+					)
+					self._finished.emit(True,
+						f"人工审核完成 — {len(corrections)} 帧已修正，结果已保存。")
+				except Exception as exc:
+					import traceback; traceback.print_exc()
+					self._finished.emit(False, f"审核失败: {exc}")
+		self._pass2_thread = _Pass2Thread(self)
+		self._pass2_thread._finished.connect(self._on_pass2_done)
+		self._pass2_thread.start()
+
+	def _on_pass2_done(self, success: bool, message: str) -> None:
+		self._export_btn.setEnabled(True)
+		self._progress_bar.setValue(100 if success else 0)
+		self._status_label.setText(message)
+		self._pass2_thread = None
 
 	def _finish_export(self) -> None:
 		self._export_btn.setEnabled(True); self._cancel_btn.setEnabled(False)

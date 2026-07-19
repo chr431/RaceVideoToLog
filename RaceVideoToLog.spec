@@ -57,8 +57,7 @@ _EXCLUDE_FILES = {
     # v3 legacy
     'ch_PP-OCRv3_det_infer.onnx', 'ch_PP-OCRv3_rec_infer.onnx',
     'ch_ppocr_mobile_v2.0_cls_infer.onnx',
-    # v6 extras (only small needed)
-    'PP-OCRv6_det_tiny.onnx', 'PP-OCRv6_rec_tiny.onnx',
+    # v6 extras (medium unused, tiny+small user-selectable)
     'PP-OCRv6_det_medium.onnx', 'PP-OCRv6_rec_medium.onnx',
     # Unused ONNX providers
     'DirectML.dll', 'onnxruntime_providers_tensorrt.dll',

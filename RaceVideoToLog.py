@@ -25,7 +25,10 @@ def main() -> None:
 	parser.add_argument("--pad", type=int, default=0)
 	parser.add_argument("--buffer", type=int, default=8)
 	parser.add_argument("--backend", choices=["auto","cuda","cpu"], default="auto")
-	parser.add_argument("--ocr-model", choices=["v6_small"], default="v6_small")
+	parser.add_argument("--ocr-model", choices=["v6_tiny", "v6_small"], default="v6_tiny",
+		help="主 OCR 模型 (默认 tiny)")
+	parser.add_argument("--reocr-model", choices=["v6_tiny", "v6_small"], default="v6_small",
+		help="重 OCR 模型 (默认 small，推荐 tiny+small 组合)")
 	parser.add_argument("-o", "--output", type=str)
 	parser.add_argument("--analysis", nargs=2, metavar=("CSV1","CSV2"))
 	parser.add_argument("--analysis-out", type=str)
@@ -50,6 +53,8 @@ def main() -> None:
 				"max_accel": "max_accel", "div": "div", "target_h": "target_h",
 				"pad": "pad", "backend": "backend", "buffer": "buffer",
 				"frame_start": "frame_start", "frame_end": "frame_end",
+				"model": "ocr_model",
+				"reocr_model": "reocr_model",
 			}.get(key)
 			if _dest is None:
 				continue
