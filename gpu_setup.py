@@ -27,8 +27,9 @@ _BACKEND_PROVIDER_MAP: dict[str, tuple[str, dict]] = {
 	"CUDA": ("CUDAExecutionProvider", {
 		"device_id": 0,
 		"arena_extend_strategy": "kNextPowerOfTwo",
-		"cudnn_conv_algo_search": "EXHAUSTIVE",
+		"cudnn_conv_algo_search": "HEURISTIC",         # 固定模型用 HEURISTIC（更快初始化）
 		"do_copy_in_default_stream": True,
+		"cudnn_conv_use_max_workspace": "1",            # 允许 cuDNN 使用更多显存换速度
 	}),
 	"CPU": ("CPUExecutionProvider", {"arena_extend_strategy": "kSameAsRequested"}),
 }
@@ -212,11 +213,14 @@ def select_backend(preferred: str = "auto") -> str:
 	def _patched_init(self, config):  # type: ignore[no-untyped-def]
 		from onnxruntime import (
 			SessionOptions, InferenceSession, GraphOptimizationLevel,
+			ExecutionMode,
 		)
 		sess_opt = SessionOptions()
 		sess_opt.log_severity_level = 4
 		sess_opt.enable_cpu_mem_arena = False
 		sess_opt.graph_optimization_level = GraphOptimizationLevel.ORT_ENABLE_ALL
+		sess_opt.execution_mode = ExecutionMode.ORT_PARALLEL
+		sess_opt.enable_mem_pattern = True
 
 		EP_list: list = [(ep_name, ep_opts)] if ep_name != cpu_ep_name else []
 		EP_list.append((cpu_ep_name, cpu_opts))
