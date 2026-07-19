@@ -335,11 +335,73 @@ def _detect_local_trend(i: int, v: float, n: int, raw_vals: list[float],
 	return left_ok and right_ok
 
 
+def _detect_stuck_value(i: int, v: float, n: int, raw_vals: list[float]) -> bool:
+	"""E. 卡值：连续 ≥3 帧完全相同，但上下文显示速度在变化（OCR 重复输出同一错误值）。"""
+	if i < 2 or i + 2 >= n:
+		return False
+	# 计算连续相同值的长度
+	run_start = i
+	while run_start > 0 and raw_vals[run_start - 1] == v:
+		run_start -= 1
+	run_end = i
+	while run_end + 1 < n and raw_vals[run_end + 1] == v:
+		run_end += 1
+	if run_end - run_start + 1 < 3:
+		return False
+	# 检查跑段外的上下文是否在变化
+	pre_val = None
+	for j in range(run_start - 1, -1, -1):
+		if raw_vals[j] > 0 and raw_vals[j] != v:
+			pre_val = raw_vals[j]; break
+	post_val = None
+	for j in range(run_end + 1, n):
+		if raw_vals[j] > 0 and raw_vals[j] != v:
+			post_val = raw_vals[j]; break
+	if pre_val is None or post_val is None:
+		return False
+	return abs(post_val - pre_val) > 5.0
+
+
+def _detect_brief_excursion(i: int, v: float, n: int, raw_vals: list[float],
+                             max_speed_kmh: float) -> bool:
+	"""F. 短暂偏离：偏离 5 帧中位数 ≥5 km/h，且 ±3 帧内有帧贴近中位数。
+
+	捕获"下探又弹回"模式（如 219→212→219），这类偏离虽在物理容限内，
+	但表现为孤立瞬变，通常是 OCR 误读而非真实速度变化。
+	"""
+	if i < 2 or i + 2 >= n:
+		return False
+	# 5 帧中位数（排除自身）
+	window = []
+	for j in range(max(0, i - 2), min(n, i + 3)):
+		if j != i and raw_vals[j] > 0 and raw_vals[j] <= max_speed_kmh:
+			window.append(raw_vals[j])
+	if len(window) < 3:
+		return False
+	window.sort()
+	median = window[len(window) // 2]
+	if abs(v - median) < 5.0:
+		return False
+	# 前一方向：有帧贴近中位数
+	pre_ok = False
+	for j in range(i - 1, max(0, i - 4), -1):
+		if raw_vals[j] > 0 and abs(raw_vals[j] - median) < 3.0:
+			pre_ok = True; break
+	# 后一方向：有帧贴近中位数
+	post_ok = False
+	for j in range(i + 1, min(n, i + 4)):
+		if raw_vals[j] > 0 and abs(raw_vals[j] - median) < 3.0:
+			post_ok = True; break
+	return pre_ok and post_ok
+
+
 def _detect_errors(rows: list, anchors: set, times: list,
                    max_speed_kmh: float, max_accel_mps2: float) -> set:
-	"""阶段 1：错误检测。6 种独立检测器并行标记异常帧。
+	"""阶段 1：错误检测。8 种独立检测器投票制标记异常帧。
 
-	A. 邻帧跳变  A2. V 字形  A3. 悬崖
+	≥2 票 → 确定错误，1 票 + 锚点稀疏 → 错误，0 票 → 可信。
+
+	A. 邻帧跳变  A2. V 字形  A3. 悬崖  E. 卡值  F. 短暂偏离
 	B. 锚点趋势偏离  C. 孤立离群  D. 局部趋势偏离
 	"""
 	n = len(rows)
@@ -354,20 +416,43 @@ def _detect_errors(rows: list, anchors: set, times: list,
 			error_set.add(i)
 			continue
 
+		# 收集所有检测器投票
+		votes = 0
 		if _detect_neighbor_jump(i, v, n, raw_vals, times, max_speed_kmh, max_accel_mps2):
-			error_set.add(i); continue
+			votes += 1
 		if _detect_v_shape(i, v, n, raw_vals, times, max_accel_mps2):
-			error_set.add(i); continue
+			votes += 1
 		if _detect_cliff(i, v, n, raw_vals, times, max_accel_mps2):
-			error_set.add(i); continue
+			votes += 1
 		if _detect_anchor_trend(i, v, n, rows, times, anchors, max_accel_mps2):
-			error_set.add(i); continue
+			votes += 1
 		if _detect_isolated_spike(i, v, n, raw_vals, times, max_accel_mps2):
-			error_set.add(i); continue
+			votes += 1
 		if _detect_local_trend(i, v, n, raw_vals, max_speed_kmh):
-			error_set.add(i); continue
+			votes += 1
+		if _detect_stuck_value(i, v, n, raw_vals):
+			votes += 1
+		if _detect_brief_excursion(i, v, n, raw_vals, max_speed_kmh):
+			votes += 1
+
+		if votes >= 2:
+			error_set.add(i)
+		elif votes == 1:
+			# 单票需额外条件：锚点稀疏区域（距离最近锚点 > 30 帧）
+			la, ra = _find_neighbor_anchors(i, n, anchors)
+			gap = 999
+			if la is not None and ra is not None:
+				gap = ra - la
+			elif la is not None:
+				gap = n - la
+			elif ra is not None:
+				gap = ra
+			if gap > 30:
+				error_set.add(i)
 
 	return error_set
+
+
 def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR", error_set: set,
 				anchors: set, times: list, max_speed_kmh: float, max_accel_mps2: float,
 				progress_fn: "Callable | None" = None,
@@ -435,7 +520,7 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
 						best_score = score
 						best_val = cand
 
-				if best_val is not None and abs(rows[i][2] - best_val) > 0.5:
+				if best_val is not None and best_score > 0.3 and abs(rows[i][2] - best_val) > 0.5:
 					rows[i][2] = best_val
 					if rows[i][3] == Flag.RAW:
 						rows[i][3] = Flag.PARTIAL_AUTO if has_partial else Flag.REOCR_AUTO
@@ -449,7 +534,7 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
 
 def _re_ocr_frame(crop_bgr: "np.ndarray", ocr: "RapidOCR", max_speed_kmh: float,
 				  timing: dict | None = None, cache: dict | None = None) -> set:
-	"""阶段 2：对单帧尝试标准预处理重 OCR，有缓存。
+	"""阶段 2：对单帧尝试 h=32 重 OCR（与主 OCR h=24 不同高度以产生不同结果），有缓存。
 
 	Args:
 	    cache: 可选的外部缓存字典（帧索引 → 候选值集合）。
@@ -474,16 +559,13 @@ def _re_ocr_frame(crop_bgr: "np.ndarray", ocr: "RapidOCR", max_speed_kmh: float,
 	if h <= 0 or w <= 0:
 		return candidates
 
-	def _do_ocr(img_bgr: "np.ndarray") -> None:
-		res, _ = ocr(img_bgr)
-		sv, rt = extract_speed_value(res)
-		if sv is not None and sv <= max_speed_kmh:
-			candidates.add(float(sv))
-
-	# 变体 1: 标准灰度 (h=24)
-	scale = 24.0 / h if h > 0 else 1.0
-	proc = cv2.resize(gray, (max(1, int(w * scale)), 24))
-	_do_ocr(cv2.cvtColor(proc, cv2.COLOR_GRAY2BGR))
+	# 变体 1: 灰度 h=32（与主 OCR h=24 不同，约 12% 概率产生不同结果）
+	scale = 32.0 / h if h > 0 else 1.0
+	proc = cv2.resize(gray, (max(1, int(w * scale)), 32))
+	res, _ = ocr(cv2.cvtColor(proc, cv2.COLOR_GRAY2BGR))
+	sv, rt = extract_speed_value(res)
+	if sv is not None and sv <= max_speed_kmh:
+		candidates.add(float(sv))
 
 	if cache_key is not None:
 		cache[cache_key] = candidates
@@ -506,10 +588,11 @@ def _interp_candidate(i: int, rows: list, anchors: set, times: list, max_speed_k
 
 
 def _score_candidate(val: float, i: int, rows: list, anchors: set, error_set: set, times: list, max_speed_kmh: float, max_accel_mps2: float) -> float:
-	"""阶段 3：对候选值评分。
+	"""阶段 3：对候选值评分。权重根据到最近锚点的距离动态调整。
 
-	score = neighbor_score * 0.4 + anchor_score * 0.35 + smoothness_score * 0.25
+	锚点密集区（<10 帧）→ 锚点权重主导（0.5）；锚点稀疏区（>50 帧）→ 邻居和平滑权重上升。
 	"""
+	import math
 	n = len(rows)
 
 	# 1. neighbor_score
@@ -535,12 +618,19 @@ def _score_candidate(val: float, i: int, rows: list, anchors: set, error_set: se
 		break
 	neighbor_score = neighbor_score / max(count, 1)
 
-	# 2. anchor_score
+	# 2. anchor_score — 阈值按到最近锚点的时间缩放
 	anchor_score = 0.0
 	interp = _interp_candidate(i, rows, anchors, times, max_speed_kmh)
 	if interp is not None:
 		dev = abs(val - interp)
-		threshold = max(5.0, max_accel_mps2 * MPS_TO_KMH)
+		# 时间缩放阈值：1 帧 (0.017s) 处 ~13 km/h，而非固定 252 km/h
+		la2, ra2 = _find_neighbor_anchors(i, n, anchors)
+		time_to_anchor = 999.0
+		if la2 is not None:
+			time_to_anchor = min(time_to_anchor, times[i] - times[la2])
+		if ra2 is not None:
+			time_to_anchor = min(time_to_anchor, times[ra2] - times[i])
+		threshold = max(5.0, max_accel_mps2 * max(time_to_anchor, 0.05) * MPS_TO_KMH * 3.0)
 		anchor_score = max(0.0, 1.0 - dev / threshold)
 
 	# 3. smoothness_score
@@ -559,7 +649,20 @@ def _score_candidate(val: float, i: int, rows: list, anchors: set, error_set: se
 			dev2 = abs(val - expected)
 			smoothness_score = max(0.0, 1.0 - dev2 / max(10.0, max_accel_mps2 * 1.8 * MPS_TO_KMH))
 
-	return neighbor_score * 0.4 + anchor_score * 0.35 + smoothness_score * 0.25
+	# ── 动态权重：锚点权重随距离衰减 ──
+	la, ra = _find_neighbor_anchors(i, n, anchors)
+	dist_to_anchor = n  # default large
+	if la is not None:
+		dist_to_anchor = min(dist_to_anchor, i - la)
+	if ra is not None:
+		dist_to_anchor = min(dist_to_anchor, ra - i)
+	# 锚点权重从 0.5 (dist=0) 衰减到 0.1 (dist→∞)，衰减常数 ~20 帧
+	w_anchor = 0.1 + 0.4 * math.exp(-dist_to_anchor / 20.0)
+	w_remaining = 1.0 - w_anchor
+	w_neighbor = w_remaining * 0.55
+	w_smoothness = w_remaining * 0.45
+
+	return neighbor_score * w_neighbor + anchor_score * w_anchor + smoothness_score * w_smoothness
 
 
 def _fill_unrecoverable(rows: list, anchors: set, error_set: set, times: list, max_speed_kmh: float, max_accel_mps2: float,

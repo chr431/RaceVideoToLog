@@ -51,6 +51,7 @@ def run_headless(args: argparse.Namespace) -> None:
 		buffer_size=args.buffer,
 		backend=args.backend,
 		ocr_model=args.ocr_model,
+		reocr_model=getattr(args, 'reocr_model', None),
 		speed_format=args.format,
 		frame_start=str(args.frame_start or ""),
 		frame_end=str(args.frame_end or ""),

@@ -385,7 +385,7 @@ class ProcessingPipeline:
 		n_corrected = sum(1 for row in rows if Flag.is_corrected(row[3]))
 		timing_str = ", ".join(f"{k}={v:.1f}s" for k, v in self._timing.items())
 		with output_path.open("w", newline="", encoding="utf-8-sig") as fh:
-			fh.write("# RaceVideoToLog v2.2.0\n")
+			fh.write("# RaceVideoToLog v2.3.0\n")
 			fh.write(f"# video_hash={vhash}, video={self._video_path.name}\n")
 			fh.write(f"# roi={r[0]},{r[1]},{r[2]},{r[3]}, format={self._speed_format}"
 					 f", frame_start={self._frame_start or ''}"
@@ -393,7 +393,9 @@ class ProcessingPipeline:
 			fh.write(f"# max_speed={self._max_speed}, max_accel={self._max_accel}"
 					 f", div={self._frame_div}, target_h={self._target_h}"
 					 f", pad={self._pad}, buffer={self._buffer_size}\n")
-			fh.write(f"# backend={self._backend_actual}, model={self._ocr_model}\n")
+			fh.write(f"# backend={self._backend_actual}, model={self._ocr_model}")
+			reocr_info = f", reocr_model={self._reocr_model}" if self._reocr_model and self._reocr_model != self._ocr_model else ""
+			fh.write(f"{reocr_info}\n")
 			if tag:
 				fh.write(f"# {tag}=1\n")
 			fh.write(f"# stats: total={n_total}, anchors={n_anchors},"

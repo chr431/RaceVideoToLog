@@ -91,6 +91,7 @@ class _ExportThread(QThread):
 					buffer_size=self._buffer_size,
 					backend=self._backend,
 					ocr_model=self.app.model_combo.currentText(),
+					reocr_model=self.app._reocr_model(),
 					speed_format=self.app.speed_format,
 					frame_start=self.app.frame_start_edit.text(),
 					frame_end=self.app.frame_end_edit.text(),
@@ -346,9 +347,15 @@ class RaceVideoToLogApp(QMainWindow):
 		pl.addWidget(BodyLabel("OCR 模型"), 4, 0)
 		self.model_combo = ComboBox()
 		self.model_combo.addItems(["v6_tiny", "v6_small"])
-		self.model_combo.setCurrentIndex(1)  # default: small
-		self.model_combo.setFixedWidth(120)
+		self.model_combo.setCurrentIndex(0)  # default: tiny
+		self.model_combo.setFixedWidth(95)
 		pl.addWidget(self.model_combo, 4, 1)
+		pl.addWidget(BodyLabel("重OCR"), 4, 2)
+		self.reocr_model_combo = ComboBox()
+		self.reocr_model_combo.addItems(["同主模型", "v6_tiny", "v6_small"])
+		self.reocr_model_combo.setCurrentIndex(2)  # default: v6_small
+		self.reocr_model_combo.setFixedWidth(120)
+		pl.addWidget(self.reocr_model_combo, 4, 3)
 		ll.addWidget(perf_card)
 
 		# 纠错模式 Card
@@ -716,6 +723,11 @@ class RaceVideoToLogApp(QMainWindow):
 		if self.ocr_engine is None: self.ocr_engine = self._create_ocr()
 		return self.ocr_engine
 
+	def _reocr_model(self) -> str | None:
+		"""解析重 OCR 模型选择：'同主模型' → None，否则返回模型名。"""
+		text = self.reocr_model_combo.currentText()
+		return None if text == "同主模型" else text
+
 	def _create_ocr(self) -> "RapidOCR":
 		_reset_backend()
 		keys = ["auto", "cuda", "cpu"]; key = keys[self.backend_combo.currentIndex()]
@@ -783,6 +795,10 @@ class RaceVideoToLogApp(QMainWindow):
 			model = settings["model"]
 			idx = {"v6_tiny": 0, "v6_small": 1}.get(model, 1)
 			self.model_combo.setCurrentIndex(idx)
+		if "reocr_model" in settings:
+			rmodel = settings["reocr_model"]
+			idx = {"v6_tiny": 1, "v6_small": 2}.get(rmodel, 0)
+			self.reocr_model_combo.setCurrentIndex(idx)
 		if "format" in settings:
 			fmt = settings["format"].lower()
 			for rb, key in [(self._fmt_ms, "m/s"), (self._fmt_kmh, "km/h"),

@@ -45,10 +45,10 @@ __all__ = [
 	"build_speed_candidates",
 	"normalize_ocr_text", "format_duration", "codec_from_fourcc",
 	"safe_int", "safe_float", "SOURCE_TO_KMH", "OCR_NUMBER_RE",
-	"ocr_digital_fallback", "compute_video_hash", "auto_select_anchors",
+	"compute_video_hash", "auto_select_anchors",
 	"_reset_backend", "_select_backend", "_get_model_kwargs",
-	"_gpu_backend", "_gpu_patched", "_CancelExport",
-	"_parse_int_or_none", "parse_csv_header", "_estimate_raw_trust", "_savgol_filter_np",
+	"_CancelExport",
+	"_parse_int_or_none", "parse_csv_header", "_savgol_filter_np",
 	"_set_rec_keys_path", "Flag", "logger",
 ]
 
@@ -81,15 +81,6 @@ class Flag:
 
 # ═══════════════════ GPU 加速：由 gpu_setup.py 延迟初始化 ═══════════════════
 from gpu_setup import select_backend as _select_backend, reset_backend as _reset_backend
-
-# 兼容性：pipeline.py 通过 _oe._gpu_backend 读取后端名
-# select_backend() 会通过 config._gpu_backend 同步此值
-def _sync_gpu_backend() -> str:
-	import config
-	return config._gpu_backend
-
-_gpu_backend: str = "CPU"
-_gpu_patched: bool = False
 
 from rapidocr_onnxruntime import RapidOCR
 # ═══════════════════════════════════════════════════════════
@@ -245,56 +236,6 @@ def extract_speed_value(ocr_result: list | None) -> tuple[float | None, str | No
 		return None, None
 
 
-def ocr_digital_fallback(
-	ocr: "RapidOCR", crop_bgr: "np.ndarray", max_speed_kmh: float = 400
-) -> tuple[float | None, str | None]:
-	"""数字仪表 OCR 后备链：CLAHE+OTSU → 常规检测 → 无检测模式。
-
-	用于 PP-OCR 标准预处理未命中时的后备策略（如赛车 HUD 仪表字体）。
-	返回 (speed_value, raw_text) 或 (None, None)。
-	"""
-	gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
-
-	# ── 策略1: CLAHE + OTSU + 常规检测 ──
-	clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-	enhanced = clahe.apply(gray)
-	_, enhanced = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-	h, w = enhanced.shape[:2]
-	for th in (28, 32, 48):
-		scale = th / h
-		resized = cv2.resize(enhanced, (max(1, int(w * scale)), th))
-		bgr_input = cv2.cvtColor(resized, cv2.COLOR_GRAY2BGR)
-		try:
-			result, _ = ocr(bgr_input)
-			sv, rt = extract_speed_value(result)
-			if sv is not None and sv <= max_speed_kmh:
-				return sv, rt
-		except Exception:
-			pass
-
-	# ── 策略2: use_det=False（跳过检测，多预处理变体）──
-	variants = [
-		("clahe_otsu", enhanced),
-		("inv", cv2.bitwise_not(gray)),
-		("otsu", cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]),
-		("otsu_inv", cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]),
-	]
-	for _label, img in variants:
-		for th in (32, 48):
-			scale = th / h
-			resized = cv2.resize(img, (max(1, int(w * scale)), th))
-			bgr_input = cv2.cvtColor(resized, cv2.COLOR_GRAY2BGR)
-			try:
-				result, _ = ocr(bgr_input, use_det=False)
-				sv, rt = extract_speed_value(result)
-				if sv is not None and sv <= max_speed_kmh:
-					return sv, rt
-			except Exception:
-				pass
-
-	return None, None
-
-
 def convert_speed_to_kmh(speed_value: float, source_unit: str) -> float:
 	return float(speed_value) * SOURCE_TO_KMH[source_unit]
 
@@ -408,31 +349,6 @@ def build_speed_candidates(raw_text: str, max_speed_kmh: float) -> list[float]:
 				pass
 
 	return sorted(candidates)
-
-
-def _estimate_raw_trust(samples: list[SpeedObservation], window: int = 3) -> list[float]:
-	"""评估每个采样点的原始 OCR 值可信度 (0~1)。
-
-	若某帧值与前后邻帧的原始值接近（在 5 km/h 内），则认为可信。
-	连续多帧一致时可信度更高。
-	"""
-	n = len(samples)
-	scores: list[float] = [0.5] * n
-	if n < 2:
-		return scores
-
-	for i in range(n):
-		agree = 0
-		total = 0
-		ref = samples[i].raw_speed_kmh
-		for j in range(max(0, i - window), min(n, i + window + 1)):
-			if i == j:
-				continue
-			total += 1
-			if abs(samples[j].raw_speed_kmh - ref) <= 5.0:
-				agree += 1
-		scores[i] = agree / max(total, 1)
-	return scores
 
 
 def _get_model_kwargs(variant: str, models_dir: str | None = None) -> dict | None:
@@ -563,32 +479,82 @@ def _anchor_validate_neighbors(anchors: set[int], raw_vals: list[float],
 	return filtered
 
 
-def _anchor_validate_accel(anchors: set[int], raw_vals: list[float],
-                            times: list[float], n: int,
-                            max_accel_mps2: float) -> set[int]:
-	"""Acceleration validation: remove anchors with unrealistic accel."""
-	max_dv_per_sec = max_accel_mps2 * MPS_TO_KMH * 2.0
+def _anchor_wide_window(anchors: set[int], raw_vals: list[float],
+                          n: int, max_dev: float = 20.0) -> set[int]:
+	"""宽窗口一致性：剔除偏离 ±30 帧邻域中位数超过 max_dev 的锚点。
+
+	解决局部验证无法检测的"多步渐进漂移"——每步变化都在容限内，
+	但累计偏移物理不可能（例如 216→117 在 0.12s 内的 99 km/h 变化）。
+	"""
+	if len(anchors) <= 5:
+		return anchors
+	WINDOW = 30
 	validated: set[int] = set()
 	for i in anchors:
 		v = raw_vals[i]
-		left_fail = right_fail = False
-		# Left
-		for j in range(i - 1, -1, -1):
-			if raw_vals[j] > 0 and abs(raw_vals[j] - v) > 2.0:
-				dt = times[i] - times[j]
-				if abs(v - raw_vals[j]) / max(dt, 0.001) > max_dv_per_sec:
-					left_fail = True
-				break
-		# Right
-		for j in range(i + 1, n):
-			if raw_vals[j] > 0 and abs(raw_vals[j] - v) > 2.0:
-				dt = times[j] - times[i]
-				if abs(raw_vals[j] - v) / max(dt, 0.001) > max_dv_per_sec:
-					right_fail = True
-				break
-		if not (left_fail or right_fail):
+		# 收集 ±WINDOW 内所有有效值（排除自身和紧邻 ±5 帧以检查更广趋势）
+		context = []
+		for j in range(max(0, i - WINDOW), min(n, i + WINDOW + 1)):
+			if abs(j - i) > 5 and raw_vals[j] > 0:
+				context.append(raw_vals[j])
+		if len(context) < 10:
+			validated.add(i)  # 上下文不足则保留
+			continue
+		context.sort()
+		median = context[len(context) // 2]
+		if abs(v - median) <= max_dev:
 			validated.add(i)
 	return validated
+
+
+def _anchor_graph_consistency(anchors: set[int], raw_vals: list[float],
+                               times: list[float], n: int,
+                               max_accel_mps2: float) -> set[int]:
+	"""图连通性验证：仅保留可在物理约束下互相到达的最大锚点集合。
+
+	将候选锚点建为图节点，若两锚点间加速度不超限则连边。
+	保留最大连通分量，自动剔除与多数锚点物理矛盾的孤立异常点。
+	"""
+	if len(anchors) <= 2:
+		return anchors
+	sorted_anchors = sorted(anchors)
+	max_dv_per_sec = max_accel_mps2 * MPS_TO_KMH * 2.0
+
+	# 建邻接表（仅连相邻锚点以减少 O(N²)，连通性传递保证全局一致）
+	adj: dict[int, list[int]] = {a: [] for a in sorted_anchors}
+	for k in range(len(sorted_anchors) - 1):
+		i = sorted_anchors[k]
+		for j in sorted_anchors[k + 1:]:
+			dt = times[j] - times[i]
+			if dt <= 0:
+				continue
+			dv = abs(raw_vals[j] - raw_vals[i])
+			if dv / dt <= max_dv_per_sec:
+				adj[i].append(j)
+				adj[j].append(i)
+			# 若间距过大（>5s），不再连更远的（物理相关性弱）
+			if dt > 5.0:
+				break
+
+	# DFS 找最大连通分量
+	visited: set[int] = set()
+	largest: set[int] = set()
+	for a in sorted_anchors:
+		if a in visited:
+			continue
+		stack = [a]
+		comp: set[int] = set()
+		while stack:
+			node = stack.pop()
+			if node in comp:
+				continue
+			comp.add(node)
+			visited.add(node)
+			stack.extend(nb for nb in adj[node] if nb not in comp)
+		if len(comp) > len(largest):
+			largest = comp
+
+	return largest
 
 
 def auto_select_anchors(observations: list["SpeedObservation"],
@@ -597,7 +563,7 @@ def auto_select_anchors(observations: list["SpeedObservation"],
                          max_accel_mps2: float = 50.0) -> set[int]:
 	"""Select reliable OCR frames as Correction B anchors.
 
-	4 阶段流水线：自适应窗口 → 中位数筛选 → 邻居验证 → 加速度验证。
+	4 阶段流水线：自适应窗口 → 中位数筛选 → 邻居验证 → 宽窗口去漂移 → 图连通性验证。
 	Returns: trusted frame indices.
 	"""
 	n = len(observations)
@@ -617,8 +583,11 @@ def auto_select_anchors(observations: list["SpeedObservation"],
 	# 阶段 3: 邻居验证
 	anchors = _anchor_validate_neighbors(anchors, raw_vals, n)
 
-	# 阶段 4: 加速度验证
-	anchors = _anchor_validate_accel(anchors, raw_vals, times, n,
+	# 阶段 4: 宽窗口漂移检查（防多步渐进漂移）
+	anchors = _anchor_wide_window(anchors, raw_vals, n, max_dev=20.0)
+
+	# 阶段 5: 图连通性验证
+	anchors = _anchor_graph_consistency(anchors, raw_vals, times, n,
                                      max_accel_mps2)
 
 	return anchors
