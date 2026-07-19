@@ -12,7 +12,6 @@ import cv2
 import numpy as np
 
 from rapidocr_onnxruntime import RapidOCR
-import ocr_engine as _oe
 from ocr_engine import (
 	auto_select_anchors, clamp_region, compute_video_hash,
 	extract_speed_value, SpeedObservation, Flag,

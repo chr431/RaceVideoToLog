@@ -4,9 +4,7 @@
 """
 from __future__ import annotations
 
-import csv
 from pathlib import Path
-import traceback
 
 import cv2
 import numpy as np
@@ -22,9 +20,8 @@ from PySide6.QtGui import (
 	QPixmap, QImage, QPainter, QPen, QColor, QKeySequence, QShortcut,
 )
 
-import ocr_engine as _oe
 from ocr_engine import (
-    RapidOCR, VideoMetadata, SpeedObservation,
+    RapidOCR, VideoMetadata,
     codec_from_fourcc, format_duration,
     _reset_backend, _select_backend, _get_model_kwargs,
     _CancelExport,

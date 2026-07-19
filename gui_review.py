@@ -14,8 +14,7 @@ from qfluentwidgets import (BodyLabel, StrongBodyLabel, CaptionLabel,
 	PrimaryPushButton, PushButton, isDarkTheme)
 from theme_manager import ThemeManager
 from widget_utils import make_static_card, setup_chart_zoom_pan
-from config import (COLOR_BG_DARK, COLOR_BG_LIGHT, COLOR_FG_DARK, COLOR_FG_LIGHT,
-                     COLOR_RED, COLOR_ORANGE, COLOR_GREEN, COLOR_BLUE,
+from config import (COLOR_RED, COLOR_ORANGE, COLOR_GREEN, COLOR_BLUE,
                      COLOR_LIGHT_GRAY, COLOR_LIGHTER_GRAY, chart_colors)
 
 import cv2

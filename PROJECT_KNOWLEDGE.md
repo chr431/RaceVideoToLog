@@ -114,13 +114,13 @@ tests/
 三种策略：原始值 → 后缀扩展 (处理丢位, 如 "60"→60/160/260) → OCR 字符混淆替换 (如 6↔8, 3↔8)。
 
 ### 3. 锚点选择 (`auto_select_anchors`)
-4 阶段：自适应窗口 (覆盖 ~0.3s) → 中位数筛选 (center + boundaries) → 邻居验证 (相邻 ≤10 km/h) → **图连通性验证**
+5 阶段：自适应窗口 (覆盖 ~0.3s) → 中位数筛选 (center + boundaries) → 邻居验证 (相邻 ≤10 km/h) → 宽窗口去漂移 (±30 帧中位数) → **图连通性验证**
 
 图连通性：候选锚点建图，物理可达 (加速度不超限) 者连边，DFS 找最大连通分量。比旧版逐点加速度验证更鲁棒，自动剔除与多数锚点物理矛盾的孤立异常点。
 
 ### 4. 纠错算法 (`correct_with_anchors`, 5 阶段)
 
-1. **投票制错误检测**：7 种检测器全部投票，≥2 票 = 确定错误，1 票 + 锚点稀疏 (>30 帧 gap) = 错误
+1. **投票制错误检测**：8 种检测器全部投票，≥2 票 = 确定错误，1 票 + 锚点稀疏 (>30 帧 gap) = 错误
    - A. 邻帧跳变  A2. V 字形  A3. 悬崖  E. 卡值 (连续 ≥3 帧相同但上下文变化)
    - B. 锚点趋势偏离  C. 孤立离群  D. 局部趋势偏离
 2. **h=32 重 OCR**：与主 OCR h=24 不同高度，约 10% 概率产生不同值
@@ -186,7 +186,7 @@ timestamp,distance,speed_kmh,flag
 python -m pytest tests/ -v    # 37 个单元测试
 ```
 
-覆盖：SG 滤波、expand_partial、Flag 枚举、normalize_ocr_text、safe_int/float、parse_csv_header、build_speed_candidates、find_neighbor_anchors、7 种错误检测器 (独立 + 集成)、锚点选择 (窗口/中心/邻居)、compute_confidence、score_candidate。
+覆盖：SG 滤波、expand_partial、Flag 枚举、normalize_ocr_text、safe_int/float、parse_csv_header、build_speed_candidates、find_neighbor_anchors、8 种错误检测器 (独立 + 集成)、锚点选择 (窗口/中心/邻居)、compute_confidence、score_candidate。
 
 ## 常用命令
 

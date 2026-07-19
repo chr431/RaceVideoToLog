@@ -127,7 +127,8 @@ python RaceVideoToLog.py [video] [options]
   --pad N                    边缘填充 px (默认: 0)
   --buffer N                 缓冲队列大小 (默认: 8)
   --backend {auto,cuda,cpu}  OCR 后端 (默认: auto)
-  --ocr-model {v6_tiny,v6_small}  OCR 模型 (默认: v6_small)
+  --ocr-model {v6_tiny,v6_small}  OCR 模型 (默认: v6_tiny)
+  --reocr-model {v6_tiny,v6_small}  重OCR 模型 (默认: v6_small)
   --from-csv PATH            从 CSV 文件头导入设置
   -o, --output PATH          输出 CSV 路径
   --frame-start N            起始帧号

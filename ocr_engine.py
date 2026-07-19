@@ -6,7 +6,6 @@ model configuration, and supporting utilities.
 from __future__ import annotations
 import logging
 import math
-import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -164,7 +163,6 @@ def parse_csv_header(path: str) -> dict[str, str]:
 	兼容 ", " 和 "," 两种分隔符，正确处理空值、含逗号的值（如 ROI）。
 	Returns: {key: value} dict, e.g. {'roi': '862,945,957,1003', 'max_speed': '400', ...}
 	"""
-	import re
 	_pair = re.compile(r"(\w+)=(.*?)(?=,\s*\w+=|$)")
 	settings: dict[str, str] = {}
 	try:
@@ -563,7 +561,7 @@ def auto_select_anchors(observations: list["SpeedObservation"],
                          max_accel_mps2: float = 50.0) -> set[int]:
 	"""Select reliable OCR frames as Correction B anchors.
 
-	4 阶段流水线：自适应窗口 → 中位数筛选 → 邻居验证 → 宽窗口去漂移 → 图连通性验证。
+	5 阶段流水线：自适应窗口 → 中位数筛选 → 邻居验证 → 宽窗口去漂移 → 图连通性验证。
 	Returns: trusted frame indices.
 	"""
 	n = len(observations)
