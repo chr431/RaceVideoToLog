@@ -1,16 +1,20 @@
 # RaceVideoToLog v2.5.0
 
-从赛车游戏视频中提取速度数据，生成时间-速度-距离 CSV 文件。使用 decord (NVDEC) 硬件加速视频解码 + ONNX Runtime CUDA OCR 推理，支持 PySide6 Fluent Design GUI 和 CLI 两种界面。
+从赛车游戏视频中提取速度数据，生成时间-速度-距离 CSV 文件。使用 decord (NVDEC) 硬件加速视频解码 + TensorRT FP16 OCR 推理，支持 PySide6 Fluent Design GUI 和 CLI 两种界面。
 
 ## 安装
 
 ```bash
-pip install rapidocr onnxruntime-gpu opencv-python-headless numpy matplotlib pyside6 pyside6-fluent-widgets decord
+pip install rapidocr onnxruntime opencv-python-headless numpy matplotlib pyside6 pyside6-fluent-widgets decord
 ```
 
-**GPU 加速**：安装 NVIDIA CUDA Toolkit 12.x + cuDNN 9.x，程序自动检测并预加载。也可纯 CPU 运行（`--backend cpu`）。
+## GPU 加速配置
 
-**注**：`onnxruntime-gpu` 已内置 CPU 推理能力，无需单独安装 `onnxruntime`。
+1. 安装 **CUDA Toolkit 12.x** + **cuDNN 9.x**
+2. （推荐）安装 **TensorRT 10.x**，将 `bin` 和 `lib` 目录加入系统 PATH
+3. 程序启动时自动扫描 PATH，检测到 TensorRT 则启用 TRT FP16 引擎（首次需构建引擎，可能需要几分钟）；未检测到则使用 CPU 推理
+
+也可在 GUI 中手动选择后端（TensorRT / CPU），或 CLI `--backend tensorrt` / `--backend cpu`。
 
 ## 使用方式
 
