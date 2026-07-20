@@ -38,7 +38,7 @@ from qfluentwidgets import (setTheme, Theme, isDarkTheme,
 class _ExportThread(QThread):
 	"""后台导出线程：在原生线程中运行 Pipeline，通过信号与 GUI 通信。
 
-	避免 QThread 导致的 CUDA ONNX 推理性能损失（~4.6x）。
+	避免 QThread 导致的 GPU 推理性能损失。
 	"""
 
 	_progress = Signal(str, float)

@@ -24,8 +24,6 @@ _BACKEND_FALLBACK: dict[str, list[str]] = {
 	"cpu":  ["CPU"],
 }
 
-
-
 def get_gpu_backend() -> str:
 	"""返回当前实际使用的 GPU 后端名称（TensorRT / CUDA / CPU）。"""
 	return _gpu_backend
@@ -89,7 +87,7 @@ def _register_gpu_dlls() -> None:
 	例如：C:\\Program Files\\NVIDIA\\TensorRT-10.x\\bin
 	"""
 	# DLL 特征文件名（用于识别目录类型）
-	_TRT_MARKERS = ("nvinfer", "nvinfer_builder_resource")
+	_TRT_MARKERS = ("nvinfer",)
 	_CUDA_MARKERS = ("cudart64_", "cudart32_", "cublas64_")
 	_CUDNN_MARKERS = ("cudnn64_", "cudnn_ops64_")
 
@@ -206,9 +204,7 @@ def select_backend(preferred: str = "auto") -> str:
 				chosen = "TensorRT"
 				break
 			except Exception as _trt_err:
-				import traceback as _tb
-				logger.debug("TensorRT import failed: %s\n%s", _trt_err,
-				             "".join(_tb.format_exception_only(type(_trt_err), _trt_err)))
+				logger.info("TensorRT import failed (%s), falling back", _trt_err)
 				continue
 		elif candidate == "CUDA":
 			try:

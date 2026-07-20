@@ -281,10 +281,10 @@ class ProcessingPipeline:
 		self._timing["integrate_write"] = _time.perf_counter() - t1
 
 	def _run_ocr(self) -> None:
-		"""解码 + OCR：producer 解码(decord/cv2)/预处理 → consumer ONNX 推理。
+		"""解码 + OCR：producer 解码(decord/cv2)/预处理 → consumer 推理。
 
 		Queue 流水线重叠 I/O 与 GPU 推理。decord (NVDEC) 优先，
-		不可用时自动回退 cv2 (CPU)。
+		不可用时自动回退 cv2 (CPU)。OCR 后端由 gpu_setup 自动选择。
 		"""
 		import threading
 		from queue import Queue
