@@ -328,7 +328,7 @@ class RaceVideoToLogApp(QMainWindow):
 		self._disable_spin_flyout(self.div_spin)
 		pl.addWidget(self.div_spin, 1, 1)
 		pl.addWidget(BodyLabel("并行线程数"), 1, 2)
-		self.buffer_edit = LineEdit(); self.buffer_edit.setText("8"); self.buffer_edit.setFixedWidth(50)
+		self.buffer_edit = LineEdit(); self.buffer_edit.setText("16"); self.buffer_edit.setFixedWidth(50)
 		pl.addWidget(self.buffer_edit, 1, 3)
 		pl.addWidget(BodyLabel("OCR 高度 (px)"), 2, 0)
 		self.target_h_edit = LineEdit(); self.target_h_edit.setText("24"); self.target_h_edit.setFixedWidth(50)
