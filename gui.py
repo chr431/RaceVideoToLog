@@ -846,6 +846,15 @@ class RaceVideoToLogApp(QMainWindow):
 		except ValueError:
 			QMessageBox.warning(self, "参数错误", "请检查数值参数。"); return
 
+		# 断开旧线程信号，防止泄漏到新线程
+		if self._export_thread is not None:
+			self._export_thread._progress.disconnect()
+			self._export_thread._finished.disconnect()
+			self._export_thread._review_data.disconnect()
+			self._export_thread._error.disconnect()
+			self._export_thread._cancelled.disconnect()
+			self._export_thread = None
+
 		self._export_btn.setEnabled(False); self._cancel_btn.setEnabled(True)
 		self._export_thread = _ExportThread(self, Path(out), roi, ms, ma, fd, th, pp, nw, be)
 		self._export_thread._progress.connect(self._on_progress)
@@ -864,12 +873,16 @@ class RaceVideoToLogApp(QMainWindow):
 
 	def _on_review_needed(self, rows: list, observations: list,
 			confidences: list[dict], segments: list[dict]) -> None:
+		if self.sender() is not self._export_thread:
+			return
 		self._review_rows = rows
 		self._review_observations = observations
 		self._review_confidences = confidences
 		self._review_segments = segments
 
 	def _on_done(self, mode: str) -> None:
+		if self.sender() is not self._export_thread:
+			return  # 忽略旧线程的残留信号
 		if mode == "review":
 			self._export_btn.setEnabled(True); self._cancel_btn.setEnabled(False)
 			self._export_thread = None
@@ -879,9 +892,13 @@ class RaceVideoToLogApp(QMainWindow):
 			self._status_label.setText("自动锚点完成 — 结果已保存。")
 
 	def _on_error(self, err: str) -> None:
+		if self.sender() is not self._export_thread:
+			return
 		self._finish_export(); QMessageBox.critical(self, "导出失败", err)
 
 	def _on_cancel(self) -> None:
+		if self.sender() is not self._export_thread:
+			return
 		self._finish_export(); self._status_label.setText("已取消。")
 
 	def _show_review_dialog(self) -> None:
@@ -947,7 +964,17 @@ class RaceVideoToLogApp(QMainWindow):
 
 	def _finish_export(self) -> None:
 		self._export_btn.setEnabled(True); self._cancel_btn.setEnabled(False)
-		self._export_thread = None; self._release_engines()
+		if self._export_thread is not None:
+			try:
+				self._export_thread._progress.disconnect()
+				self._export_thread._finished.disconnect()
+				self._export_thread._review_data.disconnect()
+				self._export_thread._error.disconnect()
+				self._export_thread._cancelled.disconnect()
+			except (TypeError, RuntimeError):
+				pass
+			self._export_thread = None
+		self._release_engines()
 	def _on_pivot(self, key: str) -> None:
 		if key == "analysis":
 			self._footer.hide()
