@@ -11,16 +11,15 @@ from collections.abc import Callable
 import cv2
 import numpy as np
 
-from rapidocr_onnxruntime import RapidOCR
 from ocr_engine import (
 	auto_select_anchors, clamp_region, compute_video_hash,
 	extract_speed_value, SpeedObservation, Flag,
 	SOURCE_TO_KMH, _parse_int_or_none,
-	_reset_backend, _select_backend, _get_model_kwargs,
+	_reset_backend, _select_backend, _get_model_params,
 )
 from config import MPS_TO_KMH
 from correction import correct_with_anchors, compute_confidence, find_problem_segments
-from gpu_setup import get_gpu_backend
+from gpu_setup import get_gpu_backend, get_engine_params
 
 logger = logging.getLogger("RaceVideoToLog.pipeline")
 
@@ -75,8 +74,8 @@ class ProcessingPipeline:
 		self._progress = progress_cb
 
 		# 状态
-		self._ocr: RapidOCR | None = None
-		self._reocr: RapidOCR | None = None  # 重 OCR 引擎
+		self._ocr: "RapidOCR | None" = None
+		self._reocr: "RapidOCR | None" = None  # 重 OCR 引擎
 		self._raw_frames: list[tuple[float, np.ndarray]] = []
 		self._observations: list[SpeedObservation] = []
 		self._rows: list[list] = []
@@ -210,17 +209,21 @@ class ProcessingPipeline:
 		if self._progress:
 			self._progress(msg, pct)
 
-	def _ensure_ocr(self) -> RapidOCR:
+	def _ensure_ocr(self) -> "RapidOCR":
+		from rapidocr import RapidOCR
 		if self._ocr is None:
 			_reset_backend()
 			self._backend_actual = _select_backend(self._backend)
-			kw = _get_model_kwargs(self._ocr_model)
-			self._ocr = RapidOCR(**(kw or {}))
+			engine_params = get_engine_params()
+			model_params = _get_model_params(self._ocr_model)
+			all_params = {**(model_params or {}), **engine_params}
+			self._ocr = RapidOCR(params=all_params)
 			# 若指定了不同的重 OCR 模型，创建独立引擎
 			_reocr_model = self._reocr_model or self._ocr_model
 			if _reocr_model != self._ocr_model:
-				kw2 = _get_model_kwargs(_reocr_model)
-				self._reocr = RapidOCR(**(kw2 or {}))
+				reocr_model_params = _get_model_params(_reocr_model)
+				reocr_all_params = {**(reocr_model_params or {}), **engine_params}
+				self._reocr = RapidOCR(params=reocr_all_params)
 			else:
 				self._reocr = self._ocr
 		return self._ocr
@@ -341,7 +344,7 @@ class ProcessingPipeline:
 			if item is None:
 				break
 			ts, proc = item
-			ocr_result, _ = ocr(proc)
+			ocr_result = ocr(proc)
 			sv, rt = extract_speed_value(ocr_result)
 			if sv is not None and rt is not None:
 				observations.append(SpeedObservation(

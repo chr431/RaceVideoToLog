@@ -29,8 +29,8 @@ hiddenimports = [
     'pipeline', 'correction',
 ]
 
-# rapidocr_onnxruntime（OCR 引擎）
-tmp_ret = collect_all('rapidocr_onnxruntime')
+# rapidocr（OCR 引擎，含 ONNX 后端）
+tmp_ret = collect_all('rapidocr')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 # onnxruntime（CPU / CUDA）

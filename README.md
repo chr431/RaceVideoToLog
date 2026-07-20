@@ -5,7 +5,7 @@
 ## 安装
 
 ```bash
-pip install rapidocr_onnxruntime onnxruntime-gpu opencv-python-headless numpy matplotlib pyside6 qfluentwidgets pyclipper shapely
+pip install rapidocr onnxruntime-gpu opencv-python-headless numpy matplotlib pyside6 qfluentwidgets
 ```
 
 **GPU 加速**：安装 NVIDIA CUDA Toolkit 12.x + cuDNN 9.x，程序自动检测并预加载。也可纯 CPU 运行（`--backend cpu`）。

@@ -21,9 +21,9 @@ from PySide6.QtGui import (
 )
 
 from ocr_engine import (
-    RapidOCR, VideoMetadata,
+    VideoMetadata,
     codec_from_fourcc, format_duration,
-    _reset_backend, _select_backend, _get_model_kwargs,
+    _reset_backend, _select_backend, _get_model_params,
     _CancelExport,
 )
 from gui_analysis import AnalysisTab
@@ -162,8 +162,8 @@ class RaceVideoToLogApp(QMainWindow):
 		self._preview_cap: cv2.VideoCapture | None = None
 		self._preview_frame_no: int = 0
 		self._throttle_timer: QTimer | None = None
-		self.ocr_engine: RapidOCR | None = None
-		self.ocr_engines: list[RapidOCR] = []
+		self.ocr_engine: "RapidOCR | None" = None
+		self.ocr_engines: list = []
 
 		self._export_thread: _ExportThread | None = None
 		self.correction_mode: str = "auto"
@@ -174,7 +174,7 @@ class RaceVideoToLogApp(QMainWindow):
 		self._review_rows: list = []
 		self._review_observations: list = []
 		self._review_raw_frames: list = []
-		self._review_ocr: RapidOCR | None = None
+		self._review_ocr: "RapidOCR | None" = None
 		self._review_anchor_indices: set = set()
 		self._review_output_path: Path | None = None
 		self._review_confidences: list[dict] = []
@@ -726,11 +726,15 @@ class RaceVideoToLogApp(QMainWindow):
 		return None if text == "同主模型" else text
 
 	def _create_ocr(self) -> "RapidOCR":
+		from rapidocr import RapidOCR
 		_reset_backend()
 		keys = ["auto", "cuda", "cpu"]; key = keys[self.backend_combo.currentIndex()]
 		_select_backend(key)
-		kw = _get_model_kwargs(self.model_combo.currentText())
-		return RapidOCR(**(kw or {}))
+		from gpu_setup import get_engine_params
+		engine_params = get_engine_params()
+		model_params = _get_model_params(self.model_combo.currentText())
+		all_params = {**(model_params or {}), **engine_params}
+		return RapidOCR(params=all_params)
 
 	def _release_engines(self) -> None:
 		for e in ([self.ocr_engine] if self.ocr_engine else []) + self.ocr_engines:

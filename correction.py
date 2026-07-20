@@ -13,7 +13,7 @@ from ocr_engine import extract_speed_value, build_speed_candidates, Flag
 from config import MPS_TO_KMH
 
 if TYPE_CHECKING:
-	from rapidocr_onnxruntime import RapidOCR
+	from rapidocr import RapidOCR
 
 logger = logging.getLogger("RaceVideoToLog.correction")
 
@@ -562,7 +562,7 @@ def _re_ocr_frame(crop_bgr: "np.ndarray", ocr: "RapidOCR", max_speed_kmh: float,
 	# 变体 1: 灰度 h=32（与主 OCR h=24 不同，约 12% 概率产生不同结果）
 	scale = 32.0 / h if h > 0 else 1.0
 	proc = cv2.resize(gray, (max(1, int(w * scale)), 32))
-	res, _ = ocr(cv2.cvtColor(proc, cv2.COLOR_GRAY2BGR))
+	res = ocr(cv2.cvtColor(proc, cv2.COLOR_GRAY2BGR))
 	sv, rt = extract_speed_value(res)
 	if sv is not None and sv <= max_speed_kmh:
 		candidates.add(float(sv))

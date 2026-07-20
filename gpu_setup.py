@@ -1,7 +1,6 @@
-"""GPU 加速配置 — CUDA/cuDNN DLL 加载 + ONNX 后端选择。
+"""GPU 加速配置 — CUDA/cuDNN DLL 加载 + 后端选择。
 
-从 ocr_engine.py 提取，消除 import 时的副作用（原代码在模块导入时
-即扫描文件系统和加载 DLL），改为延迟初始化。
+提取自 ocr_engine.py，改为延迟初始化。适配 rapidocr 3.x 的 params-based 配置。
 """
 from __future__ import annotations
 import logging
@@ -14,24 +13,13 @@ logger = logging.getLogger("RaceVideoToLog.gpu_setup")
 # ═══════════════════ 内部状态 ═══════════════════
 _gpu_initialized: bool = False
 _gpu_backend: str = "CPU"
-_gpu_patched: bool = False
+_gpu_params: dict = {}
 
 # 后端优先级：用户选择 → 回退链
 _BACKEND_FALLBACK: dict[str, list[str]] = {
 	"auto": ["CUDA", "CPU"],
 	"cuda": ["CUDA", "CPU"],
 	"cpu":  ["CPU"],
-}
-
-_BACKEND_PROVIDER_MAP: dict[str, tuple[str, dict]] = {
-	"CUDA": ("CUDAExecutionProvider", {
-		"device_id": 0,
-		"arena_extend_strategy": "kNextPowerOfTwo",
-		"cudnn_conv_algo_search": "HEURISTIC",         # 固定模型用 HEURISTIC（更快初始化）
-		"do_copy_in_default_stream": True,
-		"cudnn_conv_use_max_workspace": "1",            # 允许 cuDNN 使用更多显存换速度
-	}),
-	"CPU": ("CPUExecutionProvider", {"arena_extend_strategy": "kSameAsRequested"}),
 }
 
 # CUDA 版本扫描列表（按优先级降序）
@@ -51,6 +39,11 @@ _CUDA_DLL_PREFIXES: tuple[str, ...] = (
 def get_gpu_backend() -> str:
 	"""返回当前实际使用的 GPU 后端名称（CUDA 或 CPU）。"""
 	return _gpu_backend
+
+
+def get_engine_params() -> dict:
+	"""返回用于 RapidOCR params 的引擎配置片段。"""
+	return dict(_gpu_params)
 
 
 def _ensure_gpu_initialized() -> None:
@@ -73,21 +66,27 @@ def _register_gpu_dlls() -> None:
 	_cudnn_dir: str | None = None
 	_cudnn_dlls: list[str] = []
 
-	# ── 1. 定位 CUDA Toolkit bin 目录 ──
+	# ── 1. 定位 CUDA Toolkit bin 目录（含 x64 子目录，CUDA 13+ 开始使用）──
 	_cuda_base = r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA"
 	for _ver in _CUDA_VERSIONS:
-		_cb = _os.path.join(_cuda_base, _ver, "bin")
-		if _os.path.isdir(_cb):
-			_cuda_bin = _cb
+		for _sub in ("bin", r"bin\x64"):
+			_cb = _os.path.join(_cuda_base, _ver, _sub)
+			if _os.path.isdir(_cb) and any(f.endswith(".dll") for f in _os.listdir(_cb)):
+				_cuda_bin = _cb
+				break
+		if _cuda_bin:
 			break
 	if not _cuda_bin:
 		for _env in ("CUDA_PATH", "CUDA_HOME", "CUDA_ROOT"):
 			_val = _os.environ.get(_env, "")
 			if _val:
-				_cb = _os.path.join(_val, "bin")
-				if _os.path.isdir(_cb):
-					_cuda_bin = _cb
-					break
+				for _sub in ("bin", r"bin\x64"):
+					_cb = _os.path.join(_val, _sub)
+					if _os.path.isdir(_cb) and any(f.endswith(".dll") for f in _os.listdir(_cb)):
+						_cuda_bin = _cb
+						break
+			if _cuda_bin:
+				break
 
 	# ── 2. 定位 cuDNN DLL（匹配 CUDA 版本）──
 	_cuda_major = ""
@@ -144,7 +143,27 @@ def _register_gpu_dlls() -> None:
 	for _dll_path in _cudnn_dlls:
 		_load_dll(_dll_path)
 
-	# ── 4. 更新 PATH ──
+	# ── 4. 注册 DLL 搜索目录（Windows 8.1+ 推荐方式）──
+	if _cuda_bin:
+		try:
+			_os.add_dll_directory(_cuda_bin)
+		except AttributeError:
+			pass  # Python <3.8
+	# 也加入 CUDA 12.x bin（ORT 1.27 需要 CUDA 12 DLL）
+	for _ver in ("v12.9", "v12.8", "v12.7", "v12.6", "v12.5", "v12.4", "v12.3", "v12.2", "v12.1", "v12.0"):
+		_cb12 = _os.path.join(r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA", _ver, "bin")
+		if _os.path.isdir(_cb12) and _cb12 != _cuda_bin:
+			try:
+				_os.add_dll_directory(_cb12)
+			except AttributeError:
+				pass
+			break
+	if _cudnn_dir:
+		try:
+			_os.add_dll_directory(_cudnn_dir)
+		except AttributeError:
+			pass
+	# 同时更新 PATH（兼容旧版加载逻辑）
 	_path_extra: list[str] = []
 	if _cuda_bin:
 		_path_extra.append(_cuda_bin)
@@ -172,64 +191,45 @@ def _register_gpu_dlls() -> None:
 def select_backend(preferred: str = "auto") -> str:
 	"""按用户偏好选择 OCR 后端，不可用时自动回退。
 
-	首次调用时触发 GPU DLL 延迟初始化。
-	preferred: "auto" | "cuda" | "cpu"
-	返回实际使用的后端名称: "CUDA" | "CPU"
+	首次调用时触发 GPU DLL 延迟初始化。返回后端名称字符串。
+	同时设置 _gpu_params 供 RapidOCR 引擎配置。
 	"""
-	global _gpu_patched, _gpu_backend
+	global _gpu_backend, _gpu_params
 
 	_ensure_gpu_initialized()
-
-	if _gpu_patched:
-		return _gpu_backend
-	_gpu_patched = True
 
 	try:
 		import onnxruntime as ort
 	except Exception:
 		logger.warning("无法导入 onnxruntime，使用 CPU 后端")
 		_gpu_backend = "CPU"
+		_gpu_params = {"EngineConfig.onnxruntime.use_cuda": False}
+		config._gpu_backend = "CPU"
 		return _gpu_backend
 
 	available = set(ort.get_available_providers())
-
 	chain = _BACKEND_FALLBACK.get(preferred.lower(), _BACKEND_FALLBACK["auto"])
 	chosen: str | None = None
 
 	for candidate in chain:
-		ep_name = _BACKEND_PROVIDER_MAP[candidate][0]
+		ep_name = ("CUDAExecutionProvider" if candidate == "CUDA"
+		           else "CPUExecutionProvider")
 		if ep_name in available:
 			chosen = candidate
 			break
 	if chosen is None:
 		chosen = "CPU"
 
-	# Monkey-patch OrtInferSession 以使用选定后端
-	from rapidocr_onnxruntime.utils import OrtInferSession
-
-	ep_name, ep_opts = _BACKEND_PROVIDER_MAP[chosen]
-	cpu_ep_name, cpu_opts = _BACKEND_PROVIDER_MAP["CPU"]
-
-	def _patched_init(self, config):  # type: ignore[no-untyped-def]
-		from onnxruntime import (
-			SessionOptions, InferenceSession, GraphOptimizationLevel,
-			ExecutionMode,
-		)
-		sess_opt = SessionOptions()
-		sess_opt.log_severity_level = 4
-		sess_opt.enable_cpu_mem_arena = False
-		sess_opt.graph_optimization_level = GraphOptimizationLevel.ORT_ENABLE_ALL
-		sess_opt.execution_mode = ExecutionMode.ORT_PARALLEL
-		sess_opt.enable_mem_pattern = True
-
-		EP_list: list = [(ep_name, ep_opts)] if ep_name != cpu_ep_name else []
-		EP_list.append((cpu_ep_name, cpu_opts))
-		self._verify_model(config['model_path'])
-		self.session = InferenceSession(
-			config['model_path'], sess_options=sess_opt, providers=EP_list,
-		)
-
-	OrtInferSession.__init__ = _patched_init  # type: ignore[method-assign]
+	if chosen == "CUDA":
+		_gpu_params = {
+			"EngineConfig.onnxruntime.use_cuda": True,
+			"EngineConfig.onnxruntime.cuda_ep_cfg.device_id": 0,
+			"EngineConfig.onnxruntime.cuda_ep_cfg.arena_extend_strategy": "kNextPowerOfTwo",
+			"EngineConfig.onnxruntime.cuda_ep_cfg.cudnn_conv_algo_search": "HEURISTIC",
+			"EngineConfig.onnxruntime.cuda_ep_cfg.do_copy_in_default_stream": True,
+		}
+	else:
+		_gpu_params = {"EngineConfig.onnxruntime.use_cuda": False}
 
 	_gpu_backend = chosen
 	config._gpu_backend = chosen
@@ -239,7 +239,7 @@ def select_backend(preferred: str = "auto") -> str:
 
 def reset_backend() -> None:
 	"""重置后端选择状态，允许用户在运行时切换后端。"""
-	global _gpu_patched, _gpu_backend
-	_gpu_patched = False
+	global _gpu_backend, _gpu_params
 	_gpu_backend = "CPU"
+	_gpu_params = {}
 	config._gpu_backend = "CPU"

@@ -45,10 +45,10 @@ __all__ = [
 	"normalize_ocr_text", "format_duration", "codec_from_fourcc",
 	"safe_int", "safe_float", "SOURCE_TO_KMH", "OCR_NUMBER_RE",
 	"compute_video_hash", "auto_select_anchors",
-	"_reset_backend", "_select_backend", "_get_model_kwargs",
+	"_reset_backend", "_select_backend", "_get_model_params",
 	"_CancelExport",
 	"_parse_int_or_none", "parse_csv_header", "_savgol_filter_np",
-	"_set_rec_keys_path", "Flag", "logger",
+	"Flag", "logger",
 ]
 
 # ═══════════════════ Flag 枚举：速度数据来源标记 ═══════════════════
@@ -81,7 +81,17 @@ class Flag:
 # ═══════════════════ GPU 加速：由 gpu_setup.py 延迟初始化 ═══════════════════
 from gpu_setup import select_backend as _select_backend, reset_backend as _reset_backend
 
-from rapidocr_onnxruntime import RapidOCR
+# rapidocr 延迟导入，确保 gpu_setup 先加载 CUDA DLL
+_RapidOCR = None
+_EngineType = None
+_ModelType = None
+_OCRVersion = None
+
+def _ensure_rapidocr_imported():
+	global _RapidOCR, _EngineType, _ModelType, _OCRVersion
+	if _RapidOCR is None:
+		from rapidocr import RapidOCR as _R, EngineType as _ET, ModelType as _MT, OCRVersion as _OV
+		_RapidOCR = _R; _EngineType = _ET; _ModelType = _MT; _OCRVersion = _OV
 # ═══════════════════════════════════════════════════════════
 
 # SOURCE_TO_KMH 已从 config 导入
@@ -205,33 +215,64 @@ def normalize_ocr_text(text: str) -> str:
 	return text.translate(translation)
 
 
-def extract_speed_value(ocr_result: list | None) -> tuple[float | None, str | None]:
+def extract_speed_value(ocr_result) -> tuple[float | None, str | None]:
+	"""从 RapidOCR 3.x 结果中提取速度值。支持 TextRecOutput 和旧 list 格式。"""
 	if not ocr_result:
 		return None, None
 
-	candidates: list[str] = []
-	for item in ocr_result:
-		if not item or len(item) < 2:
-			continue
-		text = str(item[1]).strip()
-		if text:
-			candidates.append(text)
+	# RapidOCR 3.x TextRecOutput (use_det=False 时返回)
+	if hasattr(ocr_result, "text"):
+		text = str(ocr_result.text).strip()
+		if not text:
+			return None, None
+		normalized = normalize_ocr_text(text).replace(" ", "")
+		match = OCR_NUMBER_RE.search(normalized)
+		if not match:
+			return None, None
+		raw_text = re.sub(r"\D", "", match.group(0))
+		if not raw_text:
+			return None, None
+		try:
+			return float(raw_text), raw_text
+		except ValueError:
+			return None, None
 
-	if not candidates:
-		return None, None
+	# RapidOCR 3.x 带检测时返回 tuple (dt_boxes, rec_res, elapse)
+	if isinstance(ocr_result, (tuple, list)) and len(ocr_result) >= 2:
+		rec = ocr_result[1]
+		if rec is None:
+			return None, None
+		candidates: list[str] = []
+		if isinstance(rec, list):
+			for item in rec:
+				if isinstance(item, (list, tuple)) and len(item) >= 2:
+					text = str(item[1]).strip()
+				elif hasattr(item, "text"):
+					text = str(item.text).strip()
+				else:
+					text = str(item).strip()
+				if text:
+					candidates.append(text)
+		elif hasattr(rec, "text"):
+			candidates.append(str(rec.text).strip())
+		elif isinstance(rec, str):
+			candidates.append(rec.strip())
 
-	joined = normalize_ocr_text(" ".join(candidates)).replace(" ", "")
-	match = OCR_NUMBER_RE.search(joined)
-	if not match:
-		return None, None
+		if not candidates:
+			return None, None
+		joined = normalize_ocr_text(" ".join(candidates)).replace(" ", "")
+		match = OCR_NUMBER_RE.search(joined)
+		if not match:
+			return None, None
+		raw_text = re.sub(r"\D", "", match.group(0))
+		if not raw_text:
+			return None, None
+		try:
+			return float(raw_text), raw_text
+		except ValueError:
+			return None, None
 
-	raw_text = re.sub(r"\D", "", match.group(0))
-	if not raw_text:
-		return None, None
-	try:
-		return float(raw_text), raw_text
-	except ValueError:
-		return None, None
+	return None, None
 
 
 def convert_speed_to_kmh(speed_value: float, source_unit: str) -> float:
@@ -349,37 +390,28 @@ def build_speed_candidates(raw_text: str, max_speed_kmh: float) -> list[float]:
 	return sorted(candidates)
 
 
-def _get_model_kwargs(variant: str, models_dir: str | None = None) -> dict | None:
-	"""Get RapidOCR kwargs for the model. Returns None if files missing.
+def _get_model_params(variant: str) -> dict | None:
+	"""Get RapidOCR params dict for the model variant. Returns None if unsupported.
 
-	variant: "v6_small" | "v6_medium" — 去掉 v6_ 前缀后匹配模型文件名。
+	variant: "v6_tiny" | "v6_small"
 	"""
-	import rapidocr_onnxruntime as rr
-	if models_dir is None:
-		models_dir = str(Path(rr.__file__).parent / "models")
-	# 将 v6_small → small, v6_medium → medium
+	_ensure_rapidocr_imported()
 	size = variant.replace("v6_", "")
-	cfg = {
-		# detection model skipped — ROI is already tightly cropped
-		"rec_model_path": f"{models_dir}/PP-OCRv6_rec_{size}.onnx",
-		"text_score": 0.6, "use_angle_cls": False, "rec_batch_num": 12,
-	}
-	if not Path(cfg["rec_model_path"]).exists():
+	model_map = {"tiny": _ModelType.TINY, "small": _ModelType.SMALL}
+	model_type = model_map.get(size)
+	if model_type is None:
 		return None
-	_set_rec_keys_path(str(Path(rr.__file__).parent / "config.yaml"),
-		f"{models_dir}/ppocr_keys_v1.txt")
-	return cfg
-
-def _set_rec_keys_path(config_path: str, keys_path: str) -> None:
-	"""临时修改 rapidocr config.yaml 的 Rec.keys_path。"""
-	from rapidocr_onnxruntime.utils import read_yaml
-	config = read_yaml(config_path)
-	if config.get("Rec", {}).get("keys_path") == keys_path:
-		return  # 已设置
-	config.setdefault("Rec", {})["keys_path"] = keys_path
-	import yaml
-	with open(config_path, "w") as f:
-		yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
+	return {
+		"Global.use_det": False,
+		"Global.use_cls": False,
+		"Det.model_type": model_type,
+		"Rec.model_type": model_type,
+		"Det.ocr_version": _OCRVersion.PPOCRV6,
+		"Rec.ocr_version": _OCRVersion.PPOCRV6,
+		"Det.engine_type": _EngineType.ONNXRUNTIME,
+		"Rec.engine_type": _EngineType.ONNXRUNTIME,
+		"Rec.rec_batch_num": 12,
+	}
 
 
 def compute_video_hash(video_path: str | Path, chunk_size: int = 1_048_576) -> str:
