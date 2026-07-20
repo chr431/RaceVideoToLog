@@ -45,6 +45,10 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('qfluentwidgets')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
+# cuda-python (tensorrt engine 需要 cuda.bindings)
+tmp_ret = collect_all('cuda')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+
 # decord（NVDEC 硬件加速视频解码）
 tmp_ret = collect_all('decord')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
@@ -153,8 +157,6 @@ a = Analysis(
         'scipy', 'tkinter', '_tkinter',
         # PaddlePaddle (only for paddlepaddle_migrate branch; ~1.1GB)
         'paddle', 'paddlepaddle', 'paddlepaddle_gpu',
-        # CUDA bindings (user provides system-wide DLLs)
-        'cuda', 'cuda_bindings',
         # Unused paddle deps
         'safetensors', 'opt_einsum', 'networkx',
     ],
