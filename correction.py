@@ -554,15 +554,14 @@ def _re_ocr_frame(crop_bgr: "np.ndarray", ocr: "RapidOCR", max_speed_kmh: float,
 	if crop_bgr is None or crop_bgr.size == 0:
 		return candidates
 
-	gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
-	h, w = gray.shape[:2]
+	h, w = crop_bgr.shape[:2]
 	if h <= 0 or w <= 0:
 		return candidates
 
-	# 变体 1: 灰度 h=32（与主 OCR h=24 不同，约 12% 概率产生不同结果）
+	# BGR resize h=32（与主 OCR h=24 不同高度，约 10% 概率产生不同结果）
 	scale = 32.0 / h if h > 0 else 1.0
-	proc = cv2.resize(gray, (max(1, int(w * scale)), 32))
-	res = ocr(cv2.cvtColor(proc, cv2.COLOR_GRAY2BGR))
+	proc = cv2.resize(crop_bgr, (max(1, int(w * scale)), 32))
+	res = ocr(proc)
 	sv, rt = extract_speed_value(res)
 	if sv is not None and sv <= max_speed_kmh:
 		candidates.add(float(sv))
