@@ -14,6 +14,7 @@ logger = logging.getLogger("RaceVideoToLog.gpu_setup")
 _gpu_initialized: bool = False
 _gpu_backend: str = "CPU"
 _gpu_params: dict = {}
+_dll_dir_cookies: list = []  # 保持 os.add_dll_directory() 返回值存活
 
 # 后端优先级：用户选择 → 回退链
 _BACKEND_FALLBACK: dict[str, list[str]] = {
@@ -124,6 +125,10 @@ def _register_gpu_dlls() -> None:
 			_other_dirs.append(_entry)
 
 	# ── 注册 DLL 搜索目录（遵循依赖顺序：CUDA → cuDNN → TRT → 其他）──
+	# 注意：os.add_dll_directory() 返回的 cookie 必须保持存活，
+	# 否则目录会从搜索路径中被移除。存入 _dll_dir_cookies 防止 GC。
+	global _dll_dir_cookies
+	_dll_dir_cookies.clear()
 	_registered = 0
 	for _label, _dirs in [("CUDA", _found_cuda), ("cuDNN", _found_cudnn),
 	                       ("TensorRT", _found_trt), ("DLL", _other_dirs)]:
@@ -131,7 +136,7 @@ def _register_gpu_dlls() -> None:
 			logger.info("%s: %s", _label, ", ".join(_dirs[:3]))
 		for _d in _dirs:
 			try:
-				_os.add_dll_directory(_d)
+				_dll_dir_cookies.append(_os.add_dll_directory(_d))
 				_registered += 1
 			except (AttributeError, OSError):
 				pass
