@@ -338,7 +338,7 @@ class RaceVideoToLogApp(QMainWindow):
 		pl.addWidget(self.pad_edit, 2, 3)
 		pl.addWidget(BodyLabel("OCR 后端"), 3, 0)
 		self.backend_combo = ComboBox()
-		self.backend_combo.addItems(["自动", "CUDA", "CPU"]); self.backend_combo.setCurrentIndex(0)
+		self.backend_combo.addItems(["自动", "TensorRT", "CPU"]); self.backend_combo.setCurrentIndex(0)
 		pl.addWidget(self.backend_combo, 3, 1)
 		self.debug_cb = CheckBox("调试日志"); pl.addWidget(self.debug_cb, 3, 2, 1, 2)
 		pl.addWidget(BodyLabel("OCR 模型"), 4, 0)
@@ -710,11 +710,12 @@ class RaceVideoToLogApp(QMainWindow):
 
 	def _on_backend(self, _idx: int) -> None:
 		_reset_backend(); self._release_engines()
-		keys = ["auto", "cuda", "cpu"]; key = keys[self.backend_combo.currentIndex()]
+		keys = ["auto", "tensorrt", "cpu"]; key = keys[self.backend_combo.currentIndex()]
 		actual = _select_backend(key)
 		if key == "cuda" and actual != "CUDA":
 			QMessageBox.warning(self, "后端不可用", f"CUDA 不可用。\n已回退为 {actual}。")
-		self._status_label.setText(f"OCR 后端: {'CUDA (GPU)' if actual == 'CUDA' else 'CPU'}")
+		_backend_labels = {"TensorRT": "TensorRT (GPU)", "CUDA": "CUDA (GPU)", "CPU": "CPU"}
+		self._status_label.setText(f"OCR 后端: {_backend_labels.get(actual, actual)}")
 
 	def get_ocr_engine(self) -> "RapidOCR":
 		if self.ocr_engine is None: self.ocr_engine = self._create_ocr()
@@ -728,7 +729,7 @@ class RaceVideoToLogApp(QMainWindow):
 	def _create_ocr(self) -> "RapidOCR":
 		from rapidocr import RapidOCR
 		_reset_backend()
-		keys = ["auto", "cuda", "cpu"]; key = keys[self.backend_combo.currentIndex()]
+		keys = ["auto", "tensorrt", "cpu"]; key = keys[self.backend_combo.currentIndex()]
 		_select_backend(key)
 		from gpu_setup import get_engine_params, get_engine_type, get_setup_advice
 		engine_params = get_engine_params()
@@ -800,7 +801,7 @@ class RaceVideoToLogApp(QMainWindow):
 					pass
 		if "backend" in settings:
 			be = settings["backend"].lower()
-			idx = {"auto": 0, "cuda": 1, "cpu": 2}.get(be, 0)
+			idx = {"auto": 0, "tensorrt": 1, "cpu": 2}.get(be, 0)
 			self.backend_combo.setCurrentIndex(idx)
 		if "model" in settings:
 			model = settings["model"]
@@ -840,7 +841,7 @@ class RaceVideoToLogApp(QMainWindow):
 			ms = float(self.max_speed_edit.text()); ma = float(self.max_accel_edit.text())
 			fd = self.div_spin.value(); th = float(self.target_h_edit.text())
 			pp = float(self.pad_edit.text()); nw = int(self.buffer_edit.text())
-			be = ["auto", "cuda", "cpu"][self.backend_combo.currentIndex()]
+			be = ["auto", "tensorrt", "cpu"][self.backend_combo.currentIndex()]
 		except ValueError:
 			QMessageBox.warning(self, "参数错误", "请检查数值参数。"); return
 

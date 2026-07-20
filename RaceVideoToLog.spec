@@ -69,8 +69,9 @@ _EXCLUDE_FILES = {
     'PP-OCRv6_det_medium.onnx', 'PP-OCRv6_rec_medium.onnx',
     # TRT engine cache (GPU-specific, rebuilt by user if needed)
     # Use prefix match below for all .engine files
-    # Unused ONNX providers
+    # Unused ONNX providers (TRT replaces CUDA; CPU uses onnxruntime.dll)
     'DirectML.dll', 'onnxruntime_providers_tensorrt.dll',
+    'onnxruntime_providers_cuda.dll',
 }
 datas = [(s, d) for s, d in datas if os.path.basename(s) not in _EXCLUDE_FILES
          and not os.path.basename(s).endswith('.engine')]
@@ -179,6 +180,7 @@ exe = EXE(
 # Post-Analysis 精简：移除 Analysis 重新发现的 DLL
 _EXCLUDE_BINARIES = {
     'DirectML.dll', 'onnxruntime_providers_tensorrt.dll',
+    'onnxruntime_providers_cuda.dll',
     'tcl86t.dll', 'tk86t.dll', '_tkinter.pyd',
     # Qt6 未使用模块（仅用 Widgets/Core/Gui）
     'opengl32sw.dll', 'avcodec-61.dll',
@@ -209,7 +211,6 @@ coll = COLLECT(
     upx=False,
     upx_exclude=[
         'onnxruntime.dll',
-        'onnxruntime_providers_cuda.dll',
         'onnxruntime_providers_shared.dll',
         # opencv-python-headless 5.x uses cv2.pyd (no opencv_world*.dll)
         # decord FFmpeg 4.x DLLs (UPX may corrupt)

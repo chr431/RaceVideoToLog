@@ -17,9 +17,9 @@ _gpu_params: dict = {}
 
 # 后端优先级：用户选择 → 回退链
 _BACKEND_FALLBACK: dict[str, list[str]] = {
-	"auto": ["TensorRT", "CUDA", "CPU"],
+	"auto": ["TensorRT", "CPU"],
+	"tensorrt": ["TensorRT", "CPU"],
 	"cuda": ["CUDA", "CPU"],
-	"tensorrt": ["TensorRT", "CUDA", "CPU"],
 	"cpu":  ["CPU"],
 }
 
