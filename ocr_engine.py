@@ -360,13 +360,12 @@ def _get_model_kwargs(variant: str, models_dir: str | None = None) -> dict | Non
 	# 将 v6_small → small, v6_medium → medium
 	size = variant.replace("v6_", "")
 	cfg = {
-		"det_model_path": f"{models_dir}/PP-OCRv6_det_{size}.onnx",
+		# detection model skipped — ROI is already tightly cropped
 		"rec_model_path": f"{models_dir}/PP-OCRv6_rec_{size}.onnx",
 		"text_score": 0.6, "use_angle_cls": False, "rec_batch_num": 12,
 	}
-	for key in ("det_model_path", "rec_model_path"):
-		if not Path(cfg[key]).exists():
-			return None
+	if not Path(cfg["rec_model_path"]).exists():
+		return None
 	_set_rec_keys_path(str(Path(rr.__file__).parent / "config.yaml"),
 		f"{models_dir}/ppocr_keys_v1.txt")
 	return cfg
