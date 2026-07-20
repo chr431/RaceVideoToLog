@@ -99,8 +99,39 @@ def _register_gpu_dlls() -> None:
 	_other_dirs: list[str] = []
 
 	# ── 扫描 PATH 中所有目录 ──
+	# Windows: os.environ 只在进程启动时读取合并后的 PATH。
+	# 注册表修改后未注销重登的会话中，需直接读注册表补充。
+	_path_raw = _os.environ.get("PATH", "")
+	if _os.name == "nt":
+		try:
+			import winreg as _wr
+			_reg_paths: list[str] = []
+			for _hive, _subkey in [(_wr.HKEY_CURRENT_USER, "Environment"),
+			                        (_wr.HKEY_LOCAL_MACHINE,
+			                         r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment")]:
+				try:
+					_k = _wr.OpenKey(_hive, _subkey, 0, _wr.KEY_READ)
+					_val, _ = _wr.QueryValueEx(_k, "Path")
+					_wr.CloseKey(_k)
+					_reg_paths.extend(_val.split(";"))
+				except OSError:
+					pass
+			# 追加注册表中独有的条目（去重）
+			_env_set = {_os.path.normpath(p) for p in _path_raw.split(_os.pathsep) if p.strip()}
+			_reg_extra = [p for p in _reg_paths
+			              if p.strip() and _os.path.normpath(p) not in _env_set]
+			if _reg_extra:
+				_path_raw += _os.pathsep + _os.pathsep.join(_reg_extra)
+				logger.info("PATH 补充注册表条目: %d 个", len(_reg_extra))
+		except Exception:
+			pass
+
 	_seen: set[str] = set()
-	for _entry in _os.environ.get("PATH", "").split(_os.pathsep):
+	_path_entries = _path_raw.split(_os.pathsep)
+	# 截断过长的 PATH（仅日志用）
+	_path_preview = _path_raw[:500] + ("..." if len(_path_raw) > 500 else "")
+	logger.info("PATH 扫描: %d 个条目, 前500字符: %s", len(_path_entries), _path_preview)
+	for _entry in _path_entries:
 		_entry = _os.path.normpath(_entry.strip())
 		if not _entry or _entry in _seen:
 			continue
@@ -149,7 +180,10 @@ def _register_gpu_dlls() -> None:
 		_os.environ["PATH"] = _os.pathsep.join(_path_new) + \
 			(_os.pathsep + _existing if _existing else "")
 
-	logger.info("GPU DLL 搜索路径注册: %d 个目录", _registered)
+	if not _found_trt:
+		logger.info("TensorRT DLL 未在 PATH 中找到 (搜索了 %d 个目录)", len(_path_entries))
+	logger.info("GPU DLL 搜索路径注册: %d 个目录 (TRT:%d CUDA:%d)",
+		_registered, len(_found_trt), len(_found_cuda))
 
 
 def select_backend(preferred: str = "auto") -> str:
@@ -171,7 +205,10 @@ def select_backend(preferred: str = "auto") -> str:
 				import tensorrt as _trt_check  # noqa: F401
 				chosen = "TensorRT"
 				break
-			except Exception:
+			except Exception as _trt_err:
+				import traceback as _tb
+				logger.debug("TensorRT import failed: %s\n%s", _trt_err,
+				             "".join(_tb.format_exception_only(type(_trt_err), _trt_err)))
 				continue
 		elif candidate == "CUDA":
 			try:
