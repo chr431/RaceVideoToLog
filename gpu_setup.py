@@ -255,7 +255,7 @@ def select_backend(preferred: str = "auto") -> str:
 		_gpu_params = {
 			"EngineConfig.paddle.use_cuda": True,
 			"EngineConfig.paddle.cuda_ep_cfg.device_id": 0,
-			"EngineConfig.paddle.cuda_ep_cfg.gpu_mem": 500,
+			"EngineConfig.paddle.cuda_ep_cfg.gpu_mem": 100,
 		}
 	else:
 		_gpu_params = {"EngineConfig.paddle.use_cuda": False}

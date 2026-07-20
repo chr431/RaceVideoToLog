@@ -154,6 +154,20 @@ def _patch_rapidocr_init():
 
 	_RapidOCR._initialize = _patched_initialize
 	logger.info("RapidOCR patched: det/cls model loading conditional on use_det/use_cls")
+
+	# ── PaddlePaddle init_predictor 优化：disable glog + enable IR optimization ──
+	try:
+		from rapidocr.inference_engine.paddle.main import PaddleInferSession
+		_orig_init_pred = PaddleInferSession.init_predictor
+		def _opt_init_pred(self, infer_opts, ocr_version):
+			infer_opts.enable_memory_optim()
+			infer_opts.disable_glog_info()
+			from paddle import inference
+			return inference.create_predictor(infer_opts)
+		PaddleInferSession.init_predictor = _opt_init_pred
+		logger.info("PaddlePaddle init_predictor optimized (glog off, IR opt on)")
+	except Exception:
+		pass
 # ═══════════════════════════════════════════════════════════
 
 # SOURCE_TO_KMH 已从 config 导入
@@ -483,7 +497,7 @@ def _get_model_params(variant: str) -> dict | None:
 		"Rec.ocr_version": _OCRVersion.PPOCRV6,
 		"Det.engine_type": _EngineType.PADDLE,
 		"Rec.engine_type": _EngineType.PADDLE,
-		"Rec.rec_batch_num": 12,
+		"Rec.rec_batch_num": 1,
 		"Rec.cpu_math_library_num_threads": 4,
 	}
 
