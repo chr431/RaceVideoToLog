@@ -24,7 +24,7 @@ def main() -> None:
 	parser.add_argument("--target-h", type=int, default=24)
 	parser.add_argument("--pad", type=int, default=0)
 	parser.add_argument("--buffer", type=int, default=16)
-	parser.add_argument("--backend", choices=["auto","cuda","cpu"], default="auto")
+	parser.add_argument("--backend", choices=["auto","cuda","tensorrt","cpu"], default="auto")
 	parser.add_argument("--ocr-model", choices=["v6_tiny", "v6_small"], default="v6_tiny",
 		help="主 OCR 模型 (默认 tiny)")
 	parser.add_argument("--reocr-model", choices=["v6_tiny", "v6_small"], default="v6_small",

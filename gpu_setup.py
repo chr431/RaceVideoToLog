@@ -19,6 +19,7 @@ _gpu_params: dict = {}
 _BACKEND_FALLBACK: dict[str, list[str]] = {
 	"auto": ["CUDA", "CPU"],
 	"cuda": ["CUDA", "CPU"],
+	"tensorrt": ["TensorRT", "CUDA", "CPU"],
 	"cpu":  ["CPU"],
 }
 
@@ -44,6 +45,10 @@ def get_gpu_backend() -> str:
 def get_engine_params() -> dict:
 	"""返回用于 RapidOCR params 的引擎配置片段。"""
 	return dict(_gpu_params)
+
+def get_engine_type() -> str:
+	"""返回引擎类型字符串 ('onnxruntime' | 'tensorrt' | 'paddle')。"""
+	return "tensorrt" if _gpu_backend == "TensorRT" else "onnxruntime"
 
 
 def _ensure_gpu_initialized() -> None:
@@ -143,6 +148,15 @@ def _register_gpu_dlls() -> None:
 	for _dll_path in _cudnn_dlls:
 		_load_dll(_dll_path)
 
+	# ── 2b. 定位 TensorRT 安装目录 ──
+	_trt_base = r"C:\Program Files\NVIDIA\TensorRT-10.16.1.11"
+	_trt_bin = _os.path.join(_trt_base, "bin")
+	_trt_lib = _os.path.join(_trt_base, "lib")
+	if not _os.path.isdir(_trt_bin):
+		_trt_base = None
+		_trt_bin = None
+		_trt_lib = None
+
 	# ── 4. 注册 DLL 搜索目录（Windows 8.1+ 推荐方式）──
 	if _cuda_bin:
 		try:
@@ -165,6 +179,18 @@ def _register_gpu_dlls() -> None:
 			pass
 	# 同时更新 PATH（兼容旧版加载逻辑）
 	_path_extra: list[str] = []
+	if _trt_bin:
+		try:
+			_os.add_dll_directory(_trt_bin)
+		except AttributeError:
+			pass
+		_path_extra.append(_trt_bin)
+	if _trt_lib:
+		try:
+			_os.add_dll_directory(_trt_lib)
+		except AttributeError:
+			pass
+		_path_extra.append(_trt_lib)
 	if _cuda_bin:
 		_path_extra.append(_cuda_bin)
 	if _cudnn_dir:
@@ -182,6 +208,8 @@ def _register_gpu_dlls() -> None:
 		logger.info("cuDNN: %d 个 DLL 在 %s", len(_cudnn_dlls), _cudnn_dir)
 	else:
 		logger.info("cuDNN: 未找到")
+	if _trt_bin:
+		logger.info("TensorRT: %s", _trt_base)
 	logger.info("GPU DLL 预加载: %d 个成功", _loaded)
 	if _failed:
 		logger.warning("GPU DLL 预加载失败 (%d 个): %s", len(_failed),
@@ -212,15 +240,31 @@ def select_backend(preferred: str = "auto") -> str:
 	chosen: str | None = None
 
 	for candidate in chain:
-		ep_name = ("CUDAExecutionProvider" if candidate == "CUDA"
-		           else "CPUExecutionProvider")
-		if ep_name in available:
-			chosen = candidate
+		if candidate == "TensorRT":
+			try:
+				import tensorrt as _trt_check  # noqa: F401
+				chosen = "TensorRT"
+				break
+			except Exception:
+				continue
+		elif candidate == "CUDA":
+			ep_name = "CUDAExecutionProvider"
+			if ep_name in available:
+				chosen = candidate
+				break
+		else:
+			chosen = "CPU"
 			break
 	if chosen is None:
 		chosen = "CPU"
 
-	if chosen == "CUDA":
+	if chosen == "TensorRT":
+		_gpu_params = {
+			"EngineConfig.tensorrt.device_id": 0,
+			"EngineConfig.tensorrt.use_fp16": True,
+			"EngineConfig.tensorrt.workspace_size": 1073741824,  # 1 GB
+		}
+	elif chosen == "CUDA":
 		_gpu_params = {
 			"EngineConfig.onnxruntime.use_cuda": True,
 			"EngineConfig.onnxruntime.cuda_ep_cfg.device_id": 0,

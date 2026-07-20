@@ -19,7 +19,7 @@ from ocr_engine import (
 )
 from config import MPS_TO_KMH
 from correction import correct_with_anchors, compute_confidence, find_problem_segments
-from gpu_setup import get_gpu_backend, get_engine_params
+from gpu_setup import get_gpu_backend, get_engine_params, get_engine_type
 
 logger = logging.getLogger("RaceVideoToLog.pipeline")
 
@@ -215,13 +215,14 @@ class ProcessingPipeline:
 			_reset_backend()
 			self._backend_actual = _select_backend(self._backend)
 			engine_params = get_engine_params()
-			model_params = _get_model_params(self._ocr_model)
+			_et = get_engine_type()
+			model_params = _get_model_params(self._ocr_model, _et)
 			all_params = {**(model_params or {}), **engine_params}
 			self._ocr = RapidOCR(params=all_params)
 			# 若指定了不同的重 OCR 模型，创建独立引擎
 			_reocr_model = self._reocr_model or self._ocr_model
 			if _reocr_model != self._ocr_model:
-				reocr_model_params = _get_model_params(_reocr_model)
+				reocr_model_params = _get_model_params(_reocr_model, _et)
 				reocr_all_params = {**(reocr_model_params or {}), **engine_params}
 				self._reocr = RapidOCR(params=reocr_all_params)
 			else:

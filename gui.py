@@ -730,9 +730,10 @@ class RaceVideoToLogApp(QMainWindow):
 		_reset_backend()
 		keys = ["auto", "cuda", "cpu"]; key = keys[self.backend_combo.currentIndex()]
 		_select_backend(key)
-		from gpu_setup import get_engine_params
+		from gpu_setup import get_engine_params, get_engine_type
 		engine_params = get_engine_params()
-		model_params = _get_model_params(self.model_combo.currentText())
+		_et = get_engine_type()
+		model_params = _get_model_params(self.model_combo.currentText(), _et)
 		all_params = {**(model_params or {}), **engine_params}
 		return RapidOCR(params=all_params)
 

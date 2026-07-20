@@ -463,10 +463,11 @@ def build_speed_candidates(raw_text: str, max_speed_kmh: float) -> list[float]:
 	return sorted(candidates)
 
 
-def _get_model_params(variant: str) -> dict | None:
+def _get_model_params(variant: str, engine_type: str = "onnxruntime") -> dict | None:
 	"""Get RapidOCR params dict for the model variant. Returns None if unsupported.
 
 	variant: "v6_tiny" | "v6_small"
+	engine_type: "onnxruntime" | "tensorrt" | "paddle"
 	"""
 	_ensure_rapidocr_imported()
 	size = variant.replace("v6_", "")
@@ -474,6 +475,7 @@ def _get_model_params(variant: str) -> dict | None:
 	model_type = model_map.get(size)
 	if model_type is None:
 		return None
+	_et = {"tensorrt": _EngineType.TENSORRT}.get(engine_type, _EngineType.ONNXRUNTIME)
 	return {
 		"Global.use_det": False,
 		"Global.use_cls": False,
@@ -481,8 +483,8 @@ def _get_model_params(variant: str) -> dict | None:
 		"Rec.model_type": model_type,
 		"Det.ocr_version": _OCRVersion.PPOCRV6,
 		"Rec.ocr_version": _OCRVersion.PPOCRV6,
-		"Det.engine_type": _EngineType.ONNXRUNTIME,
-		"Rec.engine_type": _EngineType.ONNXRUNTIME,
+		"Det.engine_type": _et,
+		"Rec.engine_type": _et,
 		"Rec.rec_batch_num": 12,
 	}
 
