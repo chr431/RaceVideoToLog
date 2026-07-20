@@ -17,7 +17,7 @@ _gpu_params: dict = {}
 
 # 后端优先级：用户选择 → 回退链
 _BACKEND_FALLBACK: dict[str, list[str]] = {
-	"auto": ["CUDA", "CPU"],
+	"auto": ["TensorRT", "CUDA", "CPU"],
 	"cuda": ["CUDA", "CPU"],
 	"tensorrt": ["TensorRT", "CUDA", "CPU"],
 	"cpu":  ["CPU"],
@@ -148,14 +148,20 @@ def _register_gpu_dlls() -> None:
 	for _dll_path in _cudnn_dlls:
 		_load_dll(_dll_path)
 
-	# ── 2b. 定位 TensorRT 安装目录 ──
-	_trt_base = r"C:\Program Files\NVIDIA\TensorRT-10.16.1.11"
-	_trt_bin = _os.path.join(_trt_base, "bin")
-	_trt_lib = _os.path.join(_trt_base, "lib")
-	if not _os.path.isdir(_trt_bin):
-		_trt_base = None
-		_trt_bin = None
-		_trt_lib = None
+	# ── 2b. 定位 TensorRT 安装目录（扫描任意版本）──
+	_trt_base: str | None = None
+	_trt_bin: str | None = None
+	_trt_lib: str | None = None
+	_trt_search = r"C:\Program Files\NVIDIA"
+	if _os.path.isdir(_trt_search):
+		for _entry in _os.listdir(_trt_search):
+			if _entry.lower().startswith("tensorrt-"):
+				_candidate_bin = _os.path.join(_trt_search, _entry, "bin")
+				if _os.path.isdir(_candidate_bin):
+					_trt_base = _os.path.join(_trt_search, _entry)
+					_trt_bin = _candidate_bin
+					_trt_lib = _os.path.join(_trt_base, "lib")
+					break
 
 	# ── 4. 注册 DLL 搜索目录（Windows 8.1+ 推荐方式）──
 	if _cuda_bin:
@@ -226,16 +232,6 @@ def select_backend(preferred: str = "auto") -> str:
 
 	_ensure_gpu_initialized()
 
-	try:
-		import onnxruntime as ort
-	except Exception:
-		logger.warning("无法导入 onnxruntime，使用 CPU 后端")
-		_gpu_backend = "CPU"
-		_gpu_params = {"EngineConfig.onnxruntime.use_cuda": False}
-		config._gpu_backend = "CPU"
-		return _gpu_backend
-
-	available = set(ort.get_available_providers())
 	chain = _BACKEND_FALLBACK.get(preferred.lower(), _BACKEND_FALLBACK["auto"])
 	chosen: str | None = None
 
@@ -248,10 +244,13 @@ def select_backend(preferred: str = "auto") -> str:
 			except Exception:
 				continue
 		elif candidate == "CUDA":
-			ep_name = "CUDAExecutionProvider"
-			if ep_name in available:
-				chosen = candidate
-				break
+			try:
+				import onnxruntime as ort
+				if "CUDAExecutionProvider" in set(ort.get_available_providers()):
+					chosen = "CUDA"
+					break
+			except Exception:
+				continue
 		else:
 			chosen = "CPU"
 			break
