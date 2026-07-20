@@ -3,8 +3,10 @@
 ## 项目概述
 
 从赛车视频中 OCR 提取速度数字，输出时间-速度-距离 CSV 文件。
-- GPU (CUDA) / CPU 双后端
-- GUI (PySide6 + qfluentwidgets Fluent Design) + CLI 无头模式
+
+- decord (NVDEC) 硬件加速视频解码，比 cv2 快 ~60%
+- GPU (CUDA) / CPU 双后端，RapidOCR 3.9.1 + ONNX Runtime
+- GUI (PySide6 + PySide6-Fluent-Widgets Fluent Design) + CLI 无头模式
 - 两段式人工审核：pass1 轻量纠错 → 人工标记 → pass2 重新纠错
 - 物理约束纠错 + 数据分析对比
 
@@ -226,7 +228,7 @@ OCR 读到不完整数字 (如 "21" 而邻居约 221) 时自动推断缺失位�
 ## CSV 格式
 
 ```
-# RaceVideoToLog v2.4.0
+# RaceVideoToLog v2.5.0
 # video_hash=..., video=...
 # roi=..., format=..., frame_start=, frame_end=
 # max_speed=..., max_accel=..., div=..., target_h=..., pad=..., buffer=...

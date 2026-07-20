@@ -92,6 +92,68 @@ def _ensure_rapidocr_imported():
 	if _RapidOCR is None:
 		from rapidocr import RapidOCR as _R, EngineType as _ET, ModelType as _MT, OCRVersion as _OV
 		_RapidOCR = _R; _EngineType = _ET; _ModelType = _MT; _OCRVersion = _OV
+		_patch_rapidocr_init()
+
+# ── Monkey-patch: 避免加载不需要的 det/cls 模型 ──
+_RAPIDOCR_PATCHED = False
+
+def _patch_rapidocr_init():
+	"""Monkey-patch RapidOCR._initialize 以跳过未使用的 det/cls 模型加载。
+
+	rapidocr 3.9.1 在 _initialize 中无条件创建 TextDetector 和 TextClassifier，
+	即使 use_det=False / use_cls=False 也会加载对应的 ONNX 模型（浪费 GPU 显存和初始化时间）。
+	"""
+	global _RAPIDOCR_PATCHED
+	if _RAPIDOCR_PATCHED:
+		return
+	_RAPIDOCR_PATCHED = True
+
+	_ensure_rapidocr_imported()
+
+	from rapidocr.ch_ppocr_det import TextDetector
+	from rapidocr.ch_ppocr_cls import TextClassifier
+	from rapidocr.ch_ppocr_rec import TextRecognizer
+	from rapidocr.cal_rec_boxes import CalRecBoxes
+	from rapidocr.utils.load_image import LoadImage
+
+	def _patched_initialize(self, cfg):
+		self.text_score = cfg.Global.text_score
+		self.min_height = cfg.Global.min_height
+		self.width_height_ratio = cfg.Global.width_height_ratio
+
+		self.use_det = cfg.Global.use_det
+		if self.use_det:
+			cfg.Det.engine_cfg = cfg.EngineConfig[cfg.Det.engine_type.value]
+			cfg.Det.model_root_dir = cfg.Global.model_root_dir
+			self.text_det = TextDetector(cfg.Det)
+		else:
+			self.text_det = None
+
+		self.use_cls = cfg.Global.use_cls
+		if self.use_cls:
+			cfg.Cls.engine_cfg = cfg.EngineConfig[cfg.Cls.engine_type.value]
+			cfg.Cls.model_root_dir = cfg.Global.model_root_dir
+			self.text_cls = TextClassifier(cfg.Cls)
+		else:
+			self.text_cls = None
+
+		self.use_rec = cfg.Global.use_rec
+		cfg.Rec.engine_cfg = cfg.EngineConfig[cfg.Rec.engine_type.value]
+		cfg.Rec.font_path = cfg.Global.font_path
+		cfg.Rec.model_root_dir = cfg.Global.model_root_dir
+		self.text_rec = TextRecognizer(cfg.Rec)
+
+		self.load_img = LoadImage()
+		self.max_side_len = cfg.Global.max_side_len
+		self.min_side_len = cfg.Global.min_side_len
+		self.return_word_box = cfg.Global.return_word_box
+		self.return_single_char_box = cfg.Global.return_single_char_box
+		self.cal_rec_boxes = CalRecBoxes()
+
+		self.cfg = cfg
+
+	_RapidOCR._initialize = _patched_initialize
+	logger.info("RapidOCR patched: det/cls model loading conditional on use_det/use_cls")
 # ═══════════════════════════════════════════════════════════
 
 # SOURCE_TO_KMH 已从 config 导入

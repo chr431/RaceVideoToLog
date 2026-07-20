@@ -25,6 +25,8 @@ hiddenimports = [
     'numpy._core.umath', 'numpy._core._methods',
     # rapidocr 内部依赖
     'yaml',
+    # decord
+    'decord',
     # Project modules
     'pipeline', 'correction',
 ]
@@ -39,6 +41,10 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 # qfluentwidgets (Fluent Design 组件库)
 tmp_ret = collect_all('qfluentwidgets')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+
+# decord（NVDEC 硬件加速视频解码）
+tmp_ret = collect_all('decord')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 # PySide6 (Qt 6 GUI) — 只收集核心模块 + qfluentwidgets 依赖

@@ -1,3 +1,30 @@
+## v2.5.0 更新日志
+
+### 🎬 decord NVDEC 硬件加速视频解码
+
+- **decord 替代 cv2.VideoCapture**：视频解码使用 decord (NVDEC GPU 硬件加速)，纯解码速度提升 54-64%
+- **解决 DLL 兼容问题**：decord 捆绑的 FFmpeg 4.x DLL 与 ONNX Runtime 不再冲突（通过正确的导入顺序）
+- **简化 producer 逻辑**：decord 支持随机访问 `vr[i]`，无需 cv2 的 grab/retrieve 顺序读取模式
+- GUI 预览保持 cv2（单帧预览无需 decord，且避免导入顺序问题）
+
+### ⚡ RapidOCR 模型加载优化
+
+- **Monkey-patch RapidOCR._initialize**：跳过未使用的 det/cls 模型加载（`use_det=False` / `use_cls=False`）
+- 减少 2 个 ONNX CUDA session 的初始化开销和 GPU 显存占用
+
+### 📦 依赖变更
+
+- 新增：`decord` — NVDEC 硬件加速视频解码
+- 移除替代：不再使用 `cv2.VideoCapture` 进行视频读取（cv2 保留用于图像预处理）
+
+### 🧹 代码清理
+
+- `pipeline.py`：移除 cv2 VideoCapture 回退路径，100% decord
+- `_try_import_decord()` 移除（decord 现为必需依赖）
+- 版本号 v2.4.0 → v2.5.0
+
+---
+
 ## v2.4.0 更新日志
 
 ### 🚀 双模型流水线
