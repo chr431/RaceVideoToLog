@@ -117,10 +117,15 @@ class _ExportThread(QThread):
 			finally:
 				done.set()
 
-		t = threading.Thread(target=_worker, daemon=False)
+		t = threading.Thread(target=_worker, daemon=True)
 		t.start()
-		done.wait()
-		t.join()
+		while not done.wait(1.0):
+			if self._cancel_flag:
+				done.set()
+				t.join(2.0)
+				result_container["cancelled"] = True
+				break
+		t.join(2.0)
 
 		if error_container:
 			self._error.emit(str(error_container[0]))
@@ -169,7 +174,6 @@ class RaceVideoToLogApp(QMainWindow):
 		self._export_thread: _ExportThread | None = None
 		self.correction_mode: str = "auto"
 		self.speed_format: str = "km/h"
-		self._debug_log: bool = False
 
 		# 人工审核暂存
 		self._review_rows: list = []
@@ -341,7 +345,6 @@ class RaceVideoToLogApp(QMainWindow):
 		self.backend_combo = ComboBox()
 		self.backend_combo.addItems(["自动", "TensorRT", "CPU"]); self.backend_combo.setCurrentIndex(0)
 		pl.addWidget(self.backend_combo, 3, 1)
-		self.debug_cb = CheckBox("调试日志"); pl.addWidget(self.debug_cb, 3, 2, 1, 2)
 		pl.addWidget(BodyLabel("OCR 模型"), 4, 0)
 		self.model_combo = ComboBox()
 		self.model_combo.addItems(["v6_tiny", "v6_small"])
@@ -452,9 +455,6 @@ class RaceVideoToLogApp(QMainWindow):
 
 	def _on_fmt(self, fmt: str) -> None: self.speed_format = fmt
 	def _on_mode(self, mode: str) -> None: self.correction_mode = mode
-	def _log(self, msg: str) -> None:
-		if self._debug_log: print(f"[DEBUG] {msg}", flush=True)
-
 	# ═══════════════════ 主题切换 ═══════════════════
 
 	def _disable_spin_flyout(self, spin) -> None:
@@ -713,8 +713,6 @@ class RaceVideoToLogApp(QMainWindow):
 		_reset_backend(); self._release_engines()
 		keys = ["auto", "tensorrt", "cpu"]; key = keys[self.backend_combo.currentIndex()]
 		actual = _select_backend(key)
-		if key == "cuda" and actual != "CUDA":
-			QMessageBox.warning(self, "后端不可用", f"CUDA 不可用。\n已回退为 {actual}。")
 		_backend_labels = {"TensorRT": "TensorRT (GPU)", "CUDA": "CUDA (GPU)", "CPU": "CPU"}
 		self._status_label.setText(f"OCR 后端: {_backend_labels.get(actual, actual)}")
 

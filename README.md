@@ -73,7 +73,7 @@ RaceVideoToLog/
 ├── correction.py        # 物理约束纠错流水线
 ├── ocr_engine.py        # OCR 引擎、预处理、锚点选择、Flag 枚举
 ├── config.py            # 集中配置（常量、颜色、默认值）
-├── gpu_setup.py         # GPU DLL 加载 + ONNX 后端选择
+├── gpu_setup.py         # GPU DLL 加载 + TensorRT/CPU 后端选择
 ├── theme_manager.py     # 主题回调管理器
 ├── headless.py          # CLI 入口
 ├── RaceVideoToLog.spec  # PyInstaller 打包配置
@@ -88,8 +88,8 @@ CSV 头包含完整处理参数和统计信息：
 # RaceVideoToLog v2.5.0
 # video_hash=94ac7e06b58914e7, video=test4.mp4
 # roi=862,945,957,1003, format=km/h, frame_start=114, frame_end=6317
-# max_speed=400.0, max_accel=70.0, div=1, target_h=24.0, pad=0.0, buffer=8
-# backend=CUDA, model=v6_small
+# max_speed=400.0, max_accel=70.0, div=1, target_h=24.0, pad=0.0, buffer=16
+# backend=TensorRT, model=v6_small
 # auto_anchor=1
 # stats: total=6203, anchors=4265, corrected=318
 # timing: ocr=23.5s, correction=0.4s, integrate_write=0.0s
@@ -133,8 +133,8 @@ python RaceVideoToLog.py [video] [options]
   --max-accel N              最大加速度 m/s² (默认: 50)
   --target-h N               OCR 高度 px (默认: 24)
   --pad N                    边缘填充 px (默认: 0)
-  --buffer N                 缓冲队列大小 (默认: 8)
-  --backend {auto,cuda,cpu}  OCR 后端 (默认: auto)
+  --buffer N                 缓冲队列大小 (默认: 16)
+  --backend {auto,tensorrt,cpu}  OCR 后端 (默认: auto)
   --ocr-model {v6_tiny,v6_small}  OCR 模型 (默认: v6_tiny)
   --reocr-model {v6_tiny,v6_small}  重OCR 模型 (默认: v6_small)
   --from-csv PATH            从 CSV 文件头导入设置
@@ -147,10 +147,10 @@ python RaceVideoToLog.py [video] [options]
 
 ## 性能
 
-- ONNX Runtime 1.27 + CUDA 12.x，PP-OCRv6_small 模型
-- 单帧推理 ~4ms（~250 fps），满足实时处理需求
-- 可选 `v6_tiny` 模型：推理速度提升 ~39%，适合低配置 GPU
-- 视频解码与 OCR 推理流水线并行，最大化 GPU 利用率
+- TensorRT 10.x FP16 + CUDA 12.x，PP-OCRv6_small 模型
+- 单帧推理 ~2.5ms（~400 fps）
+- 可选 `v6_tiny` 模型：推理 ~1.2ms（~850 fps）
+- decord NVDEC 硬件解码 + TensorRT 推理流水线并行
 
 ## 打包
 
@@ -159,7 +159,7 @@ pip install pyinstaller
 python -m PyInstaller RaceVideoToLog.spec --noconfirm
 ```
 
-生成 `dist/RaceVideoToLog/` (onedir 模式)。GPU 用户需自行安装 CUDA Toolkit + cuDNN。
+生成 `dist/RaceVideoToLog/` (onedir 模式)。GPU 用户需自行安装 CUDA Toolkit 12.x + TensorRT 10.x 并加入 PATH。
 
 也可双击 `build_exe.bat` 一键构建。
 

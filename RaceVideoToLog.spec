@@ -35,7 +35,7 @@ hiddenimports = [
 tmp_ret = collect_all('rapidocr')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
-# onnxruntime（CPU / CUDA）
+# onnxruntime（CPU provider；TensorRT 由 rapidocr 直接调用）
 tmp_ret = collect_all('onnxruntime')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
@@ -55,7 +55,7 @@ for _qt_mod in ['PySide6.QtWidgets', 'PySide6.QtCore', 'PySide6.QtGui',
 
 # ── 精简：移除不需要的文件 ──
 # v5_server 模型 (已从 UI 移除，省 165MB)
-# DirectML provider (仅 CUDA 需要)
+# DirectML provider (未使用)
 _EXCLUDE_FILES = {
     # v5 models (replaced by v6_small)
     'ch_PP-OCRv5_mobile_det_infer.onnx', 'ch_PP-OCRv5_mobile_rec_infer.onnx',

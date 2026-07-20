@@ -87,9 +87,7 @@ class ProcessingPipeline:
 		self._timing: dict[str, float] = {}
 		# ── 重 OCR 缓存（绑定到 Pipeline 实例生命周期）──
 		self._reocr_cache: dict[int, set[float]] = {}
-		# ── 调试模式：在 CSV 中输出原始 OCR 文本 ──
-		self._debug_raw_text: bool = False
-
+	
 	# ═══════════════ 公开接口 ═══════════════
 
 	def run_auto(self, output_path: str | Path) -> None:
@@ -444,14 +442,6 @@ class ProcessingPipeline:
 			if timing_str:
 				fh.write(f"# timing: {timing_str}\n")
 			w = csv.writer(fh)
-			# 调试模式：增加 raw_text 列
-			if self._debug_raw_text and self._observations:
-				for i, row in enumerate(rows):
-					raw_text = (self._observations[i].raw_text
-								if i < len(self._observations) else "")
-					w.writerow([f"{row[0]:.2f}", f"{row[1]:.2f}",
-							   f"{row[2]:.2f}", str(row[3]), raw_text])
-			else:
-				for row in rows:
-					w.writerow([f"{row[0]:.2f}", f"{row[1]:.2f}",
-							   f"{row[2]:.2f}", str(row[3])])
+			for row in rows:
+			w.writerow([f"{row[0]:.2f}", f"{row[1]:.2f}",
+					   f"{row[2]:.2f}", str(row[3])])

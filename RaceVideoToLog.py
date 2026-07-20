@@ -1,6 +1,6 @@
 """RaceVideoToLog — 赛车视频速度 OCR 提取工具。
 
-从车载视频中实时 OCR 识别速度数字，支持 GPU (CUDA) / CPU 两种后端，
+从车载视频中实时 OCR 识别速度数字，支持 GPU (TensorRT) / CPU 两种后端，
 输出时间-速度-距离 CSV 文件。
 
 用法:

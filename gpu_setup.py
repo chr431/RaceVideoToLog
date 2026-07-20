@@ -1,6 +1,7 @@
-"""GPU 加速配置 — CUDA/cuDNN DLL 加载 + 后端选择。
+"""GPU 加速配置 — 后端选择 + DLL 搜索路径注册。
 
-提取自 ocr_engine.py，改为延迟初始化。适配 rapidocr 3.x 的 params-based 配置。
+从 PATH 扫描 CUDA / TensorRT 目录，注册到 Windows DLL 搜索路径，
+并提供自动后端选择（TensorRT → CPU 回退链）。
 """
 from __future__ import annotations
 import logging
@@ -34,7 +35,7 @@ def get_engine_params() -> dict:
 	return dict(_gpu_params)
 
 def get_engine_type() -> str:
-	"""返回引擎类型字符串 ('onnxruntime' | 'tensorrt' | 'paddle')。"""
+	"""返回引擎类型字符串 ('tensorrt' | 'onnxruntime')。"""
 	return "tensorrt" if _gpu_backend == "TensorRT" else "onnxruntime"
 
 

@@ -39,7 +39,7 @@ logger = logging.getLogger("RaceVideoToLog.ocr_engine")
 
 # ── 导出列表：包含 _ 前缀的私有符号供 RaceVideoToLog.py / headless.py 使用 ──
 __all__ = [
-	"SpeedObservation", "VideoMetadata", "RapidOCR",
+	"SpeedObservation", "VideoMetadata",
 	"extract_speed_value", "convert_speed_to_kmh", "clamp_region",
 	"build_speed_candidates",
 	"normalize_ocr_text", "format_duration", "codec_from_fourcc",
@@ -467,7 +467,7 @@ def _get_model_params(variant: str, engine_type: str = "onnxruntime") -> dict | 
 	"""Get RapidOCR params dict for the model variant. Returns None if unsupported.
 
 	variant: "v6_tiny" | "v6_small"
-	engine_type: "onnxruntime" | "tensorrt" | "paddle"
+	engine_type: "onnxruntime" | "tensorrt"
 	"""
 	_ensure_rapidocr_imported()
 	size = variant.replace("v6_", "")
