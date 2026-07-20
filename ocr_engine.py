@@ -155,9 +155,11 @@ def _patch_rapidocr_init():
 	_RapidOCR._initialize = _patched_initialize
 	logger.info("RapidOCR patched: det/cls model loading conditional on use_det/use_cls")
 
-	# ── PaddlePaddle init_predictor 优化：disable glog + enable IR optimization ──
+	# ── PaddlePaddle 推理优化：减少每次调用的框架开销 ──
 	try:
 		from rapidocr.inference_engine.paddle.main import PaddleInferSession
+
+		# 1) 禁用 glog 输出
 		_orig_init_pred = PaddleInferSession.init_predictor
 		def _opt_init_pred(self, infer_opts, ocr_version):
 			infer_opts.enable_memory_optim()
@@ -165,7 +167,24 @@ def _patch_rapidocr_init():
 			from paddle import inference
 			return inference.create_predictor(infer_opts)
 		PaddleInferSession.init_predictor = _opt_init_pred
-		logger.info("PaddlePaddle init_predictor optimized (glog off, IR opt on)")
+
+		# 2) 缓存 tensor handles + 降低 try_shrink_memory 频率
+		_orig_call = PaddleInferSession.__call__
+		def _opt_call(self, img):
+			if not hasattr(self, "_cached_input"):
+				self._cached_input = self.get_input_tensors()
+				self._cached_output = self.get_output_tensors()
+				self._call_n = 0
+			self._cached_input.copy_from_cpu(img)
+			self.predictor.run()
+			outputs = [t.copy_to_cpu() for t in self._cached_output]
+			self._call_n += 1
+			if self._call_n % 100 == 0:
+				self.predictor.try_shrink_memory()
+			return outputs[0]
+		PaddleInferSession.__call__ = _opt_call
+
+		logger.info("PaddlePaddle inference optimized (glog off, cached handles, shrink/100)")
 	except Exception:
 		pass
 # ═══════════════════════════════════════════════════════════
