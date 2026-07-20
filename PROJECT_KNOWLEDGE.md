@@ -34,25 +34,29 @@ tests/
 
 ### 依赖
 
-- PySide6 6.9+ (Qt 6 GUI)
-- qfluentwidgets 1.11+ (Fluent Design 组件库)
-- rapidocr-onnxruntime (PP-OCRv6 ONNX 模型)
-- onnxruntime-gpu (CUDA 推理, ORT 1.27+) / onnxruntime (CPU fallback)
-- opencv-python-headless (图像 I/O 和预处理)
-- matplotlib (数据分析绘图, QtAgg 后端)
-- numpy (数值计算)
-- pyinstaller (打包, 开发依赖)
+- **rapidocr 3.9.1** (统一 OCR 包，取代已弃用的 rapidocr-onnxruntime)
+- **onnxruntime-gpu 1.27+** (CUDA 推理) / onnxruntime (CPU fallback)
+- **opencv-python-headless 5.x** (图像预处理: resize, copyMakeBorder, cvtColor)
+- **decord 0.6.0** (NVDEC 硬件加速视频解码，比 cv2 快 ~60%)
+  - ⚠️ 必须在 ORT 之后导入，否则 DLL 初始化失败
+  - decord 无 CPU 软件解码；无 GPU 时自动回退 cv2.VideoCapture
+- **PySide6 6.11+** (Qt 6 GUI) + **PySide6-Fluent-Widgets 1.11+** (Fluent Design)
+- **matplotlib 3.10+** (数据分析绘图, QtAgg 后端)
+- **numpy 2.x** (数值计算)
+- **pyinstaller** (打包, 开发依赖)
 
 ### OCR 模型
 
-- 默认组合 v6_tiny (主 OCR) + v6_small (重 OCR): PP-OCRv6 ONNX 模型，GUI 和 CLI 均支持独立选择
-- 预处理: 灰度化 + 缩放到 target_h (默认 24px) → 转 BGR → PP-OCR 内置归一化
+- 默认组合 v6_tiny (主 OCR) + v6_small (重 OCR): PP-OCRv6 ONNX 模型
+- **只用 rec 模型**（`use_det=False` + `use_cls=False`）：ROI 已紧密裁剪，不需要检测
+- **Monkey-patch** `RapidOCR._initialize`：跳过 det/cls 模型的 ONNX session 创建，
+  减少 2 个 CUDA session（~10MB 显存 + 初始化时间）
+- 预处理: BGR resize 到 target_h (默认 24px) + cv2.copyMakeBorder 填充
+  - ⚠️ rapidocr 3.9.1 识别模型需要 BGR 输入，不能用灰度
 - 重 OCR: h=32（与主 OCR h=24 不同高度，约 10% 概率产生不同读数）
 - 双模型策略 (已验证): tiny 主 OCR + small 重 OCR 比全程 small 快 28%，
-  99.6% 帧差异 <2 km/h，平均差异 0.022 km/h。tiny 的 OCR 快 42%（17s vs 29s），
-  但原始 OCR 遗漏略多导致纠错负担增加（9s vs 6s），净效果仍然正面
-- 已移除: OCR 原生置信度 (检测置信度 ≠ 识别准确度，本场景无区分力)；
-  多重预处理变体 (OTSU/CLAHE/反转, 24.8x 更慢仅多覆盖 9.7%)
+  99.6% 帧差异 <2 km/h，平均差异 0.022 km/h
+- 已移除: OCR 原生置信度、多重预处理变体 (OTSU/CLAHE/反转)
 
 ## ProcessingPipeline 架构 (pipeline.py)
 
@@ -69,6 +73,10 @@ tests/
 
 ### 关键组件
 
+- **视频源**: decord (NVDEC) 优先，失败时自动回退 cv2.VideoCapture (CPU)
+  - decord 使用 `cpu(0)` 上下文（GPU 解码 + 复制到 CPU 内存），支持随机访问 `vr[i]`
+  - cv2 回退使用 `grab()`/`retrieve()` 顺序读取
+  - 导入顺序：ORT (select_backend) → decord（二者颠倒会导致 DLL init 失败）
 - 生产者-消费者 OCR：Queue 流水线重叠 I/O 与 GPU 推理
 - 重 OCR 缓存：绑定到 Pipeline 实例生命周期，基于帧图像哈希
 - 性能计时：`_timing` dict 记录 OCR/纠错/写入耗时
@@ -100,35 +108,46 @@ PaddlePaddle 框架开销（设备同步、executor 调度）对小模型每次�
 
 ### 视频解码方案
 
-| 方案 | 速度 | ONNX兼容 | 说明 |
+| 方案 | 纯解码速度 | ONNX兼容 | 说明 |
 | --- | --- | --- | --- |
-| cv2 FFMPEG | ~450fps | ✅ | 当前方案 |
-| decord 软件 | 600-750fps | ❌ | FFmpeg DLL 与 ORT 冲突 |
+| **decord (NVDEC) 当前方案** | **734-767fps** | ✅ | ORT 先导入即可共存 |
+| cv2 FFMPEG (CPU 回退) | 457-497fps | ✅ | 无 GPU 时自动启用 |
 | decord 子进程 | ~250fps | ✅ | IPC 开销抵消解码收益 |
 | PyAV | 133-203fps | ✅ | 太慢 |
 
-**decord+ONNX DLL 冲突**: decord 捆绑 FFmpeg 4.x DLL 与 ORT CUDA 依赖链冲突。
-**子进程隔离**: Pipe/共享内存传帧增加 ~1ms/帧 IPC 开销, 整体反降 25%。
+**decord vs cv2 纯解码速度 (1080p)**:
 
-### 全管线吞吐量 (v6_tiny, test4, div=1)
+| 编码 | cv2 | decord | 提升 |
+| --- | --- | --- | --- |
+| HEVC (test/test2) | ~457fps | ~743fps | **+63%** |
+| H264 (test3/test4) | ~482fps | ~758fps | **+57%** |
+
+**decord + ONNX Runtime 兼容性**:
+- decord 捆绑 FFmpeg 4.x DLL (`avcodec-58.dll`, `avutil-56.dll` 等)
+- **冲突原因**: decord 先加载的 VC++ runtime 导致 ORT 的 `onnxruntime_pybind11_state` DLL 初始化失败
+- **解决**: 导入顺序 ORT → decord（`select_backend()` 先于 `_run_ocr()` 调用）
+- **CPU 回退**: decord 没有软件解码路径；`cpu(0)` 仍用 NVDEC 硬件，只是帧数据放 CPU 内存
+  - 无 GPU 时自动回退 `cv2.VideoCapture`
+
+### 全管线吞吐量 (v6_tiny, test.mp4, div=2)
 
 | 阶段 | 吞吐量 |
 | --- | --- |
-| 纯 OCR 推理 | 1118fps |
-| 视频解码上限 | 458fps |
-| 管线实际 (buffer=16) | ~340fps |
-| 管线实际 (buffer=8) | ~310fps |
+| 纯 OCR 推理 | ~534fps |
+| decord 视频解码 | ~750fps |
+| 管线实际 OCR 阶段 | ~310fps |
 
-瓶颈: Python 线程同步 (Queue mutex + GIL) 造成 ~26% 效率损失。
+瓶颈: OCR ONNX 推理是管线限速步骤，非视频解码。Producer-consumer Queue 缓冲已掩盖解码延迟。
 
 ### 已排除的无效优化
 
-- 多 consumer 并行: cuDNN crash
+- 多 consumer 并行: cuDNN crash (ORT 1.27 已修复但无收益)
 - 分离 det/rec 线程: GPU 上下文切换开销 > 收益
 - Lock-free SPSC: Python spin-wait 烧 CPU
 - 预解码全帧: 不如流水线
 - CUDA Graph: 需绕过 RapidOCR
 - FP16/INT8: 需模型转换
+- decord 子进程隔离: IPC 开销 ~1ms/帧，整体反降 25%
 
 ### 已实施的优化
 
@@ -136,8 +155,10 @@ PaddlePaddle 框架开销（设备同步、executor 调度）对小模型每次�
 | --- | --- |
 | v6_tiny 默认主 OCR | 推理 2.2x 提速 |
 | buffer 8→16 | 管线 ~7% 提速 |
-| 跳过 detection 模型 | GPU 显存 -8MB |
+| skip det + cls 模型加载 | 初始化快 ~200ms, GPU 显存 -10MB |
 | 默认 tiny+small 组合 | 整体 ~28% 提速 |
+| decord NVDEC 视频解码 | 纯解码 +60%，管线瓶颈不在此 |
+| cv2 CPU 自动回退 | 无 GPU 环境零配置运行 |
 
 ## GUI 架构
 
@@ -276,7 +297,25 @@ python RaceVideoToLog.py --from-csv existing.csv test4.mp4 -o out.csv
 # 数据分析
 python RaceVideoToLog.py --analysis csv1.csv csv2.csv --analysis-out prefix
 
-# 打包
+# 打包 (自动安装 PyInstaller + 清理 + 构建)
 build_exe.bat
 # 或手动: python -m PyInstaller RaceVideoToLog.spec --noconfirm
 ```
+
+## 打包系统 (RaceVideoToLog.spec + build_exe.bat)
+
+### build_exe.bat
+
+一键构建脚本：自动创建/激活 .venv → 检查安装 PyInstaller → 清理旧构建 → 运行 PyInstaller。
+需在项目根目录运行。
+
+### PyInstaller 配置要点
+
+- **CUDA DLL 不打包**：构建时从 PATH 移除 CUDA 目录，运行时用户自行安装 CUDA Toolkit
+- **NVIDIA DLL 过滤**：`_NVIDIA_DLL_PREFIXES` 移除 cublas/cudnn 等（用户系统提供）
+- **Qt6 精简**：仅打包 Widgets/Core/Gui/Xml/Svg，移除 Quick/Qml/Multimedia/WebEngine 等
+- **PySide6 FFmpeg DLL 排除**：`avcodec-61.dll`, `avformat-61.dll` 等（decord 提供自己的 FFmpeg 4.x）
+- **decord FFmpeg DLL 保留 + UPX 排除**：`avcodec-58.dll`, `avformat-58.dll`, `avutil-56.dll`, `swresample-3.dll`, `swscale-5.dll`
+- **不需要的 ONNX 模型排除**：v5/v3 旧版、det 模型、medium 变体、DirectML/TensorRT provider
+- **onnxruntime 非推理模块排除**：transformers/tools/quantization/datasets/backend
+- **scipy/tkinter 完全排除**（SG 滤波已用纯 numpy 替代）
