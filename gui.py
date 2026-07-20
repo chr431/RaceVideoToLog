@@ -93,6 +93,7 @@ class _ExportThread(QThread):
 					frame_start=self.app.frame_start_edit.text(),
 					frame_end=self.app.frame_end_edit.text(),
 					progress_cb=self._emit_progress,
+					cancel_check=self._check_cancel,
 				)
 				if mode == "auto":
 					pipeline.run_auto(self._output_path)

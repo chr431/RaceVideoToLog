@@ -56,7 +56,8 @@ class ProcessingPipeline:
 				 backend: str, ocr_model: str, speed_format: str,
 				 frame_start: str = "", frame_end: str = "",
 				 progress_cb: ProgressFn | None = None,
-				 reocr_model: str | None = None):
+				 reocr_model: str | None = None,
+				 cancel_check: "Callable[[], None] | None" = None):
 		self._video_path = Path(video_path)
 		self._roi = roi
 		self._max_speed = max_speed
@@ -70,6 +71,7 @@ class ProcessingPipeline:
 		self._ocr_model = ocr_model
 		self._speed_format = speed_format
 		self._frame_start = frame_start
+		self._cancel_check = cancel_check
 		self._frame_end = frame_end
 		self._progress = progress_cb
 
@@ -206,6 +208,8 @@ class ProcessingPipeline:
 	# ═══════════════ 内部 ═══════════════
 
 	def _emit(self, msg: str, pct: float) -> None:
+		if self._cancel_check:
+			self._cancel_check()
 		if self._progress:
 			self._progress(msg, pct)
 
@@ -330,6 +334,8 @@ class ProcessingPipeline:
 					for _fi in range(f_start or 0, min(_end_limit, total_video_frames)):
 						if (_fi - (f_start or 0)) % frame_step != 0:
 							continue
+						if self._cancel_check and _fi % 10 == 0:
+							self._cancel_check()
 						_frame = _vr[_fi].asnumpy()
 						_ts = _fi / fps if fps > 0 else 0.0
 						_crop = _frame[y1:y2 + 1, x1:x2 + 1].copy()
@@ -339,6 +345,8 @@ class ProcessingPipeline:
 				else:
 					fi = 0
 					while fi < total_video_frames:
+						if self._cancel_check and fi % 10 == 0:
+							self._cancel_check()
 						if fi >= _end_limit:
 							break
 						if f_start is not None and fi < f_start:
