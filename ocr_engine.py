@@ -221,8 +221,11 @@ def extract_speed_value(ocr_result) -> tuple[float | None, str | None]:
 		return None, None
 
 	# RapidOCR 3.x TextRecOutput (use_det=False 时返回)
-	if hasattr(ocr_result, "text"):
-		text = str(ocr_result.text).strip()
+	if hasattr(ocr_result, "txts"):
+		txts = ocr_result.txts
+		if not txts or not txts[0]:
+			return None, None
+		text = str(txts[0]).strip()
 		if not text:
 			return None, None
 		normalized = normalize_ocr_text(text).replace(" ", "")
@@ -247,12 +250,20 @@ def extract_speed_value(ocr_result) -> tuple[float | None, str | None]:
 			for item in rec:
 				if isinstance(item, (list, tuple)) and len(item) >= 2:
 					text = str(item[1]).strip()
+				elif hasattr(item, "txts"):
+					if item.txts and item.txts[0]:
+						text = str(item.txts[0]).strip()
+					else:
+						continue
 				elif hasattr(item, "text"):
 					text = str(item.text).strip()
 				else:
 					text = str(item).strip()
 				if text:
 					candidates.append(text)
+		elif hasattr(rec, "txts"):
+			if rec.txts and rec.txts[0]:
+				candidates.append(str(rec.txts[0]).strip())
 		elif hasattr(rec, "text"):
 			candidates.append(str(rec.text).strip())
 		elif isinstance(rec, str):
