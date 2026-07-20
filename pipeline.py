@@ -274,10 +274,10 @@ class ProcessingPipeline:
 		self._timing["integrate_write"] = _time.perf_counter() - t1
 
 	def _run_ocr(self) -> None:
-		"""解码 + OCR：producer decord NVDEC 解码/预处理 → consumer ONNX 推理。
+		"""解码 + OCR：producer 解码(decord/cv2)/预处理 → consumer ONNX 推理。
 
-		Queue 流水线重叠 I/O 与 GPU 推理。decord 通过 NVDEC 硬件加速解码，
-		比 cv2 快 ~60%。对于小 ROI 裁切 (~4ms/帧)，单 ONNX 会话已使 GPU 饱和。
+		Queue 流水线重叠 I/O 与 GPU 推理。decord (NVDEC) 优先，
+		不可用时自动回退 cv2 (CPU)。
 		"""
 		import threading
 		from queue import Queue
@@ -289,13 +289,27 @@ class ProcessingPipeline:
 		frame_step = max(1, self._frame_div)
 		t_start = _time.perf_counter()
 
-		# ── decord video decoder (NVDEC hardware-accelerated) ──
-		from decord import VideoReader as _VR, cpu as _decord_cpu
-		_vr = _VR(str(self._video_path), ctx=_decord_cpu(0))
-		total_video_frames = len(_vr)
-		fps = _vr.get_avg_fps()
-		_first = _vr[0].asnumpy()
-		h, w = _first.shape[:2]
+		# ── 视频源：decord (GPU/NVDEC) 优先，cv2 (CPU) 回退 ──
+		_src_type = "cv2"  # fallback
+		_vr = None
+		_cap: "cv2.VideoCapture | None" = None
+
+		try:
+			from decord import VideoReader as _VR, cpu as _decord_cpu
+			_vr = _VR(str(self._video_path), ctx=_decord_cpu(0))
+			total_video_frames = len(_vr)
+			fps = _vr.get_avg_fps()
+			_first = _vr[0].asnumpy()
+			h, w = _first.shape[:2]
+			_src_type = "decord"
+			logger.info("Video source: decord (NVDEC)")
+		except Exception as _e:
+			logger.info("Video source: cv2 (CPU fallback — %s)", _e)
+			_cap = cv2.VideoCapture(str(self._video_path))
+			total_video_frames = int(_cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+			fps = float(_cap.get(cv2.CAP_PROP_FPS) or 0.0)
+			w = int(_cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+			h = int(_cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
 
 		x1, y1, x2, y2 = clamp_region(*self._roi, w, h)
 		f_start = _parse_int_or_none(self._frame_start)
@@ -309,19 +323,43 @@ class ProcessingPipeline:
 
 		def _producer() -> None:
 			try:
-				for _fi in range(f_start or 0, min(_end_limit, total_video_frames)):
-					if (_fi - (f_start or 0)) % frame_step != 0:
-						continue
-					_frame = _vr[_fi].asnumpy()
-					_ts = _fi / fps if fps > 0 else 0.0
-					_crop = _frame[y1:y2 + 1, x1:x2 + 1].copy()
-					self._raw_frames.append((_ts, _crop))
-					_proc = _preprocess_standard(_crop, target_h, pad)
-					q.put((_ts, _proc))
+				if _src_type == "decord":
+					for _fi in range(f_start or 0, min(_end_limit, total_video_frames)):
+						if (_fi - (f_start or 0)) % frame_step != 0:
+							continue
+						_frame = _vr[_fi].asnumpy()
+						_ts = _fi / fps if fps > 0 else 0.0
+						_crop = _frame[y1:y2 + 1, x1:x2 + 1].copy()
+						self._raw_frames.append((_ts, _crop))
+						_proc = _preprocess_standard(_crop, target_h, pad)
+						q.put((_ts, _proc))
+				else:
+					fi = 0
+					while fi < total_video_frames:
+						if fi >= _end_limit:
+							break
+						if f_start is not None and fi < f_start:
+							_cap.grab(); fi += 1; continue
+						if fi % frame_step != 0:
+							_cap.grab(); fi += 1; continue
+						if not _cap.grab():
+							break
+						ok, frame = _cap.retrieve()
+						if not ok or frame is None:
+							break
+						ts = fi / fps if fps > 0 else 0.0
+						crop = frame[y1:y2 + 1, x1:x2 + 1].copy()
+						self._raw_frames.append((ts, crop))
+						proc = _preprocess_standard(crop, target_h, pad)
+						q.put((ts, proc))
+						fi += 1
 				q.put(None)
 			except Exception as e:
 				errors.append(e)
 				q.put(None)
+			finally:
+				if _cap is not None:
+					_cap.release()
 
 		t = threading.Thread(target=_producer, daemon=True)
 		t.start()
