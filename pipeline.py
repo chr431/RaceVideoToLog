@@ -218,6 +218,8 @@ class ProcessingPipeline:
 			_et = get_engine_type()
 			model_params = _get_model_params(self._ocr_model, _et)
 			all_params = {**(model_params or {}), **engine_params}
+			if _et == "tensorrt":
+				self._emit("加载 TensorRT 引擎（首次使用可能需要几分钟构建引擎）...", 1.5)
 			self._ocr = RapidOCR(params=all_params)
 			# 若指定了不同的重 OCR 模型，创建独立引擎
 			_reocr_model = self._reocr_model or self._ocr_model

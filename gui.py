@@ -730,11 +730,20 @@ class RaceVideoToLogApp(QMainWindow):
 		_reset_backend()
 		keys = ["auto", "cuda", "cpu"]; key = keys[self.backend_combo.currentIndex()]
 		_select_backend(key)
-		from gpu_setup import get_engine_params, get_engine_type
+		from gpu_setup import get_engine_params, get_engine_type, get_setup_advice
 		engine_params = get_engine_params()
 		_et = get_engine_type()
+
+		# 若回退到 CPU 且有 NVIDIA 显卡，给出安装建议
+		_advice = get_setup_advice()
+		if _advice:
+			self._status_label.setText(_advice.split("\n")[0])
+
 		model_params = _get_model_params(self.model_combo.currentText(), _et)
 		all_params = {**(model_params or {}), **engine_params}
+		if _et == "tensorrt":
+			self._status_label.setText("正在加载 TensorRT 引擎（首次使用可能需要几分钟）...")
+			self._status_label.repaint()
 		return RapidOCR(params=all_params)
 
 	def _release_engines(self) -> None:

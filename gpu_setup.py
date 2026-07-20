@@ -38,7 +38,7 @@ _CUDA_DLL_PREFIXES: tuple[str, ...] = (
 
 
 def get_gpu_backend() -> str:
-	"""返回当前实际使用的 GPU 后端名称（CUDA 或 CPU）。"""
+	"""返回当前实际使用的 GPU 后端名称（TensorRT / CUDA / CPU）。"""
 	return _gpu_backend
 
 
@@ -49,6 +49,41 @@ def get_engine_params() -> dict:
 def get_engine_type() -> str:
 	"""返回引擎类型字符串 ('onnxruntime' | 'tensorrt' | 'paddle')。"""
 	return "tensorrt" if _gpu_backend == "TensorRT" else "onnxruntime"
+
+
+def _has_nvidia_gpu() -> bool:
+	"""检测是否存在 NVIDIA GPU（通过驱动）。不依赖 CUDA Toolkit。"""
+	try:
+		import ctypes as _ct
+		_ct.CDLL("nvcuda.dll")
+		return True
+	except (OSError, Exception):
+		pass
+	# Fallback: 检查 WMI
+	try:
+		import subprocess as _sp
+		_result = _sp.run(
+			["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+			capture_output=True, text=True, timeout=10,
+			creationflags=0x08000000 if _os.name == "nt" else 0)
+		return _result.returncode == 0 and _result.stdout.strip()
+	except Exception:
+		pass
+	return False
+
+
+def get_setup_advice() -> str | None:
+	"""返回面向用户的 GPU 加速配置建议。None 表示已在使用 GPU。"""
+	if _gpu_backend != "CPU":
+		return None
+	if not _has_nvidia_gpu():
+		return "未检测到 NVIDIA 显卡，OCR 将使用 CPU 推理。"
+	return (
+		"检测到 NVIDIA 显卡，但未安装 CUDA Toolkit 或 cuDNN，"
+		"OCR 回退至 CPU 推理。\n"
+		"安装 CUDA Toolkit 12.x + cuDNN 9.x 可启用 GPU 加速（约 4-6x 提速）。\n"
+		"详见 README 的「GPU 加速配置」章节。"
+	)
 
 
 def _ensure_gpu_initialized() -> None:

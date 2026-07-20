@@ -3,15 +3,15 @@ import os
 
 from PyInstaller.utils.hooks import collect_all
 
-# ═══════════════════ 构建时屏蔽 CUDA 路径 ═══════════════════
+# ═══════════════════ 构建时屏蔽 CUDA / TensorRT 路径 ═══════════════════
 # PyInstaller 会在"动态库搜索"阶段把 CUDA 系统 DLL 全部打包，
-# 但用户机器已安装 CUDA Toolkit，无需重复打包。
-# 临时从 PATH 中移除 CUDA 相关目录，避免误抓。
+# 但用户机器已安装 CUDA Toolkit / TensorRT，无需重复打包。
+# 临时从 PATH 中移除 CUDA/TensorRT 相关目录，避免误抓。
 _SAVED_PATH = os.environ.get("PATH", "")
+_PATH_BLOCKLIST = {"cuda", "cudnn", "tensorrt"}
 os.environ["PATH"] = ";".join([
     p for p in _SAVED_PATH.split(";")
-    if "cuda" not in p.lower()
-    and "cudnn" not in p.lower()
+    if not any(b in p.lower() for b in _PATH_BLOCKLIST)
 ])
 
 # ═══════════════════ 基础依赖 ═══════════════════
@@ -67,18 +67,24 @@ _EXCLUDE_FILES = {
     'PP-OCRv6_det_tiny.onnx', 'PP-OCRv6_det_small.onnx',
     # v6 extras (medium unused)
     'PP-OCRv6_det_medium.onnx', 'PP-OCRv6_rec_medium.onnx',
+    # TRT engine cache (GPU-specific, rebuilt by user if needed)
+    # Use prefix match below for all .engine files
     # Unused ONNX providers
     'DirectML.dll', 'onnxruntime_providers_tensorrt.dll',
 }
-datas = [(s, d) for s, d in datas if os.path.basename(s) not in _EXCLUDE_FILES]
-binaries = [(s, d) for s, d in binaries if os.path.basename(s) not in _EXCLUDE_FILES]
+datas = [(s, d) for s, d in datas if os.path.basename(s) not in _EXCLUDE_FILES
+         and not os.path.basename(s).endswith('.engine')]
+binaries = [(s, d) for s, d in binaries if os.path.basename(s) not in _EXCLUDE_FILES
+            and not os.path.basename(s).endswith('.engine')]
 
 # matplotlib（数据分析 tab）
 tmp_ret = collect_all('matplotlib')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 # 二次过滤：matplotlib 可能带回部分之前排除的文件
-datas = [(s, d) for s, d in datas if os.path.basename(s) not in _EXCLUDE_FILES]
-binaries = [(s, d) for s, d in binaries if os.path.basename(s) not in _EXCLUDE_FILES]
+datas = [(s, d) for s, d in datas if os.path.basename(s) not in _EXCLUDE_FILES
+         and not os.path.basename(s).endswith('.engine')]
+binaries = [(s, d) for s, d in binaries if os.path.basename(s) not in _EXCLUDE_FILES
+            and not os.path.basename(s).endswith('.engine')]
 
 # 过滤 onnxruntime 非推理子目录（transformers/tools/quantization 等在 excludes 中已被跳过，
 # 但若以 data 形式被 collect_all 收集则需二次过滤）
@@ -141,6 +147,12 @@ a = Analysis(
         'matplotlib.sphinxext',
         # scipy: 已用纯 numpy 替代 savgol_filter，完全排除
         'scipy', 'tkinter', '_tkinter',
+        # PaddlePaddle (only for paddlepaddle_migrate branch; ~1.1GB)
+        'paddle', 'paddlepaddle', 'paddlepaddle_gpu',
+        # TensorRT + CUDA bindings (user provides system-wide)
+        'tensorrt', 'cuda', 'cuda_bindings',
+        # Unused paddle deps
+        'safetensors', 'opt_einsum', 'networkx',
     ],
     noarchive=False,
     optimize=2,   # 最高字节码优化：移除 docstring 和 assert
