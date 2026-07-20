@@ -27,8 +27,10 @@ hiddenimports = [
     'yaml',
     # decord
     'decord',
-    # Project modules
-    'pipeline', 'correction',
+    # Project modules (force inclusion)
+    'pipeline', 'correction', 'config', 'gpu_setup', 'ocr_engine',
+    'headless', 'analysis', 'gui_analysis', 'gui_review',
+    'widget_utils', 'theme_manager',
 ]
 
 # rapidocr（OCR 引擎，含 ONNX 后端）
@@ -119,7 +121,7 @@ binaries = [
 
 a = Analysis(
     ['D:\\Repo\\RaceVideoToLog\\RaceVideoToLog.py'],
-    pathex=[],
+    pathex=['D:\\Repo\\RaceVideoToLog'],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
@@ -127,11 +129,12 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     # 排除 onnxruntime 中的非推理模块 + scipy/matplotlib 测试和未用子模块
+    # 这些模块的 hidden imports 会产生大量 ERROR 日志（不影响功能）
     excludes=[
-        'onnxruntime.transformers',
-        'onnxruntime.tools',
-        'onnxruntime.quantization',
-        'onnxruntime.datasets',
+        'onnxruntime.transformers', 'onnxruntime.transformers.*',
+        'onnxruntime.tools', 'onnxruntime.tools.*',
+        'onnxruntime.quantization', 'onnxruntime.quantization.*',
+        'onnxruntime.datasets', 'onnxruntime.datasets.*',
         'onnxruntime.backend',
         # matplotlib: 排除测试和未用后端
         'matplotlib.tests', 'matplotlib.testing',
@@ -150,8 +153,8 @@ a = Analysis(
         'scipy', 'tkinter', '_tkinter',
         # PaddlePaddle (only for paddlepaddle_migrate branch; ~1.1GB)
         'paddle', 'paddlepaddle', 'paddlepaddle_gpu',
-        # TensorRT + CUDA bindings (user provides system-wide)
-        'tensorrt', 'cuda', 'cuda_bindings',
+        # CUDA bindings (user provides system-wide DLLs)
+        'cuda', 'cuda_bindings',
         # Unused paddle deps
         'safetensors', 'opt_einsum', 'networkx',
     ],

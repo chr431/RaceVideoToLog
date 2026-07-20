@@ -443,5 +443,5 @@ class ProcessingPipeline:
 				fh.write(f"# timing: {timing_str}\n")
 			w = csv.writer(fh)
 			for row in rows:
-			w.writerow([f"{row[0]:.2f}", f"{row[1]:.2f}",
-					   f"{row[2]:.2f}", str(row[3])])
+				w.writerow([f"{row[0]:.2f}", f"{row[1]:.2f}",
+				           f"{row[2]:.2f}", str(row[3])])
