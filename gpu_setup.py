@@ -124,12 +124,13 @@ def _register_gpu_dlls() -> None:
 		elif any(f.endswith(".dll") for f in _lower_contents):
 			_other_dirs.append(_entry)
 
-	# ── 注册 DLL 搜索目录（遵循依赖顺序：CUDA → cuDNN → TRT → 其他）──
-	# 注意：os.add_dll_directory() 返回的 cookie 必须保持存活，
-	# 否则目录会从搜索路径中被移除。存入 _dll_dir_cookies 防止 GC。
+	# ── 注册 DLL 搜索目录 ──
+	# os.add_dll_directory() 用于 Windows 原生 LoadLibrary，
+	# 但 tensorrt 包的 find_lib() 只搜 PATH，所以也要更新 os.environ。
 	global _dll_dir_cookies
 	_dll_dir_cookies.clear()
 	_registered = 0
+	_path_new: list[str] = []
 	for _label, _dirs in [("CUDA", _found_cuda), ("cuDNN", _found_cudnn),
 	                       ("TensorRT", _found_trt), ("DLL", _other_dirs)]:
 		if _dirs:
@@ -137,9 +138,55 @@ def _register_gpu_dlls() -> None:
 		for _d in _dirs:
 			try:
 				_dll_dir_cookies.append(_os.add_dll_directory(_d))
+				_path_new.append(_d)
 				_registered += 1
 			except (AttributeError, OSError):
 				pass
+
+	# 将找到的目录前置到 PATH（tensorrt 包依赖此路径）
+	if _path_new:
+		_existing = _os.environ.get("PATH", "")
+		_os.environ["PATH"] = _os.pathsep.join(_path_new) + \
+			(_os.pathsep + _existing if _existing else "")
+
+	# ── Fallback: 扫描 NVIDIA 标准安装目录（PATH 中未找到时）──
+	if not _found_trt:
+		_trt_search = r"C:\Program Files\NVIDIA"
+		if _os.path.isdir(_trt_search):
+			for _entry in _os.listdir(_trt_search):
+				if _entry.lower().startswith("tensorrt-"):
+					for _sub in ("bin", "lib"):
+						_sd = _os.path.join(_trt_search, _entry, _sub)
+						if _os.path.isdir(_sd) and _sd not in _found_trt:
+							_found_trt.append(_sd)
+	if not _found_cuda:
+		_cuda_search = r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA"
+		if _os.path.isdir(_cuda_search):
+			for _entry in _os.listdir(_cuda_search):
+				_ver_dir = _os.path.join(_cuda_search, _entry)
+				if not _os.path.isdir(_ver_dir):
+					continue
+				for _sub in ("bin", r"bin\x64"):
+					_sd = _os.path.join(_ver_dir, _sub)
+					if _os.path.isdir(_sd) and _sd not in _found_cuda:
+						_found_cuda.append(_sd)
+
+	# Register any newly found directories from fallback
+	for _d in _found_trt + _found_cuda:
+		if _d not in _path_new:
+			try:
+				_dll_dir_cookies.append(_os.add_dll_directory(_d))
+				_path_new.append(_d)
+				_registered += 1
+			except (AttributeError, OSError):
+				pass
+	# Update PATH with newly added directories
+	if _path_new:
+		_existing = ";".join(
+			p for p in _os.environ.get("PATH", "").split(";")
+			if _os.path.normpath(p) not in [_os.path.normpath(x) for x in _path_new])
+		_os.environ["PATH"] = ";".join(_path_new) + \
+			(";" + _existing if _existing else "")
 
 	logger.info("GPU DLL 搜索路径注册: %d 个目录", _registered)
 
