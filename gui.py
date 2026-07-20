@@ -445,8 +445,6 @@ class RaceVideoToLogApp(QMainWindow):
 		self.mode_baseline.toggled.connect(lambda checked: checked and self._on_mode("baseline"))
 		self.backend_combo.currentIndexChanged.connect(self._on_backend)
 
-		self.debug_cb.toggled.connect(lambda v: setattr(self, '_debug_log', v))
-
 	def _add_shortcuts(self) -> None:
 		QShortcut(QKeySequence(Qt.Key.Key_Left), self, lambda: self._step(-1))
 		QShortcut(QKeySequence(Qt.Key.Key_Right), self, lambda: self._step(1))
@@ -930,8 +928,9 @@ class RaceVideoToLogApp(QMainWindow):
 		self._progress_bar.setValue(0)
 
 		app = self  # 捕获 RaceVideoToLogApp 引用
-		out_path = getattr(app, "_review_output_path",
-			app.video_path.parent / f"{app.video_path.stem}_log.csv")
+		_default_out = app.video_path.parent / f"{app.video_path.stem}_log.csv" \
+			if app.video_path else Path("output_log.csv")
+		out_path = getattr(app, "_review_output_path", _default_out)
 		confirmed = getattr(app, "_review_confirmed", set())
 
 		class _Pass2Thread(QThread):
