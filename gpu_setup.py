@@ -55,16 +55,33 @@ def _ensure_gpu_initialized() -> None:
 
 
 def _register_gpu_dlls() -> None:
-	"""将 CUDA 和 cuDNN DLL 按依赖顺序预加载到进程内存。
+	"""注册 CUDA/cuDNN/Paddle nvidia DLL 搜索目录并预加载。
 
-	扫描 C:\\Program Files\\NVIDIA 下的 CUDA Toolkit 和 cuDNN 安装。
-	加载失败不抛异常，记录日志后继续（CPU 回退）。
+	扫描 C:\\Program Files\\NVIDIA 下的 CUDA Toolkit、cuDNN 安装，
+	以及 PaddlePaddle 内嵌的 nvidia-* 包。加载失败不抛异常。
 	"""
 	import ctypes as _ct
 
 	_cuda_bin: str | None = None
 	_cudnn_dir: str | None = None
 	_cudnn_dlls: list[str] = []
+	_paddle_nv_dirs: list[str] = []
+
+	# ── 0. 扫描 PaddlePaddle 内嵌的 nvidia DLL（优先，避免 CUDA 版本冲突）──
+	try:
+		import site as _site
+		for _sp in _site.getsitepackages():
+			_nv_dir = _os.path.join(_sp, "nvidia")
+			if _os.path.isdir(_nv_dir):
+				for _entry in sorted(_os.listdir(_nv_dir)):
+					_bin_dir = _os.path.join(_nv_dir, _entry, "bin")
+					if _os.path.isdir(_bin_dir) and _bin_dir not in _paddle_nv_dirs:
+						_paddle_nv_dirs.append(_bin_dir)
+	except Exception:
+		pass
+
+	# 若 Paddle 提供 CUDA DLL，则跳过系统 CUDA Toolkit 预加载（防止版本冲突）
+	_has_paddle_cuda = len(_paddle_nv_dirs) > 0
 
 	# ── 1. 定位 CUDA Toolkit bin 目录（含 x64 子目录，CUDA 13+ 开始使用）──
 	_cuda_base = r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA"
@@ -113,7 +130,7 @@ def _register_gpu_dlls() -> None:
 				_cudnn_dir = _root
 			_cudnn_dlls.append(_os.path.join(_root, _f))
 
-	# ── 3. 按依赖顺序预加载 DLL ──
+	# ── 3. 按依赖顺序预加载 DLL（仅当没有 Paddle 内嵌 CUDA 时）──
 	_loaded = 0
 	_failed: list[str] = []
 
@@ -129,21 +146,27 @@ def _register_gpu_dlls() -> None:
 		except Exception:
 			return False
 
-	if _cuda_bin:
-		for _prefix in ("cudart64_", "cudart32_"):
-			for _f in _os.listdir(_cuda_bin):
-				if _f.lower().startswith(_prefix) and _f.endswith(".dll"):
-					_load_dll(_os.path.join(_cuda_bin, _f))
-		for _f in sorted(_os.listdir(_cuda_bin)):
-			_fl = _f.lower()
-			if _fl.endswith(".dll") and not _fl.startswith("cudart"):
-				if any(_fl.startswith(p) for p in _CUDA_DLL_PREFIXES):
-					_load_dll(_os.path.join(_cuda_bin, _f))
+	if not _has_paddle_cuda:
+		if _cuda_bin:
+			for _prefix in ("cudart64_", "cudart32_"):
+				for _f in _os.listdir(_cuda_bin):
+					if _f.lower().startswith(_prefix) and _f.endswith(".dll"):
+						_load_dll(_os.path.join(_cuda_bin, _f))
+			for _f in sorted(_os.listdir(_cuda_bin)):
+				_fl = _f.lower()
+				if _fl.endswith(".dll") and not _fl.startswith("cudart"):
+					if any(_fl.startswith(p) for p in _CUDA_DLL_PREFIXES):
+						_load_dll(_os.path.join(_cuda_bin, _f))
 
-	for _dll_path in _cudnn_dlls:
-		_load_dll(_dll_path)
+		for _dll_path in _cudnn_dlls:
+			_load_dll(_dll_path)
 
-	# ── 4. 注册 DLL 搜索目录（Windows 8.1+ 推荐方式）──
+	# ── 4. 注册 DLL 搜索目录（Windows 8.1+ 推荐方式）──（Windows 8.1+ 推荐方式）──
+	for _nv_dir in _paddle_nv_dirs:
+		try:
+			_os.add_dll_directory(_nv_dir)
+		except AttributeError:
+			pass
 	if _cuda_bin:
 		try:
 			_os.add_dll_directory(_cuda_bin)
@@ -164,7 +187,8 @@ def _register_gpu_dlls() -> None:
 		except AttributeError:
 			pass
 	# 同时更新 PATH（兼容旧版加载逻辑）
-	_path_extra: list[str] = []
+	# Paddle nvidia 目录优先（排在 CUDA Toolkit 之前，防止版本冲突）
+	_path_extra: list[str] = list(_paddle_nv_dirs)
 	if _cuda_bin:
 		_path_extra.append(_cuda_bin)
 	if _cudnn_dir:
@@ -199,41 +223,46 @@ def select_backend(preferred: str = "auto") -> str:
 	_ensure_gpu_initialized()
 
 	try:
-		import onnxruntime as ort
+		import paddle
 	except Exception:
-		logger.warning("无法导入 onnxruntime，使用 CPU 后端")
+		logger.warning("无法导入 paddlepaddle，使用 CPU 后端")
 		_gpu_backend = "CPU"
-		_gpu_params = {"EngineConfig.onnxruntime.use_cuda": False}
+		_gpu_params = {"EngineConfig.paddle.use_cuda": False}
 		config._gpu_backend = "CPU"
 		return _gpu_backend
 
-	available = set(ort.get_available_providers())
 	chain = _BACKEND_FALLBACK.get(preferred.lower(), _BACKEND_FALLBACK["auto"])
 	chosen: str | None = None
 
 	for candidate in chain:
-		ep_name = ("CUDAExecutionProvider" if candidate == "CUDA"
-		           else "CPUExecutionProvider")
-		if ep_name in available:
-			chosen = candidate
+		if candidate == "CUDA":
+			try:
+				if paddle.is_compiled_with_cuda():
+					device = paddle.get_device()
+					if device.startswith("gpu"):
+						chosen = "CUDA"
+						break
+			except Exception:
+				pass
+		else:
+			chosen = "CPU"
 			break
+
 	if chosen is None:
 		chosen = "CPU"
 
 	if chosen == "CUDA":
 		_gpu_params = {
-			"EngineConfig.onnxruntime.use_cuda": True,
-			"EngineConfig.onnxruntime.cuda_ep_cfg.device_id": 0,
-			"EngineConfig.onnxruntime.cuda_ep_cfg.arena_extend_strategy": "kNextPowerOfTwo",
-			"EngineConfig.onnxruntime.cuda_ep_cfg.cudnn_conv_algo_search": "HEURISTIC",
-			"EngineConfig.onnxruntime.cuda_ep_cfg.do_copy_in_default_stream": True,
+			"EngineConfig.paddle.use_cuda": True,
+			"EngineConfig.paddle.cuda_ep_cfg.device_id": 0,
+			"EngineConfig.paddle.cuda_ep_cfg.gpu_mem": 500,
 		}
 	else:
-		_gpu_params = {"EngineConfig.onnxruntime.use_cuda": False}
+		_gpu_params = {"EngineConfig.paddle.use_cuda": False}
 
 	_gpu_backend = chosen
 	config._gpu_backend = chosen
-	logger.info("OCR 后端已选择: %s", chosen)
+	logger.info("OCR 后端已选择: %s (PaddlePaddle)", chosen)
 	return _gpu_backend
 
 

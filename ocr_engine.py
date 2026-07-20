@@ -481,9 +481,10 @@ def _get_model_params(variant: str) -> dict | None:
 		"Rec.model_type": model_type,
 		"Det.ocr_version": _OCRVersion.PPOCRV6,
 		"Rec.ocr_version": _OCRVersion.PPOCRV6,
-		"Det.engine_type": _EngineType.ONNXRUNTIME,
-		"Rec.engine_type": _EngineType.ONNXRUNTIME,
+		"Det.engine_type": _EngineType.PADDLE,
+		"Rec.engine_type": _EngineType.PADDLE,
 		"Rec.rec_batch_num": 12,
+		"Rec.cpu_math_library_num_threads": 4,
 	}
 
 
