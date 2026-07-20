@@ -81,7 +81,8 @@ def get_setup_advice() -> str | None:
 	return (
 		"检测到 NVIDIA 显卡，但未安装 CUDA Toolkit 或 cuDNN，"
 		"OCR 回退至 CPU 推理。\n"
-		"安装 CUDA Toolkit 12.x + cuDNN 9.x 可启用 GPU 加速（约 4-6x 提速）。\n"
+		"安装 CUDA Toolkit 12.x + cuDNN 9.x 可启用 GPU 加速。\n"
+		"（可选）安装 TensorRT 10.x 可进一步提速。\n"
 		"详见 README 的「GPU 加速配置」章节。"
 	)
 
