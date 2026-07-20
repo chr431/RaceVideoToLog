@@ -199,7 +199,10 @@ coll = COLLECT(
         'onnxruntime.dll',
         'onnxruntime_providers_cuda.dll',
         'onnxruntime_providers_shared.dll',
-        'opencv_world4100.dll',
+        # opencv-python-headless 5.x uses cv2.pyd (no opencv_world*.dll)
+        # decord FFmpeg 4.x DLLs (UPX may corrupt)
+        'avcodec-58.dll', 'avformat-58.dll', 'avutil-56.dll',
+        'swresample-3.dll', 'swscale-5.dll',
     ],
     name='RaceVideoToLog',
 )
