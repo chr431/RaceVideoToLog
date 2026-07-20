@@ -72,6 +72,71 @@ tests/
 - 性能计时：`_timing` dict 记录 OCR/纠错/写入耗时
 - 调试模式：`_debug_raw_text` 在 CSV 中输出原始 OCR 文本
 
+## 性能基准与优化记录（2026-07-20）
+
+### 推理后端对比
+
+| 后端 | v6_tiny | v6_small | 说明 |
+| --- | --- | --- | --- |
+| ONNX Runtime 1.27 | 534fps | 248fps | 当前生产后端 |
+| rapidocr 3.9.1 + ONNX | 420fps | 149fps | 未启用 gpu_setup 优化 |
+| rapidocr 3.9.1 + PaddlePaddle | 255fps | 138fps | 需 CUDA 12.9 专用轮子 |
+| PaddleOCR 3.7.0 + PaddlePaddle | 95fps | 90fps | Pipeline 开销过大 |
+| rapidocr-paddle 1.4.5 (v4) | — | — | 旧模型, 9fps |
+
+**结论: ONNX Runtime 在 PP-OCRv6 tiny/small 模型上具有压倒性优势。**
+PaddlePaddle 框架开销（设备同步、executor 调度）对小模型每次推理占主导。
+
+### PaddlePaddle 安装备忘
+
+- `paddlepaddle-gpu` 仅到 2.6.2, 不支持 CUDA 12.9。
+- `paddlepaddle` 3.x 统一包为 CPU-only。GPU 版需从专用索引安装:
+  `pip install paddlepaddle-gpu==3.3.0 -i https://www.paddlepaddle.org.cn/packages/stable/cu129/`
+- rapidocr-paddle 捆绑 PP-OCRv4 模型。
+- PaddleOCR 3.x 需 PaddlePaddle ≥3.0。
+- Python 版本限制: rapidocr-paddle <3.13; PySide6-Fluent-Widgets 3.12+ 无 wheel。
+
+### 视频解码方案
+
+| 方案 | 速度 | ONNX兼容 | 说明 |
+| --- | --- | --- | --- |
+| cv2 FFMPEG | ~450fps | ✅ | 当前方案 |
+| decord 软件 | 600-750fps | ❌ | FFmpeg DLL 与 ORT 冲突 |
+| decord 子进程 | ~250fps | ✅ | IPC 开销抵消解码收益 |
+| PyAV | 133-203fps | ✅ | 太慢 |
+
+**decord+ONNX DLL 冲突**: decord 捆绑 FFmpeg 4.x DLL 与 ORT CUDA 依赖链冲突。
+**子进程隔离**: Pipe/共享内存传帧增加 ~1ms/帧 IPC 开销, 整体反降 25%。
+
+### 全管线吞吐量 (v6_tiny, test4, div=1)
+
+| 阶段 | 吞吐量 |
+| --- | --- |
+| 纯 OCR 推理 | 1118fps |
+| 视频解码上限 | 458fps |
+| 管线实际 (buffer=16) | ~340fps |
+| 管线实际 (buffer=8) | ~310fps |
+
+瓶颈: Python 线程同步 (Queue mutex + GIL) 造成 ~26% 效率损失。
+
+### 已排除的无效优化
+
+- 多 consumer 并行: cuDNN crash
+- 分离 det/rec 线程: GPU 上下文切换开销 > 收益
+- Lock-free SPSC: Python spin-wait 烧 CPU
+- 预解码全帧: 不如流水线
+- CUDA Graph: 需绕过 RapidOCR
+- FP16/INT8: 需模型转换
+
+### 已实施的优化
+
+| 优化 | 效果 |
+| --- | --- |
+| v6_tiny 默认主 OCR | 推理 2.2x 提速 |
+| buffer 8→16 | 管线 ~7% 提速 |
+| 跳过 detection 模型 | GPU 显存 -8MB |
+| 默认 tiny+small 组合 | 整体 ~28% 提速 |
+
 ## GUI 架构
 
 ### 主窗口 (gui.py)
