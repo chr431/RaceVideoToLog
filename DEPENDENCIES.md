@@ -4,7 +4,7 @@
 
 | 包 | 当前版本 | 最低版本 | PyPI | 备注 |
 | --- | --- | --- | --- | --- |
-| rapidocr | 3.9.1 | 3.9 | [rapidocr](https://pypi.org/project/rapidocr/) | PP-OCRv6 ONNX 模型，3.x 统一包取代 rapidocr-onnxruntime |
+| rapidocr | 3.9.2 | 3.9 | [rapidocr](https://pypi.org/project/rapidocr/) | PP-OCRv6 ONNX 模型。3.9.2 新增 `use_preprocess_img`（保持 True，TRT 内部 resize 更优） |
 | onnxruntime | 1.27.0 | 1.27 | [onnxruntime](https://pypi.org/project/onnxruntime/) | CPU 推理回退；CUDA provider 已移除 |
 | opencv-python-headless | 5.0.0 | 5.0 | [opencv-python-headless](https://pypi.org/project/opencv-python-headless/) | 图像预处理 (resize, cvtColor) |
 | decord | 0.6.0 | 0.6 | [decord](https://pypi.org/project/decord/) | NVDEC 硬件视频解码；⚠️ 捆绑 FFmpeg 4.x DLL |
@@ -19,7 +19,7 @@
 
 | 包 | 当前测试版本 | 来源 | 备注 |
 | --- | --- | --- | --- |
-| tensorrt | 10.16.1.11 | [NVIDIA 官网](https://developer.nvidia.com/tensorrt) | 需从官网下载 .whl；pip 也有 [tensorrt](https://pypi.org/project/tensorrt/) |
+| tensorrt | 10.16.1.11 | [NVIDIA 官网](https://developer.nvidia.com/tensorrt) | **仅跟踪 10.x**（11.x 可能不兼容）；pip 也有 [tensorrt](https://pypi.org/project/tensorrt/) |
 | cuda-python | 13.3.1 | [cuda-python](https://pypi.org/project/cuda-python/) | `from cuda.bindings import runtime` |
 | CUDA Toolkit | 12.9 | [NVIDIA 官网](https://developer.nvidia.com/cuda-downloads) | 提供 cudart, cublas 等 DLL |
 

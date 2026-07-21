@@ -4,9 +4,9 @@ from pathlib import Path
 
 # 核心依赖（包名 → 当前版本）
 DEPS = {
-    "rapidocr": "3.9.1",
+    "rapidocr": "3.9.2",
     "onnxruntime": "1.27.0",
-    "opencv-python-headless": "5.0.0",
+    "opencv-python-headless": "5.0.0.93",
     "decord": "0.6.0",
     "PySide6": "6.11.1",
     "PySide6-Fluent-Widgets": "1.11.2",
@@ -21,6 +21,10 @@ GPU_DEPS = {
     "tensorrt": "10.16.1.11",
     "cuda-python": "13.3.1",
 }
+# 仅跟踪指定主版本（None = 跟踪所有版本）
+PIN_MAJOR = {
+    "tensorrt": "10",  # 仅跟踪 10.x，跳过 11.x
+}
 
 # 打包
 BUILD_DEPS = {
@@ -28,13 +32,24 @@ BUILD_DEPS = {
 }
 
 
-def get_latest(pkg_name: str) -> str:
-    """从 PyPI JSON API 获取最新版本号。"""
+def get_latest(pkg_name: str, major_pin: str | None = None) -> str:
+    """从 PyPI JSON API 获取最新版本号。major_pin 指定主版本时仅返回该主版本最新版。"""
     url = f"https://pypi.org/pypi/{pkg_name}/json"
     try:
         with urllib.request.urlopen(url, timeout=10) as resp:
             data = json.loads(resp.read())
-            return data["info"]["version"]
+            if major_pin is None:
+                return data["info"]["version"]
+            # 过滤指定主版本的最新版
+            versions = data.get("releases", {})
+            matching = [v for v in versions if v.startswith(major_pin + ".")]
+            if not matching:
+                return "N/A"
+            # 按数字部分排序，忽略 pre-release 后缀
+            def _key(v):
+                parts = v.replace("post",".").replace("rc",".").replace("b",".").split(".")
+                return tuple(int(p) for p in parts if p.isdigit())
+            return sorted(matching, key=_key)[-1]
     except Exception as e:
         return f"ERROR: {e}"
 
@@ -45,7 +60,7 @@ def check_group(label: str, deps: dict) -> int:
     print(f"  {label}")
     print(f"{'='*50}")
     for pkg, current in deps.items():
-        latest = get_latest(pkg)
+        latest = get_latest(pkg, PIN_MAJOR.get(pkg))
         if latest.startswith("ERROR"):
             print(f"  {pkg:35s} current={current:12s}  {latest}")
             continue
