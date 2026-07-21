@@ -25,7 +25,8 @@ class ReviewDialog(QDialog):
 
 	def __init__(self, parent: QWidget, rows: list, observations: list,
 				 raw_frames: list, confidences: list[dict],
-				 segments: list[dict], max_speed: float) -> None:
+				 segments: list[dict], max_speed: float,
+				 max_accel: float = 50.0) -> None:
 		super().__init__(parent)
 		self.setWindowTitle("人工审核 — 聚焦问题段 (← → 逐帧导航)")
 		self.resize(1200, 750)
@@ -38,6 +39,7 @@ class ReviewDialog(QDialog):
 		self._confidences = confidences
 		self._segments = segments
 		self._max_speed = max_speed
+		self._max_accel = max_accel
 		self._corrections: dict[int, float] = {}
 		self._partial_corrections: dict[int, str] = {}
 		self._current_frame: int = 0
@@ -494,6 +496,35 @@ class ReviewDialog(QDialog):
 				btn.setText(f"#{fi} ({self._speed_label(val)})")
 				break
 
+	def _check_accel(self, fi: int, v: float) -> tuple[bool, str]:
+		"""检查输入值 v 与前后帧的加速度是否超标。
+
+		Returns: (is_ok, warning_message)
+		"""
+		from config import MPS_TO_KMH
+		n = len(self._rows)
+		issues = []
+		# 检查前后各 5 帧
+		for j in range(max(0, fi - 5), min(n, fi + 6)):
+			if j == fi:
+				continue
+			vj = self._rows[j][2]
+			if vj < 0 or vj > self._max_speed:
+				continue
+			dt = abs(self._rows[fi][0] - self._rows[j][0])
+			if dt <= 0:
+				continue
+			accel = abs(v - vj) / dt / MPS_TO_KMH
+			if accel > self._max_accel:
+				issues.append(f"  帧 #{j} ({vj:.0f} km/h): "
+				              f"需加速度 {accel:.0f} m/s² (上限 {self._max_accel:.0f})")
+		if issues:
+			msg = (f"帧 #{fi} 输入值 {v:.0f} 与邻居帧物理不一致:\n\n"
+			       + "\n".join(issues[:3])
+			       + "\n\n确定要使用此值吗？")
+			return False, msg
+		return True, ""
+
 	def _add_correction(self) -> None:
 		fi = getattr(self, "_current_frame", 0)
 		text = self._speed_edit.text().strip()
@@ -509,6 +540,14 @@ class ReviewDialog(QDialog):
 				v = float(text)
 			except ValueError:
 				return
+			# 物理一致性检查
+			ok, warning = self._check_accel(fi, v)
+			if not ok:
+				reply = QMessageBox.warning(self, "加速度异常", warning,
+					QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+					QMessageBox.StandardButton.No)
+				if reply == QMessageBox.StandardButton.No:
+					return
 			self._corrections[fi] = v
 			self._partial_corrections.pop(fi, None)
 			label = self._speed_label(v)

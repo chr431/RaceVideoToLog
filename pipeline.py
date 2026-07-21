@@ -12,13 +12,13 @@ import cv2
 import numpy as np
 
 from ocr_engine import (
-	auto_select_anchors, clamp_region, compute_video_hash,
+	compute_lcs_scores, clamp_region, compute_video_hash,
 	extract_speed_value, SpeedObservation, Flag,
 	SOURCE_TO_KMH, _parse_int_or_none,
 	_reset_backend, _select_backend, _get_model_params,
 )
 from config import MPS_TO_KMH
-from correction import correct_with_anchors, compute_confidence, find_problem_segments
+from correction import correct_with_trust, compute_confidence, find_problem_segments
 from gpu_setup import get_gpu_backend, get_engine_params, get_engine_type
 
 logger = logging.getLogger("RaceVideoToLog.pipeline")
@@ -87,7 +87,7 @@ class ProcessingPipeline:
 		self._raw_frames: list[tuple[float, np.ndarray]] = []
 		self._observations: list[SpeedObservation] = []
 		self._rows: list[list] = []
-		self._anchor_indices: set[int] = set()
+		self._pinned: set[int] = set()
 		self._segments: list[dict] = []
 		# ── 性能计时 ──
 		self._timing: dict[str, float] = {}
@@ -112,7 +112,7 @@ class ProcessingPipeline:
 			for obs in self._observations:
 				self._rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh, Flag.RAW])
 			self._integrate_distance()
-			self._write_csv(self._rows, Path(output_path), auto_anchor=True)
+			self._write_csv(self._rows, Path(output_path))
 			self._write_diagnostics(Path(output_path))
 		else:
 			self._run_correction(Path(output_path), skip_fill=False)
@@ -136,17 +136,10 @@ class ProcessingPipeline:
 		if not self._observations:
 			raise RuntimeError("未识别到任何速度数据。")
 
-		self._emit("锚点选择...", 85.0)
-		self._anchor_indices = auto_select_anchors(
-			self._observations, self._max_speed, max_accel_mps2=self._max_accel)
-		if len(self._anchor_indices) < 3:
-			raise RuntimeError("自动锚点选择失败：未找到足够的可靠帧。")
-
-		# 构建初始 rows（原始 OCR + 锚点标记）
+		# 构建初始 rows（全部 RAW，无预选锚点）
 		self._rows = []
-		for i, obs in enumerate(self._observations):
-			self._rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh,
-							   Flag.ANCHOR_AUTO if i in self._anchor_indices else Flag.RAW])
+		for obs in self._observations:
+			self._rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh, Flag.RAW])
 
 		# ── 轻量纠错：仅重 OCR，不混淆/推断/填充 ──
 		self._emit("轻量纠错 (仅重OCR)...", 88.0)
@@ -154,9 +147,9 @@ class ProcessingPipeline:
 			if done % max(1, total // 3) != 0 and done != total:
 				return
 			self._emit(f"轻量纠错: {done}/{total} 帧", 88.0 + (done / max(total, 1)) * 4.0)
-		self._rows = correct_with_anchors(
+		self._rows = correct_with_trust(
 			self._rows, self._observations, self._raw_frames, self._reocr,
-			self._max_speed, self._max_accel, self._anchor_indices,
+			self._max_speed, self._max_accel,
 			progress_fn=_prog, skip_fill=True, light_mode=True,
 			reocr_cache=self._reocr_cache)
 
@@ -174,7 +167,7 @@ class ProcessingPipeline:
 			self._emit("未发现问题段，无需人工审核。", 98.5)
 			self._integrate_distance()
 			if output_path is not None:
-				self._write_csv(self._rows, Path(output_path), auto_anchor=True)
+				self._write_csv(self._rows, Path(output_path))
 				self._write_diagnostics(Path(output_path))
 			self._emit("完成", 100.0)
 			return None
@@ -183,32 +176,26 @@ class ProcessingPipeline:
 						 confirmed_segments: set[int],
 						 output_path: str | Path,
 						 partial_corrections: dict[int, str] | None = None) -> None:
-		"""人工辅助第 2 轮：合并手动修正 → 再纠错 → 写 CSV。"""
-		for fi, v in corrections.items():
-			if 0 <= fi < len(self._rows):
-				self._rows[fi][2] = v
-				self._rows[fi][3] = Flag.ANCHOR_MANUAL
-				self._anchor_indices.add(fi)
+		"""人工辅助第 2 轮：合并手动修正 → 再纠错 → 写 CSV。
 
+		修正值在 _correct 内部 rows 重建后才应用，避免被覆盖。
+		"""
+		# 构建 pinned 集（用户修正帧 + 确认段首尾）
+		self._pinned = set(corrections.keys())
 		for seg_start in confirmed_segments:
 			for seg in self._segments:
 				if seg["start"] == seg_start:
-					for fi in range(seg["start"], seg["end"] + 1):
-						if fi not in corrections and 0 <= fi < len(self._rows):
-							self._rows[fi][3] = Flag.CONFIRMED_SEG
-					# 仅将段首和段尾加入锚点（作为边界约束），
-					# 而非所有帧，避免削弱纠错灵活性
-					for fi in (seg["start"], seg["end"]):
-						if fi not in self._anchor_indices:
-							self._anchor_indices.add(fi)
+					self._pinned.add(seg["start"])
+					self._pinned.add(seg["end"])
 					break
 
-		self._correct(91.0, 7.0, skip_fill=False, reuse_anchors=True,
-					  partial_corrections=partial_corrections)
+		self._correct(91.0, 7.0, skip_fill=False,
+					  corrections=corrections,
+					  partial_corrections=partial_corrections,
+					  confirmed=confirmed_segments)
 
 		self._integrate_distance()
-		self._write_csv(self._rows, Path(output_path), auto_anchor=False,
-						manual_anchor=True)
+		self._write_csv(self._rows, Path(output_path))
 		self._write_diagnostics(Path(output_path))
 		self._emit(f"人工审核完成 — {len(corrections)} 帧已修正，结果已保存。", 100.0)
 
@@ -243,39 +230,50 @@ class ProcessingPipeline:
 		return self._ocr
 
 	def _correct(self, progress_base: float, progress_span: float,
-				 skip_fill: bool, reuse_anchors: bool = False,
-				 partial_corrections: dict[int, str] | None = None) -> None:
-		"""共享纠错逻辑：锚点选择 → 构建 rows → correct_with_anchors。
+				 skip_fill: bool,
+				 partial_corrections: dict[int, str] | None = None,
+				 corrections: dict[int, float] | None = None,
+				 confirmed: set[int] | None = None) -> None:
+		"""共享纠错逻辑：构建 rows → 应用修正 → LCS 评分 → correct_with_trust。
 
-		reuse_anchors=True 时使用 self._anchor_indices 和 self._rows 的已有值，
-		跳过锚点选择和 rows 构建（用于 pass2 手动锚点场景）。
+		corrections 和 confirmed 仅由 pass2 传入；先重建 rows 再覆盖修正值。
 		"""
-		if not reuse_anchors:
-			self._emit("锚点选择 + 纠错...", progress_base)
-			self._anchor_indices = auto_select_anchors(
-				self._observations, self._max_speed, max_accel_mps2=self._max_accel)
-			if len(self._anchor_indices) < 3:
-				raise RuntimeError("自动锚点选择失败：未找到足够的可靠帧。")
-			self._rows = []
-			for i, obs in enumerate(self._observations):
-				self._rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh,
-								   Flag.ANCHOR_AUTO if i in self._anchor_indices else Flag.RAW])
+		# 构建初始 rows（全部 RAW）
+		self._rows = []
+		for obs in self._observations:
+			self._rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh, Flag.RAW])
+
+		# 应用用户修正（在 rows 重建之后，避免被覆盖）
+		if corrections:
+			for fi, v in corrections.items():
+				if 0 <= fi < len(self._rows):
+					self._rows[fi][2] = v
+					self._rows[fi][3] = Flag.PINNED
+		if confirmed:
+			for seg_start in confirmed:
+				for seg in (self._segments if hasattr(self, '_segments') else []):
+					if seg["start"] == seg_start:
+						for fi in range(seg["start"], seg["end"] + 1):
+							if fi not in (corrections or {}) and 0 <= fi < len(self._rows):
+								self._rows[fi][3] = Flag.CONFIRMED_SEG
+						break
 
 		t0 = _time.perf_counter()
-		self._emit("纠错: 检测误差...", progress_base + 1.0)
+		self._emit("纠错: LCS 评分 + 检测误差...", progress_base + 1.0)
 		corr_timing: dict[str, float] = {}
 		def _prog(done: int, total: int) -> None:
 			if done % max(1, total // 5) != 0 and done != total:
 				return
 			pct = done / max(total, 1)
 			self._emit(f"纠错: {done}/{total} 帧", progress_base + 1.0 + pct * progress_span)
-		self._rows = correct_with_anchors(
+		self._rows = correct_with_trust(
 			self._rows, self._observations, self._raw_frames, self._reocr,
-			self._max_speed, self._max_accel, self._anchor_indices,
+			self._max_speed, self._max_accel,
 			progress_fn=_prog, timing=corr_timing, skip_fill=skip_fill,
 			partial_corrections=partial_corrections,
 			reocr_cache=self._reocr_cache,
-			notes=self._diag_notes if self._diag else None)
+			notes=self._diag_notes if self._diag else None,
+			pinned=self._pinned if self._pinned else None)
 		self._populate_diag_final()
 		self._timing["correction"] = _time.perf_counter() - t0
 		if corr_timing.get("re_ocr", 0) > 0:
@@ -286,7 +284,7 @@ class ProcessingPipeline:
 		self._correct(91.0, 6.0, skip_fill=skip_fill)
 		t1 = _time.perf_counter()
 		self._integrate_distance()
-		self._write_csv(self._rows, output_path, auto_anchor=True)
+		self._write_csv(self._rows, output_path)
 		self._write_diagnostics(output_path)
 		self._timing["integrate_write"] = _time.perf_counter() - t1
 
@@ -438,14 +436,13 @@ class ProcessingPipeline:
 			prev_t, prev_v = r[0], v
 			r[1] = dist
 
-	def _write_csv(self, rows: list, output_path: Path,
-				   auto_anchor: bool = True, manual_anchor: bool = False) -> None:
+	def _write_csv(self, rows: list, output_path: Path) -> None:
 		vhash = compute_video_hash(self._video_path)
 		r = self._roi
-		tag = "manual_anchor" if manual_anchor else ("auto_anchor" if auto_anchor else "")
 		# ── 统计信息 ──
 		n_total = len(rows)
-		n_anchors = sum(1 for row in rows if Flag.is_anchor(row[3]))
+		n_trusted = sum(1 for row in rows if Flag.is_trusted(row[3]))
+		n_pinned = sum(1 for row in rows if row[3] == Flag.PINNED)
 		n_corrected = sum(1 for row in rows if Flag.is_corrected(row[3]))
 		timing_str = ", ".join(f"{k}={v:.1f}s" for k, v in self._timing.items())
 		with output_path.open("w", newline="", encoding="utf-8-sig") as fh:
@@ -460,9 +457,9 @@ class ProcessingPipeline:
 			fh.write(f"# backend={self._backend_actual}, model={self._ocr_model}")
 			reocr_info = f", reocr_model={self._reocr_model}" if self._reocr_model and self._reocr_model != self._ocr_model else ""
 			fh.write(f"{reocr_info}\n")
-			if tag:
-				fh.write(f"# {tag}=1\n")
-			fh.write(f"# stats: total={n_total}, anchors={n_anchors},"
+			if n_pinned > 0:
+				fh.write(f"# pinned={n_pinned}\n")
+			fh.write(f"# stats: total={n_total}, trusted={n_trusted},"
 					 f" corrected={n_corrected}\n")
 			if timing_str:
 				fh.write(f"# timing: {timing_str}\n")

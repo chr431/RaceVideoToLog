@@ -183,7 +183,7 @@ class RaceVideoToLogApp(QMainWindow):
 		self._review_observations: list = []
 		self._review_raw_frames: list = []
 		self._review_ocr: "RapidOCR | None" = None
-		self._review_anchor_indices: set = set()
+		self._review_pinned: set = set()
 		self._review_output_path: Path | None = None
 		self._review_confidences: list[dict] = []
 		self._review_segments: list[dict] = []
@@ -371,7 +371,7 @@ class RaceVideoToLogApp(QMainWindow):
 		mode_card = make_static_card()
 		ml = QVBoxLayout(mode_card)
 		ml.addWidget(StrongBodyLabel("纠错模式"))
-		self.mode_auto = RadioButton("自动锚点纠错（全自动，推荐）")
+		self.mode_auto = RadioButton("自动纠错（全自动，推荐）")
 		self.mode_auto.setChecked(True)
 		self.mode_baseline = RadioButton("人工辅助纠错")
 		ml.addWidget(self.mode_auto); ml.addWidget(self.mode_baseline)
@@ -822,7 +822,7 @@ class RaceVideoToLogApp(QMainWindow):
 			                (self._fmt_mph, "mile/h")]:
 				if key == fmt:
 					rb.setChecked(True); break
-		if "manual_anchor" in settings:
+		if "pinned" in settings or "manual_anchor" in settings:
 			self.mode_auto.setChecked(False)
 			self.mode_baseline.setChecked(True)
 		elif "auto_anchor" in settings:
@@ -894,7 +894,7 @@ class RaceVideoToLogApp(QMainWindow):
 			self._show_review_dialog()
 		else:
 			self._finish_export()
-			self._status_label.setText("自动锚点完成 — 结果已保存。")
+			self._status_label.setText("自动纠错完成 — 结果已保存。")
 
 	def _on_error(self, err: str) -> None:
 		if self.sender() is not self._export_thread:
@@ -909,23 +909,25 @@ class RaceVideoToLogApp(QMainWindow):
 	def _show_review_dialog(self) -> None:
 		try:
 			ms = float(self.max_speed_edit.text())
+			ma = float(self.max_accel_edit.text())
 		except ValueError:
 			ms = 400.0
+			ma = 50.0
 		dlg = ReviewDialog(self, self._review_rows, self._review_observations,
 			self._review_raw_frames, self._review_confidences,
-			self._review_segments, ms)
+			self._review_segments, ms, max_accel=ma)
 		if dlg.exec() == QDialog.DialogCode.Accepted:
 			corrections = dlg.get_corrections()
 			partial_corrections = dlg.get_partial_corrections()
 			self._review_confirmed = dlg.get_confirmed()
 			try:
-				self._continue_with_manual_anchors(corrections, partial_corrections)
+				self._continue_with_manual(corrections, partial_corrections)
 			except Exception as e:
 				self._progress_bar.setValue(0)
 				self._status_label.setText(f"审核失败: {e}")
 				import traceback; traceback.print_exc()
 
-	def _continue_with_manual_anchors(self, corrections: dict[int, float],
+	def _continue_with_manual(self, corrections: dict[int, float],
 	                                   partial_corrections: dict[int, str] | None = None) -> None:
 		"""非阻塞执行 pass2：使用 QThread 避免 GUI 冻结。"""
 		pipeline = getattr(self, "_pipeline", None)

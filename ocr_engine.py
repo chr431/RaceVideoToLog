@@ -45,6 +45,7 @@ __all__ = [
 	"normalize_ocr_text", "format_duration", "codec_from_fourcc",
 	"safe_int", "safe_float", "SOURCE_TO_KMH", "OCR_NUMBER_RE",
 	"compute_video_hash", "auto_select_anchors",
+	"compute_lcs_scores", "lcs_detect_errors", "_lcs_score_for_value",
 	"_reset_backend", "_select_backend", "_get_model_params",
 	"_CancelExport",
 	"_parse_int_or_none", "parse_csv_header", "_savgol_filter_np",
@@ -56,16 +57,28 @@ __all__ = [
 class Flag:
 	"""速度数据 flag 值 — 统一标记每帧数据的来源和可信度。
 
-	用于 CSV 第 4 列和所有相关判断逻辑，消除散布的魔法数字。
+	信任层级（由低到高）:
+	  RAW (0)           — 原始 OCR 值，未经修正
+	  REOCR_AUTO (11)   — 重 OCR 自动修正
+	  FILL_INTERP (12)  — 物理插值填充
+	  PARTIAL_AUTO (13) — 部分数字模式推断修正
+	  HIGH_TRUST (21)   — LCS 评分 >=0.7，自动识别为高可信
+	  PINNED (22)       — 用户手动修正，绝对真值
+	  CONFIRMED_SEG (23)— 用户确认的段内帧
+	  FLAGGED_REVIEW(30)— 标记待人工审核
 	"""
-	RAW: int = 0             # 原始 OCR 输出，未纠错
-	REOCR_AUTO: int = 11     # 重 OCR 自动修正
-	FILL_INTERP: int = 12    # 级联插值填充
-	PARTIAL_AUTO: int = 13   # 部分数字模式自动推断修正
-	ANCHOR_AUTO: int = 21    # 自动锚点帧（硬约束）
-	ANCHOR_MANUAL: int = 22  # 人工修正锚点帧
-	CONFIRMED_SEG: int = 23  # 人工确认段内帧
-	FLAGGED_REVIEW: int = 30 # 标记待人工审核
+	RAW: int = 0
+	REOCR_AUTO: int = 11
+	FILL_INTERP: int = 12
+	PARTIAL_AUTO: int = 13
+	HIGH_TRUST: int = 21
+	PINNED: int = 22
+	CONFIRMED_SEG: int = 23
+	FLAGGED_REVIEW: int = 30
+
+	# Backward-compat aliases
+	ANCHOR_AUTO: int = 21
+	ANCHOR_MANUAL: int = 22
 
 	@classmethod
 	def is_corrected(cls, flag: int) -> bool:
@@ -73,9 +86,14 @@ class Flag:
 		return 10 <= flag <= 19
 
 	@classmethod
-	def is_anchor(cls, flag: int) -> bool:
-		"""是否为锚点帧 (>=20)。"""
+	def is_trusted(cls, flag: int) -> bool:
+		"""是否为高可信帧 — HIGH_TRUST 或 PINNED (>=20)。"""
 		return flag >= 20
+
+	@classmethod
+	def is_anchor(cls, flag: int) -> bool:
+		"""Backward-compat: 等价于 is_trusted()。"""
+		return cls.is_trusted(flag)
 
 
 # ═══════════════════ GPU 加速：由 gpu_setup.py 延迟初始化 ═══════════════════
@@ -701,6 +719,85 @@ def auto_select_anchors(observations: list["SpeedObservation"],
                                      max_accel_mps2)
 
 	return anchors
+
+
+def _lcs_score_for_value(i: int, v: float, rows: list, times: list[float],
+                         max_speed_kmh: float, max_accel_mps2: float,
+                         time_window: float = 0.5, tau: float = 0.06,
+                         high_weight: set[int] | None = None) -> float:
+	"""指数加权 LCS 单帧分数。权重 = exp(-dt/tau)，近邻权重高。
+
+	tau=0.06s 时: dt=0.02s→0.72, dt=0.1s→0.19, dt=0.3s→0.007。
+	high_weight 中的帧额外 ×3 权重。
+	"""
+	import math
+	n = len(rows)
+	if v < 0 or v > max_speed_kmh:
+		return 0.0
+	votes = 0.0
+	total = 0.0
+	t_i = times[i]
+	hw = high_weight or set()
+	for j in range(max(0, i - 1), -1, -1):
+		dt = t_i - times[j]
+		if dt > time_window:
+			break
+		v_j = rows[j][2]
+		if v_j < 0 or v_j > max_speed_kmh:
+			continue
+		max_dv = max_accel_mps2 * dt * MPS_TO_KMH
+		exp_w = math.exp(-dt / tau)
+		pin_w = 3.0 if j in hw else 1.0
+		total += exp_w * pin_w
+		if abs(v - v_j) <= max_dv:
+			votes += exp_w * pin_w
+	for j in range(i + 1, n):
+		dt = times[j] - t_i
+		if dt > time_window:
+			break
+		v_j = rows[j][2]
+		if v_j < 0 or v_j > max_speed_kmh:
+			continue
+		max_dv = max_accel_mps2 * dt * MPS_TO_KMH
+		exp_w = math.exp(-dt / tau)
+		pin_w = 3.0 if j in hw else 1.0
+		total += exp_w * pin_w
+		if abs(v - v_j) <= max_dv:
+			votes += exp_w * pin_w
+	return votes / total if total > 0 else 0.0
+
+
+def compute_lcs_scores(rows: list, max_speed_kmh: float,
+                       max_accel_mps2: float, time_window: float = 0.5,
+                       pinned: set[int] | None = None) -> list[float]:
+	"""局部一致性评分 — 指数加权时间窗投票。
+
+	对每帧 i，在 ±time_window 秒内统计有多少邻居能在物理加速度
+	约束下合法到达 v_i。指数衰减权重 exp(-dt/0.06s)。
+	"""
+	n = len(rows)
+	scores = [0.0] * n
+	times = [r[0] for r in rows]
+	for i in range(n):
+		scores[i] = _lcs_score_for_value(i, rows[i][2], rows, times,
+		                                 max_speed_kmh, max_accel_mps2,
+		                                 time_window=time_window,
+		                                 high_weight=pinned)
+	return scores
+
+
+def lcs_detect_errors(scores: list[float], low: float = 0.3,
+                      borderline: float = 0.7) -> tuple[set[int], set[int]]:
+	"""根据 LCS 分数将帧分为错误集和存疑集。"""
+	error_set: set[int] = set()
+	borderline_set: set[int] = set()
+	for i, s in enumerate(scores):
+		if s < low:
+			error_set.add(i)
+		elif s < borderline:
+			borderline_set.add(i)
+	return error_set, borderline_set
+
 
 class _CancelExport(Exception):
 	"""内部异常：用户取消了导出任务。"""

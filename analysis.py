@@ -100,7 +100,7 @@ def plot_segmented(ax: "Axes", x: "np.ndarray | list[float]", y: "np.ndarray | l
 	"""平滑 + 纠错段着色。
 
 	- red (#F44336): auto-corrected (flag 11-19)
-	- green (#81C784): anchor (flag >= 20)
+	- green (#81C784): high-trust or pinned (flag >= 20)
 	"""
 	red = "#F44336"
 	green = "#81C784"
@@ -142,7 +142,7 @@ def plot_segmented(ax: "Axes", x: "np.ndarray | list[float]", y: "np.ndarray | l
 	if rx:
 		ax.plot(rx, ry, color=red, linewidth=2.0)
 
-	# green segment (flag >= 20, anchors)
+	# green segment (flag >= 20, trusted frames)
 	gx, gy = [], []
 	i = 0
 	while i < n_orig:
