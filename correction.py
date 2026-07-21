@@ -112,7 +112,8 @@ def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: 
 						 timing: dict | None = None,
 						 partial_corrections: dict[int, str] | None = None,
 						 reocr_cache: dict | None = None,
-						 light_mode: bool = False) -> list:
+						 light_mode: bool = False,
+						 notes: dict[int, str] | None = None) -> list:
 	"""5 阶段物理约束纠错流水线。
 
 	以 anchor_indices 中帧的速度为硬约束（固定不变），
@@ -148,7 +149,7 @@ def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: 
 	                    anchors, times, max_speed_kmh, max_accel_mps2,
 	                    progress_fn=progress_fn, timing=timing,
 	                    partial_corrections=partial_corrections, reocr_cache=cache,
-	                    light_mode=light_mode)
+	                    light_mode=light_mode, notes=notes)
 	if log_fn:
 		log_fn(f"  Stage 2+3: fixed {fixed} frames in round 1")
 
@@ -171,7 +172,8 @@ def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: 
 		fixed = _fix_errors(rows, observations, raw_frames, ocr, error_set,
 		                    anchors, times, max_speed_kmh, max_accel_mps2,
 		                    progress_fn=progress_fn, timing=timing,
-		                    partial_corrections=partial_corrections, reocr_cache=cache)
+		                    partial_corrections=partial_corrections, reocr_cache=cache,
+		                    notes=notes)
 		if log_fn:
 			log_fn(f"  Stage 4 round {rnd}: {len(error_set)} errors, fixed {fixed}")
 
@@ -190,7 +192,7 @@ def correct_with_anchors(rows: list, observations: list, raw_frames: list, ocr: 
 			if not error_set:
 				break
 			_fill_unrecoverable(rows, anchors, error_set, times, max_speed_kmh, max_accel_mps2,
-			                    progress_fn=progress_fn)
+			                    progress_fn=progress_fn, notes=notes)
 			if log_fn:
 				log_fn(f"  Stage 5 pass {fill_pass+1}: filled {len(error_set)} unrecoverable frames")
 			fill_pass += 1
@@ -459,7 +461,8 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
 				timing: dict | None = None,
 				partial_corrections: dict[int, str] | None = None,
 				reocr_cache: dict | None = None,
-				light_mode: bool = False) -> int:
+				light_mode: bool = False,
+				notes: dict[int, str] | None = None) -> int:
 	"""阶段 2+3：对每个 error 帧重 OCR 获取备选，选最优值填入。"""
 	fixed = 0
 	progress_done = 0
@@ -505,6 +508,8 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
 			# re-OCR 无结果且插值与当前值差异大 → 完整模式直接插值，light 模式跳过
 			if len(reocr_set) <= 1 and interp_cand is not None and abs(interp_cand - raw_val) > 10.0:
 				if not light_mode and abs(raw_val - interp_cand) > 0.5:
+					if notes is not None:
+						notes[i] = f"interp: {raw_val:.0f}→{interp_cand:.0f}"
 					rows[i][2] = interp_cand
 					if rows[i][3] == Flag.RAW:
 						rows[i][3] = Flag.PARTIAL_AUTO if has_partial else Flag.REOCR_AUTO
@@ -521,9 +526,13 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
 						best_val = cand
 
 				if best_val is not None and best_score > 0.3 and abs(rows[i][2] - best_val) > 0.5:
+					old_val = rows[i][2]
 					rows[i][2] = best_val
 					if rows[i][3] == Flag.RAW:
 						rows[i][3] = Flag.PARTIAL_AUTO if has_partial else Flag.REOCR_AUTO
+					if notes is not None:
+						source = "partial" if has_partial else "reOCR"
+						notes[i] = f"{source}: {old_val:.0f}→{best_val:.0f}"
 					fixed += 1
 
 		progress_done += 1
@@ -534,7 +543,7 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
 
 def _re_ocr_frame(crop_bgr: "np.ndarray", ocr: "RapidOCR", max_speed_kmh: float,
 				  timing: dict | None = None, cache: dict | None = None) -> set:
-	"""阶段 2：对单帧尝试 h=32 重 OCR（与主 OCR h=24 不同高度以产生不同结果），有缓存。
+	"""阶段 2：对单帧尝试重 OCR（h=48，与主 OCR 一致；模型不同保证多样性），有缓存。
 
 	Args:
 	    cache: 可选的外部缓存字典（帧索引 → 候选值集合）。
@@ -562,7 +571,7 @@ def _re_ocr_frame(crop_bgr: "np.ndarray", ocr: "RapidOCR", max_speed_kmh: float,
 	scale = 32.0 / h if h > 0 else 1.0
 	proc = cv2.resize(crop_bgr, (max(1, int(w * scale)), 32))
 	res = ocr(proc)
-	sv, rt = extract_speed_value(res)
+	sv, rt, _conf = extract_speed_value(res)
 	if sv is not None and sv <= max_speed_kmh:
 		candidates.add(float(sv))
 
@@ -665,7 +674,8 @@ def _score_candidate(val: float, i: int, rows: list, anchors: set, error_set: se
 
 
 def _fill_unrecoverable(rows: list, anchors: set, error_set: set, times: list, max_speed_kmh: float, max_accel_mps2: float,
-						progress_fn: "Callable | None" = None) -> None:
+						progress_fn: "Callable | None" = None,
+						notes: dict[int, str] | None = None) -> None:
 	"""阶段 5：对无法通过重 OCR 修复的帧，从左到右传播可信值。"""
 	n = len(rows)
 	sorted_errors = sorted(i for i in error_set if i not in anchors)
@@ -707,6 +717,8 @@ def _fill_unrecoverable(rows: list, anchors: set, error_set: set, times: list, m
 		rows[i][2] = val
 		if rows[i][3] == Flag.RAW:
 			rows[i][3] = Flag.FILL_INTERP
+		if notes is not None:
+			notes[i] = f"fill: {val:.0f}"
 
 		progress_done += 1
 		if progress_fn:

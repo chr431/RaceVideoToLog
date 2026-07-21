@@ -24,18 +24,18 @@ from gpu_setup import get_gpu_backend, get_engine_params, get_engine_type
 logger = logging.getLogger("RaceVideoToLog.pipeline")
 
 
-def _preprocess_standard(crop: np.ndarray, target_h: float, pad: float) -> np.ndarray:
+def _preprocess_standard(crop: np.ndarray, target_h: int, pad: int) -> np.ndarray:
 	"""标准预处理：纯 resize + 填充。保留 BGR 通道以利用颜色信息。"""
 	h, w = crop.shape[:2]
-	th = max(8.0, float(target_h))
-	scale = th / float(h) if h > 0 else 1.0
+	if target_h < 8:
+		raise ValueError(f"target_h 必须 >= 8，当前为 {target_h}")
+	scale = target_h / h if h > 0 else 1.0
 	if abs(scale - 1.0) > 0.02:
-		resized = cv2.resize(crop, (max(1, int(w * scale)), int(th)))
+		resized = cv2.resize(crop, (max(1, int(w * scale)), target_h))
 	else:
 		resized = crop
-	pad_int = int(pad)
-	if pad_int > 0:
-		resized = cv2.copyMakeBorder(resized, pad_int, pad_int, pad_int, pad_int,
+	if pad > 0:
+		resized = cv2.copyMakeBorder(resized, pad, pad, pad, pad,
 									 cv2.BORDER_REPLICATE)
 	return resized
 
@@ -52,12 +52,17 @@ class ProcessingPipeline:
 
 	def __init__(self, video_path: str | Path, roi: tuple[int, int, int, int],
 				 max_speed: float, max_accel: float,
-				 frame_div: int, target_h: float, pad: float, buffer_size: int,
+				 frame_div: int, target_h: int, pad: int, buffer_size: int,
 				 backend: str, ocr_model: str, speed_format: str,
 				 frame_start: str = "", frame_end: str = "",
 				 progress_cb: ProgressFn | None = None,
 				 reocr_model: str | None = None,
-				 cancel_check: "Callable[[], None] | None" = None):
+				 cancel_check: "Callable[[], None] | None" = None,
+				 log_level: str = "normal"):
+		if target_h < 8:
+			raise ValueError(f"target_h 必须 >= 8，当前为 {target_h}")
+		if pad < 0:
+			raise ValueError(f"pad 必须 >= 0，当前为 {pad}")
 		self._video_path = Path(video_path)
 		self._roi = roi
 		self._max_speed = max_speed
@@ -68,6 +73,7 @@ class ProcessingPipeline:
 		self._buffer_size = buffer_size
 		self._reocr_model = reocr_model  # None = 使用 ocr_model
 		self._backend = backend
+		self._log_level = log_level  # "normal" | "detailed" | "debug"
 		self._ocr_model = ocr_model
 		self._speed_format = speed_format
 		self._frame_start = frame_start
@@ -107,6 +113,7 @@ class ProcessingPipeline:
 				self._rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh, Flag.RAW])
 			self._integrate_distance()
 			self._write_csv(self._rows, Path(output_path), auto_anchor=True)
+			self._write_diagnostics(Path(output_path))
 		else:
 			self._run_correction(Path(output_path), skip_fill=False)
 		self._timing["total"] = _time.perf_counter() - t_total
@@ -168,6 +175,7 @@ class ProcessingPipeline:
 			self._integrate_distance()
 			if output_path is not None:
 				self._write_csv(self._rows, Path(output_path), auto_anchor=True)
+				self._write_diagnostics(Path(output_path))
 			self._emit("完成", 100.0)
 			return None
 
@@ -201,6 +209,7 @@ class ProcessingPipeline:
 		self._integrate_distance()
 		self._write_csv(self._rows, Path(output_path), auto_anchor=False,
 						manual_anchor=True)
+		self._write_diagnostics(Path(output_path))
 		self._emit(f"人工审核完成 — {len(corrections)} 帧已修正，结果已保存。", 100.0)
 
 	# ═══════════════ 内部 ═══════════════
@@ -265,7 +274,9 @@ class ProcessingPipeline:
 			self._max_speed, self._max_accel, self._anchor_indices,
 			progress_fn=_prog, timing=corr_timing, skip_fill=skip_fill,
 			partial_corrections=partial_corrections,
-			reocr_cache=self._reocr_cache)
+			reocr_cache=self._reocr_cache,
+			notes=self._diag_notes if self._diag else None)
+		self._populate_diag_final()
 		self._timing["correction"] = _time.perf_counter() - t0
 		if corr_timing.get("re_ocr", 0) > 0:
 			logger.info("重OCR 耗时: %.2fs", corr_timing["re_ocr"])
@@ -276,6 +287,7 @@ class ProcessingPipeline:
 		t1 = _time.perf_counter()
 		self._integrate_distance()
 		self._write_csv(self._rows, output_path, auto_anchor=True)
+		self._write_diagnostics(output_path)
 		self._timing["integrate_write"] = _time.perf_counter() - t1
 
 	def _run_ocr(self) -> None:
@@ -374,6 +386,8 @@ class ProcessingPipeline:
 		t.start()
 
 		observations: list[SpeedObservation] = []
+		_collect_diag = self._log_level in ("detailed", "debug")
+		diag: list[dict] = []
 		done = 0
 		est_total = (_end_limit - (f_start or 0)) // frame_step
 		while True:
@@ -381,8 +395,10 @@ class ProcessingPipeline:
 			if item is None:
 				break
 			ts, proc = item
+			t_ocr0 = _time.perf_counter()
 			ocr_result = ocr(proc)
-			sv, rt = extract_speed_value(ocr_result)
+			t_ocr = (_time.perf_counter() - t_ocr0) * 1000.0
+			sv, rt, conf = extract_speed_value(ocr_result)
 			if sv is not None and rt is not None:
 				observations.append(SpeedObservation(
 					timestamp=ts,
@@ -390,6 +406,13 @@ class ProcessingPipeline:
 					raw_text=rt))
 			else:
 				observations.append(SpeedObservation(ts, -1.0, ""))
+			if _collect_diag:
+				diag.append({
+					"raw_text": rt or "",
+					"raw_value": sv,
+					"confidence": round(conf, 4),
+					"ocr_time_ms": round(t_ocr, 2),
+				})
 			done += 1
 			if done % 10 == 0 or done <= 3 or done == est_total:
 				pct = 3.0 + (done / max(est_total, 1)) * 87.0
@@ -398,6 +421,8 @@ class ProcessingPipeline:
 		if errors:
 			raise errors[0]
 		self._observations = observations
+		self._diag = diag
+		self._diag_notes: dict[int, str] = {}
 		self._timing["ocr"] = _time.perf_counter() - t_start
 		logger.info("OCR 完成: %d 帧, 耗时 %.1fs",
 					 len(observations), self._timing["ocr"])
@@ -445,3 +470,33 @@ class ProcessingPipeline:
 			for row in rows:
 				w.writerow([f"{row[0]:.2f}", f"{row[1]:.2f}",
 				           f"{row[2]:.2f}", str(row[3])])
+
+	def _populate_diag_final(self) -> None:
+		"""Fill final_value, flag, and correction_note into diagnostics."""
+		if not self._diag:
+			return
+		notes = self._diag_notes
+		for i, row in enumerate(self._rows):
+			if i < len(self._diag):
+				self._diag[i]["final_value"] = row[2]
+				self._diag[i]["flag"] = int(row[3])
+				self._diag[i]["correction_note"] = notes.get(i, "")
+
+	def _write_diagnostics(self, output_path: Path) -> None:
+		"""Write per-frame diagnostics CSV (log_level=debug only)."""
+		if not self._diag or self._log_level != "debug":
+			return
+		# Ensure final values populated (may not be if correction was skipped)
+		if self._diag and self._rows and "final_value" not in self._diag[0]:
+			self._populate_diag_final()
+		diag_path = output_path.with_suffix("")
+		diag_path = diag_path.with_name(diag_path.name + "_diagnostics.csv")
+		with diag_path.open("w", newline="", encoding="utf-8-sig") as fh:
+			fields = ["frame", "raw_text", "raw_value", "confidence",
+			          "ocr_time_ms", "final_value", "flag", "correction_note"]
+			w = csv.DictWriter(fh, fieldnames=fields, extrasaction="ignore")
+			w.writeheader()
+			for i, d in enumerate(self._diag):
+				d["frame"] = i
+				w.writerow(d)
+		logger.info("诊断日志已保存: %s (%d 帧)", diag_path, len(self._diag))

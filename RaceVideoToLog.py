@@ -21,7 +21,7 @@ def main() -> None:
 	parser.add_argument("--div", type=int, default=2, choices=list(range(1, 11)))
 	parser.add_argument("--max-speed", type=float, default=400)
 	parser.add_argument("--max-accel", type=float, default=50)
-	parser.add_argument("--target-h", type=int, default=24)
+	parser.add_argument("--target-h", type=int, default=48)
 	parser.add_argument("--pad", type=int, default=0)
 	parser.add_argument("--buffer", type=int, default=16)
 	parser.add_argument("--backend", choices=["auto","tensorrt","cpu"], default="auto")
@@ -34,6 +34,8 @@ def main() -> None:
 	parser.add_argument("--analysis-out", type=str)
 	parser.add_argument("--frame-start", type=int, metavar="N")
 	parser.add_argument("--frame-end", type=int, metavar="N")
+	parser.add_argument("--log-level", choices=["normal","detailed","debug"],
+		default="normal", help="日志级别 (默认 normal)")
 	parser.add_argument("--from-csv", type=str, metavar="PATH",
 		help="从已有 CSV 文件头导入设置（可被显式参数覆盖）")
 	args = parser.parse_args()

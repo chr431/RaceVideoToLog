@@ -4,7 +4,7 @@
 """
 from __future__ import annotations
 
-from qfluentwidgets import CardWidget
+from qfluentwidgets import CardWidget, CompactSpinBox
 
 
 def make_static_card(parent=None):
@@ -17,6 +17,24 @@ def make_static_card(parent=None):
 	w.enterEvent = lambda e: None
 	w.leaveEvent = lambda e: None
 	return w
+
+
+def make_int_spinbox(min_val: int, max_val: int, default: int, width: int = 70):
+	"""创建整数 CompactSpinBox：禁用浮点 flyout 面板。
+
+	供 GUI 中所有像素/线程数等整型参数统一使用。
+	"""
+	spin = CompactSpinBox()
+	spin.setRange(min_val, max_val)
+	spin.setValue(default)
+	spin.setFixedWidth(width)
+	# 禁用点击时弹出的浮点输入面板
+	try:
+		spin.compactSpinButton.clicked.disconnect()
+	except Exception:
+		pass
+	spin._showFlyout = lambda: None
+	return spin
 
 
 def setup_chart_zoom_pan(ax, canvas, throttle_ms: int = 40):

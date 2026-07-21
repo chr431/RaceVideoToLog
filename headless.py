@@ -56,6 +56,7 @@ def run_headless(args: argparse.Namespace) -> None:
 		frame_start=str(args.frame_start or ""),
 		frame_end=str(args.frame_end or ""),
 		progress_cb=_progress,
+		log_level=getattr(args, 'log_level', 'normal'),
 	)
 
 	t0 = time.perf_counter()

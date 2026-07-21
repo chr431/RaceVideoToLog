@@ -277,36 +277,42 @@ def normalize_ocr_text(text: str) -> str:
 	return text.translate(translation)
 
 
-def extract_speed_value(ocr_result) -> tuple[float | None, str | None]:
-	"""从 RapidOCR 3.x 结果中提取速度值。支持 TextRecOutput 和旧 list 格式。"""
+def extract_speed_value(ocr_result) -> tuple[float | None, str | None, float]:
+	"""从 RapidOCR 3.x 结果中提取速度值和置信度。
+
+	Returns: (speed_value, raw_text, confidence)
+		confidence: 0.0-1.0 (含), 0.0 表示置信度不可用
+	"""
 	if not ocr_result:
-		return None, None
+		return None, None, 0.0
 
 	# RapidOCR 3.x TextRecOutput (use_det=False 时返回)
 	if hasattr(ocr_result, "txts"):
 		txts = ocr_result.txts
 		if not txts or not txts[0]:
-			return None, None
+			return None, None, 0.0
+		scores = getattr(ocr_result, "scores", [])
+		conf = float(scores[0]) if scores else 0.0
 		text = str(txts[0]).strip()
 		if not text:
-			return None, None
+			return None, None, conf
 		normalized = normalize_ocr_text(text).replace(" ", "")
 		match = OCR_NUMBER_RE.search(normalized)
 		if not match:
-			return None, None
+			return None, None, conf
 		raw_text = re.sub(r"\D", "", match.group(0))
 		if not raw_text:
-			return None, None
+			return None, None, conf
 		try:
-			return float(raw_text), raw_text
+			return float(raw_text), raw_text, conf
 		except ValueError:
-			return None, None
+			return None, None, conf
 
 	# RapidOCR 3.x 带检测时返回 tuple (dt_boxes, rec_res, elapse)
 	if isinstance(ocr_result, (tuple, list)) and len(ocr_result) >= 2:
 		rec = ocr_result[1]
 		if rec is None:
-			return None, None
+			return None, None, 0.0
 		candidates: list[str] = []
 		if isinstance(rec, list):
 			for item in rec:
@@ -332,18 +338,18 @@ def extract_speed_value(ocr_result) -> tuple[float | None, str | None]:
 			candidates.append(rec.strip())
 
 		if not candidates:
-			return None, None
+			return None, None, 0.0
 		joined = normalize_ocr_text(" ".join(candidates)).replace(" ", "")
 		match = OCR_NUMBER_RE.search(joined)
 		if not match:
-			return None, None
+			return None, None, 0.0
 		raw_text = re.sub(r"\D", "", match.group(0))
 		if not raw_text:
-			return None, None
+			return None, None, 0.0
 		try:
-			return float(raw_text), raw_text
+			return float(raw_text), raw_text, 0.0
 		except ValueError:
-			return None, None
+			return None, None, 0.0
 
 	return None, None
 

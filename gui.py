@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 	QDialog, QFileDialog, QMessageBox, QHBoxLayout, QVBoxLayout, QGridLayout,
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QThread
-from widget_utils import make_static_card
+from widget_utils import make_static_card, make_int_spinbox
 from pipeline import ProcessingPipeline
 from PySide6.QtGui import (
 	QPixmap, QImage, QPainter, QPen, QColor, QKeySequence, QShortcut,
@@ -49,8 +49,9 @@ class _ExportThread(QThread):
 
 	def __init__(self, app: "RaceVideoToLogApp", output_path: Path,
 			region: tuple, max_speed_kmh: float, max_accel_mps2: float,
-			frame_div: int, target_h: float, pad_px: float, buffer_size: int,
-			backend: str = "auto", parent: QWidget | None = None) -> None:
+			frame_div: int, target_h: int, pad_px: int, buffer_size: int,
+			backend: str = "auto", log_level: str = "normal",
+			parent: QWidget | None = None) -> None:
 		super().__init__(parent)
 		self.app = app
 		self._output_path = output_path
@@ -62,6 +63,7 @@ class _ExportThread(QThread):
 		self._pad_px = pad_px
 		self._buffer_size = buffer_size
 		self._backend = backend
+		self._log_level = log_level
 		self._cancel_flag = False
 
 
@@ -94,6 +96,7 @@ class _ExportThread(QThread):
 					frame_end=self.app.frame_end_edit.text(),
 					progress_cb=self._emit_progress,
 					cancel_check=self._check_cancel,
+					log_level=self._log_level,
 				)
 				if mode == "auto":
 					pipeline.run_auto(self._output_path)
@@ -329,22 +332,27 @@ class RaceVideoToLogApp(QMainWindow):
 		pl = QGridLayout(perf_card)
 		pl.addWidget(StrongBodyLabel("性能"), 0, 0, 1, 4)
 		pl.addWidget(BodyLabel("采样率 1/"), 1, 0)
-		self.div_spin = CompactSpinBox(); self.div_spin.setRange(1, 10); self.div_spin.setValue(2); self.div_spin.setFixedWidth(70)
-		self._disable_spin_flyout(self.div_spin)
+		self.div_spin = make_int_spinbox(1, 10, 2, 70)
 		pl.addWidget(self.div_spin, 1, 1)
 		pl.addWidget(BodyLabel("并行线程数"), 1, 2)
-		self.buffer_edit = LineEdit(); self.buffer_edit.setText("16"); self.buffer_edit.setFixedWidth(50)
-		pl.addWidget(self.buffer_edit, 1, 3)
+		self.buffer_spin = make_int_spinbox(1, 64, 16, 70)
+		pl.addWidget(self.buffer_spin, 1, 3)
 		pl.addWidget(BodyLabel("OCR 高度 (px)"), 2, 0)
-		self.target_h_edit = LineEdit(); self.target_h_edit.setText("24"); self.target_h_edit.setFixedWidth(50)
-		pl.addWidget(self.target_h_edit, 2, 1)
+		self.target_h_spin = make_int_spinbox(8, 256, 48, 70)
+		pl.addWidget(self.target_h_spin, 2, 1)
 		pl.addWidget(BodyLabel("边缘填充 (px)"), 2, 2)
-		self.pad_edit = LineEdit(); self.pad_edit.setText("0"); self.pad_edit.setFixedWidth(50)
-		pl.addWidget(self.pad_edit, 2, 3)
+		self.pad_spin = make_int_spinbox(0, 64, 0, 70)
+		pl.addWidget(self.pad_spin, 2, 3)
 		pl.addWidget(BodyLabel("OCR 后端"), 3, 0)
 		self.backend_combo = ComboBox()
 		self.backend_combo.addItems(["自动", "TensorRT", "CPU"]); self.backend_combo.setCurrentIndex(0)
 		pl.addWidget(self.backend_combo, 3, 1)
+		pl.addWidget(BodyLabel("日志级别"), 3, 2)
+		self.log_level_combo = ComboBox()
+		self.log_level_combo.addItems(["正常", "详细", "调试"])
+		self.log_level_combo.setCurrentIndex(0)
+		self.log_level_combo.setFixedWidth(80)
+		pl.addWidget(self.log_level_combo, 3, 3)
 		pl.addWidget(BodyLabel("OCR 模型"), 4, 0)
 		self.model_combo = ComboBox()
 		self.model_combo.addItems(["v6_tiny", "v6_small"])
@@ -781,9 +789,9 @@ class RaceVideoToLogApp(QMainWindow):
 			("max_speed", self.max_speed_edit, str),
 			("max_accel", self.max_accel_edit, str),
 			("div", self.div_spin, lambda v: int(float(v))),
-			("target_h", self.target_h_edit, str),
-			("pad", self.pad_edit, str),
-			("buffer", self.buffer_edit, str),
+			("target_h", self.target_h_spin, lambda v: int(float(v))),
+			("pad", self.pad_spin, lambda v: int(float(v))),
+			("buffer", self.buffer_spin, lambda v: int(float(v))),
 			("frame_start", self.frame_start_edit, str),
 			("frame_end", self.frame_end_edit, str),
 		]:
@@ -836,9 +844,10 @@ class RaceVideoToLogApp(QMainWindow):
 
 		try:
 			ms = float(self.max_speed_edit.text()); ma = float(self.max_accel_edit.text())
-			fd = self.div_spin.value(); th = float(self.target_h_edit.text())
-			pp = float(self.pad_edit.text()); nw = int(self.buffer_edit.text())
+			fd = self.div_spin.value(); th = self.target_h_spin.value()
+			pp = self.pad_spin.value(); nw = self.buffer_spin.value()
 			be = ["auto", "tensorrt", "cpu"][self.backend_combo.currentIndex()]
+			log_level = ["normal", "detailed", "debug"][self.log_level_combo.currentIndex()]
 		except ValueError:
 			QMessageBox.warning(self, "参数错误", "请检查数值参数。"); return
 
@@ -852,7 +861,7 @@ class RaceVideoToLogApp(QMainWindow):
 			self._export_thread = None
 
 		self._export_btn.setEnabled(False); self._cancel_btn.setEnabled(True)
-		self._export_thread = _ExportThread(self, Path(out), roi, ms, ma, fd, th, pp, nw, be)
+		self._export_thread = _ExportThread(self, Path(out), roi, ms, ma, fd, th, pp, nw, be, log_level)
 		self._export_thread._progress.connect(self._on_progress)
 		self._export_thread._finished.connect(self._on_done)
 		self._export_thread._review_data.connect(self._on_review_needed)
