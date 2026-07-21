@@ -80,6 +80,9 @@ RaceVideoToLog/
 ├── theme_manager.py     # 主题回调管理器
 ├── headless.py          # CLI 入口
 ├── RaceVideoToLog.spec  # PyInstaller 打包配置
+├── DEPENDENCIES.md     # 上游依赖版本 + 已知问题
+├── tools/
+│   └── check_deps.py   # 检查依赖更新
 └── README.md
 ```
 
