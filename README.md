@@ -74,7 +74,7 @@ RaceVideoToLog/
 ├── analysis.py          # 数据分析业务逻辑
 ├── pipeline.py          # 统一处理流水线 (GUI/CLI 共用)
 ├── correction.py        # 物理约束纠错流水线
-├── ocr_engine.py        # OCR 引擎、预处理、锚点选择、Flag 枚举
+├── ocr_engine.py        # OCR 引擎、预处理、Flag 枚举、LCS 一致性评分
 ├── config.py            # 集中配置（常量、颜色、默认值）
 ├── gpu_setup.py         # GPU DLL 加载 + TensorRT/CPU 后端选择
 ├── theme_manager.py     # 主题回调管理器
@@ -96,8 +96,7 @@ CSV 头包含完整处理参数和统计信息：
 # roi=862,945,957,1003, format=km/h, frame_start=114, frame_end=6317
 # max_speed=400.0, max_accel=70.0, div=1, target_h=24.0, pad=0.0, buffer=16
 # backend=TensorRT, model=v6_small
-# auto_anchor=1
-# stats: total=6203, anchors=4265, corrected=318
+# stats: total=6203, trusted=4265, corrected=318
 # timing: ocr=23.5s, correction=0.4s, integrate_write=0.0s
 1.90,0.00,0.00,0
 1.92,0.00,3.00,0
@@ -109,18 +108,19 @@ CSV 头包含完整处理参数和统计信息：
 | ---- | ---- | ---- |
 | 0 | `Flag.RAW` | 原始 OCR |
 | 11 | `Flag.REOCR_AUTO` | re-OCR 自动修正 |
-| 12 | `Flag.FILL_INTERP` | 插值填充 |
+| 12 | `Flag.FILL_INTERP` | 物理插值填充 |
 | 13 | `Flag.PARTIAL_AUTO` | 部分数字自动修正 |
-| 21 | `Flag.ANCHOR_AUTO` | 自动锚点帧 |
-| 22 | `Flag.ANCHOR_MANUAL` | 人工修正帧 |
+| 21 | `Flag.HIGH_TRUST` | LCS 高可信帧 |
+| 22 | `Flag.PINNED` | 用户手动修正（绝对真值） |
 | 23 | `Flag.CONFIRMED_SEG` | 人工确认段 |
 | 30 | `Flag.FLAGGED_REVIEW` | 待人工审核 |
 
 ## 部分数字修正
 
-OCR 读到的数字可能缺失部分位（如 `221` 被识别为 `21`），系统会**自动推断**缺失位置：
+OCR 读到的数字可能缺失部分位（如 `221` 被识别为 `21`），系统会**自动生成候选**：
 
-- OCR 读到 `"21"`，邻居速度约 221 → 自动生成模式 `"x21"`，候选值为 [21, 121, 221, 321]
+- OCR 读到 1-2 位数字时，自动生成所有可能的缺位扩展（如 `"21"` → [21, 121, 221, 321]）
+- 由 LCS（局部一致性评分）自动选择最优候选，不做插值猜测
 - 人工审核时也可手动输入 `"12x"` 约束候选范围
 
 ## CLI 参数

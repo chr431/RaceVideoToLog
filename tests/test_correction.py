@@ -1,17 +1,14 @@
-"""Tests for core pure functions."""
+"""Tests for core pure functions — LCS-based correction API."""
 import pytest
 from correction import (
-	expand_partial, _find_neighbor_anchors, _interp_candidate,
-	compute_confidence, _score_candidate,
-	_detect_neighbor_jump, _detect_v_shape, _detect_cliff,
-	_detect_anchor_trend, _detect_isolated_spike, _detect_local_trend,
+	expand_partial, _find_neighbor_trusted, _interp_candidate,
+	compute_confidence, _auto_expand_digits, _lcs_pick_best,
 	_detect_errors,
 )
 from ocr_engine import (
 	_savgol_filter_np, normalize_ocr_text, safe_int, safe_float, Flag,
 	build_speed_candidates, SpeedObservation,
-	auto_select_anchors, _anchor_adaptive_window,
-	_anchor_select_center, _anchor_validate_neighbors,
+	compute_lcs_scores, _lcs_score_for_value,
 )
 from analysis import parse_csv
 import numpy as np
@@ -85,31 +82,65 @@ class TestFlag:
 		assert not Flag.is_corrected(0)
 		assert not Flag.is_corrected(21)
 
-	def test_is_anchor(self):
+	def test_is_trusted(self):
+		assert Flag.is_trusted(21)
+		assert Flag.is_trusted(22)
+		assert Flag.is_trusted(23)
+		assert not Flag.is_trusted(0)
+		assert not Flag.is_trusted(11)
+		assert not Flag.is_trusted(13)
+
+	def test_is_anchor_backward_compat(self):
+		"""is_anchor() remains as backward-compat alias for is_trusted()."""
 		assert Flag.is_anchor(21)
 		assert Flag.is_anchor(22)
 		assert not Flag.is_anchor(0)
 		assert not Flag.is_anchor(11)
 
 
-class TestAnchorHelper:
-	def test_find_neighbor_anchors(self):
-		anchors = {0, 5, 10}
-		la, ra = _find_neighbor_anchors(3, 15, anchors)
-		assert la == 0
-		assert ra == 5
+class TestFindNeighborTrusted:
+	def _make_rows(self, speeds, flags=None):
+		"""Helper: create rows with given speeds and flags."""
+		n = len(speeds)
+		if flags is None:
+			flags = [Flag.HIGH_TRUST] * n
+		return [[float(i), 0.0, float(speeds[i]), flags[i]] for i in range(n)]
 
-	def test_no_left_anchor(self):
-		anchors = {5, 10}
-		la, ra = _find_neighbor_anchors(1, 15, anchors)
+	def test_find_both(self):
+		rows = self._make_rows([100, 102, 101, 103],
+			[Flag.RAW, Flag.HIGH_TRUST, Flag.RAW, Flag.HIGH_TRUST])
+		la, ra = _find_neighbor_trusted(2, 4, rows)
+		assert la == 1
+		assert ra == 3
+
+	def test_no_left(self):
+		rows = self._make_rows([100, 102, 101],
+			[Flag.RAW, Flag.RAW, Flag.HIGH_TRUST])
+		la, ra = _find_neighbor_trusted(0, 3, rows)
 		assert la is None
-		assert ra == 5
+		assert ra == 2
 
-	def test_no_right_anchor(self):
-		anchors = {0, 3}
-		la, ra = _find_neighbor_anchors(7, 15, anchors)
-		assert la == 3
+	def test_no_right(self):
+		rows = self._make_rows([100, 102, 101],
+			[Flag.HIGH_TRUST, Flag.RAW, Flag.RAW])
+		la, ra = _find_neighbor_trusted(2, 3, rows)
+		assert la == 0
 		assert ra is None
+
+	def test_skips_invalid_speed(self):
+		"""Trusted frame with negative speed should be skipped."""
+		rows = self._make_rows([100, -1, 101],
+			[Flag.RAW, Flag.HIGH_TRUST, Flag.HIGH_TRUST])
+		la, ra = _find_neighbor_trusted(0, 3, rows)
+		assert la is None  # frame 1 has flag>=20 but speed -1
+		assert ra == 2
+
+	def test_pinned_is_trusted(self):
+		rows = self._make_rows([100, 102, 101],
+			[Flag.RAW, Flag.PINNED, Flag.RAW])
+		la, ra = _find_neighbor_trusted(0, 3, rows)
+		assert la is None
+		assert ra == 1  # PINNED counts as trusted
 
 
 class TestParseCSV:
@@ -141,14 +172,13 @@ class TestBuildSpeedCandidates:
 	def test_confusion_chars(self):
 		"""OCR confuses '8' and '0'"""
 		result = build_speed_candidates("80", 400)
-		# Should include variations: 80, 00 (invalid), 88, 08, 60, etc.
 		assert len(result) > 1
 
 
 class TestComputeConfidence:
-	def test_all_clean(self):
-		"""All frames are anchors — should have high confidence."""
-		rows = [[float(i), 0.0, 100.0, 21] for i in range(10)]  # all anchors
+	def test_all_trusted(self):
+		"""All frames are HIGH_TRUST — should have high confidence."""
+		rows = [[float(i), 0.0, 100.0, Flag.HIGH_TRUST] for i in range(10)]
 		obs = [SpeedObservation(float(i), 100.0, "100") for i in range(10)]
 		result = compute_confidence(rows, obs, 400, 50)
 		assert len(result) == 10
@@ -156,116 +186,166 @@ class TestComputeConfidence:
 
 	def test_low_confidence(self):
 		"""Frame with corrected flag gets penalty."""
-		rows = [[i * 0.1, 0.0, 100.0, 0] for i in range(10)]
-		rows[5][3] = 11  # auto-corrected flag → -30 penalty
+		rows = [[i * 0.1, 0.0, 100.0, Flag.RAW] for i in range(10)]
+		rows[5][3] = Flag.REOCR_AUTO  # auto-corrected flag → -30 penalty
 		obs = [SpeedObservation(r[0], r[2], str(int(r[2]))) for r in rows]
 		result = compute_confidence(rows, obs, 400, 50)
 		assert result[5]["score"] < result[4]["score"]  # corrected has lower score
 
 	def test_extreme_accel(self):
 		"""Extreme acceleration → confidence drops."""
-		rows = [[0.0, 0.0, 100.0, 0], [0.1, 0.0, 300.0, 0]]  # 2000 km/h/s jump
+		rows = [[0.0, 0.0, 100.0, Flag.RAW], [0.1, 0.0, 300.0, Flag.RAW]]
 		obs = [SpeedObservation(r[0], r[2], str(int(r[2]))) for r in rows]
 		result = compute_confidence(rows, obs, 400, 50)
 		assert result[1]["score"] < 90
 
 
-class TestErrorDetectors:
-	def _make_context(self, speeds, anchors=None, dt=0.1):
-		"""Helper: create detector context from speed values."""
-		n = len(speeds)
-		raw_vals = [float(s) for s in speeds]
-		times = [i * dt for i in range(n)]
-		rows = [[times[i], 0.0, raw_vals[i], 0] for i in range(n)]
-		anchors_set = anchors or set()
-		return raw_vals, times, rows, anchors_set, n
+class TestAutoExpandDigits:
+	def test_1_digit(self):
+		"""Single digit should generate 1-2 digit expansions."""
+		result = _auto_expand_digits("5", 400)
+		assert 5 in result
+		assert len(result) > 1  # should have expansions like 15, 25, ..., 95
 
-	def test_neighbor_jump_clean(self):
-		raw_vals, times, rows, anchors, n = self._make_context(
-			[100, 102, 101, 103])
-		assert not _detect_neighbor_jump(1, raw_vals[1], n, raw_vals, times, 400, 50)
+	def test_2_digits(self):
+		"""Two digits should generate 2-3 digit expansions."""
+		result = _auto_expand_digits("21", 400)
+		assert 21 in result
+		assert 121 in result
+		assert 221 in result
 
-	def test_neighbor_jump_bad(self):
-		raw_vals, times, rows, anchors, n = self._make_context(
-			[100, 200, 101])  # frame 1 jumps 100 km/h → ~278 m/s²
-		assert _detect_neighbor_jump(1, raw_vals[1], n, raw_vals, times, 400, 50)
+	def test_3_digits_no_expand(self):
+		"""Three digits assumed complete — no auto-expand candidates."""
+		result = _auto_expand_digits("123", 400)
+		assert result == []  # 3-digit values are assumed complete
 
-	def test_v_shape(self):
-		raw_vals, times, rows, anchors, n = self._make_context(
-			[100, 50, 100])  # rapid decel then accel
-		assert _detect_v_shape(1, raw_vals[1], n, raw_vals, times, 50)
+	def test_empty(self):
+		assert _auto_expand_digits("", 400) == []
+		assert _auto_expand_digits("abc", 400) == []
 
-	def test_cliff(self):
-		"""One side jumps 4000→100 while the other stays flat."""
-		raw_vals, times, rows, anchors, n = self._make_context(
-			[100, 500, 490])  # left accel huge, right accel near zero
-		assert _detect_cliff(1, raw_vals[1], n, raw_vals, times, 50)
-
-	def test_anchor_trend(self):
-		raw_vals, times, rows, anchors_set, n = self._make_context(
-			[100, 20, 100], anchors={0, 2})  # frame 1 at 20 deviates 80 from interp 100, threshold ~54
-		assert _detect_anchor_trend(1, raw_vals[1], n, rows, times, anchors_set, 50)
-
-	def test_isolated_spike(self):
-		raw_vals, times, rows, anchors, n = self._make_context(
-			[100, 101, 200, 101, 100])  # frame 2 is a spike
-		assert _detect_isolated_spike(2, raw_vals[2], n, raw_vals, times, 50)
-
-	def test_local_trend(self):
-		raw_vals, times, rows, anchors, n = self._make_context(
-			[100, 101, 200, 101, 100])  # neighbors all near 100, frame 2 at 200
-		assert _detect_local_trend(2, raw_vals[2], n, raw_vals, 400)
-
-	def test_integrated_detection(self):
-		"""All detectors together via _detect_errors."""
-		raw_vals, times, rows, anchors, n = self._make_context(
-			[100, 102, 101, 103, 250, 104, 105])  # frame 4 is bad
-		errors = _detect_errors(rows, {0, 2, 6}, times, 400, 50)
-		assert 4 in errors  # frame 4 should be caught
+	def test_all_within_max_speed(self):
+		result = _auto_expand_digits("2", 50)
+		assert all(v <= 50 for v in result)
 
 
-class TestAutoSelectAnchors:
-	def test_adaptive_window(self):
-		times = [i * 0.02 for i in range(100)]  # 50 fps
-		w = _anchor_adaptive_window(times, 100)
-		assert w >= 5
-		assert w % 2 == 1  # odd
+class TestLcsScoreForValue:
+	def _make_rows(self, speeds, dt=0.1):
+		times = [i * dt for i in range(len(speeds))]
+		return [[times[i], 0.0, float(speeds[i]), Flag.RAW] for i in range(len(speeds))], times
 
-	def test_center_selection(self):
-		"""Clean stable speeds should produce many anchors."""
-		n = 50
-		raw_vals = [100.0 + np.random.default_rng(0).normal(0, 1.0) for _ in range(n)]
-		times = [i * 0.02 for i in range(n)]
-		anchors = _anchor_select_center(raw_vals, times, n, 11, 400, 4.0)
-		assert len(anchors) > n // 2
+	def test_perfect_consistency(self):
+		"""All values identical → score should be 1.0."""
+		rows, times = self._make_rows([100, 100, 100, 100, 100])
+		score = _lcs_score_for_value(2, 100.0, rows, times, 400, 50)
+		assert score == 1.0
 
-	def test_neighbor_validation(self):
-		"""Isolated bad anchor should be removed."""
-		raw_vals = [100.] * 10
-		raw_vals[5] = 500  # outlier
-		anchors = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
-		filtered = _anchor_validate_neighbors(anchors, raw_vals, 10)
-		assert 5 not in filtered  # outlier removed
-		assert 4 in filtered  # neighbors kept
+	def test_outlier_low_score(self):
+		"""Frame far from neighbors should have low score."""
+		rows, times = self._make_rows([100, 102, 200, 101, 103])
+		score = _lcs_score_for_value(2, 200.0, rows, times, 400, 50)
+		assert score < 0.5
+
+	def test_pinned_boost(self):
+		"""Pinned neighbor should contribute 3× weight, outweighing a disagreeing neighbor."""
+		# Frame 0=100 (pinned), frame 1=200 (disagrees), frame 2=105 (tested)
+		# Candidate 100 is consistent with pinned frame 0 but inconsistent with frame 1
+		rows, times = self._make_rows([100, 200, 105])
+		rows[0][3] = Flag.PINNED
+		score_pinned = _lcs_score_for_value(2, 100.0, rows, times, 400, 100,
+		                                     high_weight={0})
+		# Reset frame 0 to RAW (no boost)
+		rows[0][3] = Flag.RAW
+		score_no_pin = _lcs_score_for_value(2, 100.0, rows, times, 400, 100)
+		assert score_pinned > score_no_pin
+
+	def test_out_of_range_zero(self):
+		"""Speed out of range should score 0."""
+		rows, times = self._make_rows([100, 102, 500, 101, 103])
+		score = _lcs_score_for_value(2, 500.0, rows, times, 400, 50)
+		assert score == 0.0
 
 
-class TestScoreCandidate:
-	def _make_context(self, speeds, error_set=None, anchors=None, dt=0.1):
-		n = len(speeds)
-		times = [i * dt for i in range(n)]
-		rows = [[times[i], 0.0, float(speeds[i]), 0] for i in range(n)]
-		return rows, times, anchors or set(), error_set or set(), n
+class TestComputeLcsScores:
+	def test_all_consistent(self):
+		"""All consistent values → all scores high."""
+		rows = [[i * 0.1, 0.0, 100.0, Flag.RAW] for i in range(20)]
+		scores = compute_lcs_scores(rows, 400, 50)
+		assert all(s > 0.9 for s in scores)
 
-	def test_perfect_match(self):
-		rows, times, anchors, errors, n = self._make_context(
-			[100, 102, 101, 103])
-		score = _score_candidate(101.0, 2, rows, anchors, errors, times, 400, 50)
-		assert 0 <= score <= 1.0
+	def test_pinned_affects_neighbors(self):
+		"""Pinned frame should boost neighbor scores (when consistent)."""
+		rows = [[i * 0.1, 0.0, 100.0 + i * 0.1, Flag.RAW] for i in range(20)]
+		rows[10][3] = Flag.PINNED
+		scores = compute_lcs_scores(rows, 400, 50, pinned={10})
+		assert all(0 <= s <= 1.0 for s in scores)
 
-	def test_anchors_prefer(self):
-		"""Candidate close to anchor interpolation should score higher."""
-		rows, times, anchors, errors, n = self._make_context(
-			[100, 50, 100], anchors={0, 2})
-		good = _score_candidate(100.0, 1, rows, anchors, errors, times, 400, 50)
-		bad = _score_candidate(50.0, 1, rows, anchors, errors, times, 400, 50)
-		assert good > bad
+
+class TestDetectErrors:
+	def test_out_of_range(self):
+		"""Out-of-range values should be errors."""
+		rows = [[0.0, 0.0, 100.0, Flag.RAW],
+		        [0.1, 0.0, -1.0, Flag.RAW],
+		        [0.2, 0.0, 500.0, Flag.RAW]]
+		errors, scores = _detect_errors(rows, set(), [r[0] for r in rows], 400, 50)
+		assert 1 in errors
+		assert 2 in errors
+
+	def test_anchors_excluded(self):
+		"""Pinned/anchored frames should never be in error set."""
+		rows = [[0.0, 0.0, 100.0, Flag.PINNED],
+		        [0.1, 0.0, 500.0, Flag.PINNED]]  # out of range but pinned
+		errors, scores = _detect_errors(rows, {0, 1}, [r[0] for r in rows], 400, 50)
+		assert 0 not in errors
+		assert 1 not in errors
+
+	def test_returns_scores(self):
+		rows = [[i * 0.1, 0.0, 100.0, Flag.RAW] for i in range(10)]
+		errors, scores = _detect_errors(rows, set(), [r[0] for r in rows], 400, 50)
+		assert len(scores) == 10
+		assert all(0 <= s <= 1.0 for s in scores)
+
+
+class TestLcsPickBest:
+	def _make_context(self, speeds, pinned=None, dt=0.1):
+		times = [i * dt for i in range(len(speeds))]
+		rows = [[times[i], 0.0, float(speeds[i]), Flag.RAW] for i in range(len(speeds))]
+		return rows, times
+
+	def test_consistent_wins(self):
+		"""Candidate consistent with neighbors should score highest."""
+		rows, times = self._make_context([100, 102, 101, 103])
+		best_val, best_score = _lcs_pick_best(
+			[50, 101, 200], 2, rows, times, 400, 50)
+		assert best_val == 101
+		assert best_score > 0.5
+
+	def test_out_of_range_candidate_skipped(self):
+		rows, times = self._make_context([100, 102, 101, 103])
+		best_val, best_score = _lcs_pick_best(
+			[500], 2, rows, times, 400, 50)
+		assert best_val is None
+		assert best_score == -1.0
+
+	def test_pinned_influence(self):
+		"""Pinned neighbors should influence candidate selection."""
+		rows, times = self._make_context([50, 102, 101])
+		rows[0][3] = Flag.PINNED  # frame 0 is 50 km/h, pinned
+		# Candidate 55 is closer to pinned neighbor 50
+		best_val, _ = _lcs_pick_best(
+			[55, 200], 2, rows, times, 400, 100, pinned={0})
+		assert best_val == 55
+
+
+class TestInterpCandidate:
+	def test_linear_interp(self):
+		rows = [[0.0, 0.0, 100.0, Flag.HIGH_TRUST],
+		        [0.1, 0.0, 0.0, Flag.RAW],
+		        [0.2, 0.0, 200.0, Flag.HIGH_TRUST]]
+		val = _interp_candidate(1, rows, set(), [r[0] for r in rows], 400)
+		assert val == pytest.approx(150.0)
+
+	def test_no_neighbors(self):
+		rows = [[0.0, 0.0, 100.0, Flag.RAW],
+		        [0.1, 0.0, 0.0, Flag.RAW]]
+		val = _interp_candidate(0, rows, set(), [r[0] for r in rows], 400)
+		assert val is None

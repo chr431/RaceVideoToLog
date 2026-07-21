@@ -46,7 +46,7 @@ ProgressFn = Callable[[str, float], None]
 class ProcessingPipeline:
 	"""统一处理流水线。
 
-	同时支持自动锚点模式和人工辅助（两段式）模式。
+	同时支持自动纠错模式和人工辅助（两段式）模式。
 	通过 progress_cb 回调报告进度，与 UI 框架解耦。
 	"""
 
@@ -97,7 +97,7 @@ class ProcessingPipeline:
 	# ═══════════════ 公开接口 ═══════════════
 
 	def run_auto(self, output_path: str | Path) -> None:
-		"""自动锚点模式：完整流水线 → 写 CSV。"""
+		"""自动纠错模式：完整流水线 → 写 CSV。"""
 		t_total = _time.perf_counter()
 		self._emit("加载 OCR 引擎...", 1.0)
 		self._ensure_ocr()
@@ -236,7 +236,9 @@ class ProcessingPipeline:
 				 confirmed: set[int] | None = None) -> None:
 		"""共享纠错逻辑：构建 rows → 应用修正 → LCS 评分 → correct_with_trust。
 
-		corrections 和 confirmed 仅由 pass2 传入；先重建 rows 再覆盖修正值。
+		先重建全部 RAW rows，再覆盖用户修正（PINNED）和确认段（CONFIRMED_SEG），
+		最后交给 correct_with_trust 进行 LCS 错误检测和 5 阶段纠错。
+		corrections 和 confirmed 仅由 pass2 传入。
 		"""
 		# 构建初始 rows（全部 RAW）
 		self._rows = []
@@ -280,7 +282,7 @@ class ProcessingPipeline:
 			logger.info("重OCR 耗时: %.2fs", corr_timing["re_ocr"])
 
 	def _run_correction(self, output_path: Path, skip_fill: bool) -> None:
-		"""自动锚点模式的完整纠错 + 写 CSV（调用 _correct 后继续）。"""
+		"""自动纠错模式的完整纠错 + 写 CSV（调用 _correct 后继续）。"""
 		self._correct(91.0, 6.0, skip_fill=skip_fill)
 		t1 = _time.perf_counter()
 		self._integrate_distance()

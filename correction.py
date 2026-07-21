@@ -1,6 +1,6 @@
 """Correction — 物理约束纠错流水线。
 
-5 阶段流水线：错误检测 → 重OCR → 最优选择 → 多轮迭代 → 级联填充。
+5 阶段流水线：LCS 错误检测 → 重OCR → LCS 最优选择 → 多轮迭代 → 级联填充。
 支持 GUI 和无头 CLI 共用同一实现。
 """
 from __future__ import annotations
@@ -104,8 +104,8 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
 						 notes: dict[int, str] | None = None, pinned: set[int] | None = None) -> list:
 	"""5 阶段物理约束纠错流水线。
 
-	以 anchor_indices 中帧的速度为硬约束（固定不变），
-	对其余帧进行错误检测、重OCR、最优选择和级联填充。
+	以 pinned 帧（用户手动修正）为硬约束（固定不变），
+	LCS 自动检测的可信帧辅助约束，对其余帧进行错误检测、重OCR、最优选择和级联填充。
 
 	Args:
 	    reocr_cache: 可选的重 OCR 缓存字典，绑定到 Pipeline 实例生命周期。
@@ -203,6 +203,10 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
 def _detect_errors(rows: list, anchors: set, times: list,
                    max_speed_kmh: float, max_accel_mps2: float) -> tuple[set[int], list[float]]:
 	"""阶段 1：LCS 局部一致性评分错误检测。
+
+	对每帧计算指数加权时间窗内邻居一致性分数，
+	score < 0.7 的帧标记为错误（合并 error 和 borderline）。
+	anchors（pinned 帧）在评分时获得 3× 权重，且自身不会被标记为错误。
 
 	Returns: (error_set, lcs_scores)
 	"""

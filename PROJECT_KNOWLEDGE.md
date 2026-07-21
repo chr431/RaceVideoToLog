@@ -19,8 +19,8 @@ gui.py               # PySide6 主窗口 (Fluent Design 主题)
 gui_review.py        # 人工审核对话框 (问题段审核 + 校正)
 gui_analysis.py      # 数据分析 Tab (matplotlib 图表)
 analysis.py          # 数据分析业务逻辑 (解析/平滑/绘图)
-ocr_engine.py        # OCR 引擎、预处理、候选生成、锚点选择、Flag 枚举、SG 滤波
-correction.py        # 纠错流水线 (检测器、重 OCR、评分、填充、置信度)
+ocr_engine.py        # OCR 引擎、预处理、候选生成、LCS 评分、Flag 枚举、SG 滤波
+correction.py        # 纠错流水线 (LCS 检测、重 OCR、评分、填充、置信度)
 config.py            # 集中常量：颜色、默认值、物理常量、纠错参数、GPU 后端
 gpu_setup.py         # GPU DLL 加载 + ONNX Runtime CUDA EP 配置
 widget_utils.py      # 共享 GUI 组件：静态卡片、matplotlib 缩放/平移
@@ -29,7 +29,7 @@ headless.py          # CLI 无头 OCR 模式
 RaceVideoToLog.spec  # PyInstaller onedir 打包配置
 build_exe.bat        # 一键构建 EXE 脚本
 tests/
-  test_correction.py # 37 个单元测试 (检测器、评分、锚点、SG、Flag、解析)
+  test_correction.py # 单元测试 (LCS 评分、Flag、SG、候选生成、解析)
 ```
 
 ### 依赖
@@ -64,11 +64,11 @@ tests/
 
 ### 两种模式
 
-**自动锚点模式** (`run_auto`): OCR → 锚点选择 → 完整 5 阶段纠错 → 距离积分 → CSV。用于 CLI 和 GUI 一键导出。
+**自动纠错模式** (`run_auto`): OCR → LCS 评分 → 完整 5 阶段纠错 → 距离积分 → CSV。用于 CLI 和 GUI 一键导出。
 
 **人工辅助模式** (两段式):
 
-- `run_review_pass1`: OCR → 锚点选择 → 轻量纠错(仅 h=32 重 OCR) → 置信度评分 → 问题段检测 → 返回结果给 `ReviewDialog`
+- `run_review_pass1`: OCR → 轻量纠错(仅 h=32 重 OCR) → 置信度评分 → 问题段检测 → 返回结果给 `ReviewDialog`
 - `run_review_pass2`: 合并人工修正 → 完整 5 阶段纠错 → 距离积分 → CSV
 
 ### 关键组件
@@ -201,29 +201,29 @@ PaddlePaddle 框架开销（设备同步、executor 调度）对小模型每次�
 
 三种策略：原始值 → 后缀扩展 (处理丢位, 如 "60"→60/160/260) → OCR 字符混淆替换 (如 6↔8, 3↔8)。
 
-### 3. 锚点选择 (`auto_select_anchors`)
-5 阶段：自适应窗口 (覆盖 ~0.3s) → 中位数筛选 (center + boundaries) → 邻居验证 (相邻 ≤10 km/h) → 宽窗口去漂移 (±30 帧中位数) → **图连通性验证**
+### 3. LCS 局部一致性评分 (`compute_lcs_scores`)
+对每帧计算指数加权时间窗投票分数。权重 = exp(-dt/0.06s)，时间窗 0.5s。
+score >= 0.7 → HIGH_TRUST 自动标记；score < 0.3 → 错误；0.3-0.7 → borderline（一并纠错）。
 
-图连通性：候选锚点建图，物理可达 (加速度不超限) 者连边，DFS 找最大连通分量。比旧版逐点加速度验证更鲁棒，自动剔除与多数锚点物理矛盾的孤立异常点。
+pinned 帧（用户手动修正）在评分中获得 3× 权重，确保人工修正值影响邻近帧的评分。
 
-### 4. 纠错算法 (`correct_with_anchors`, 5 阶段)
+### 4. 纠错算法 (`correct_with_trust`, 5 阶段)
 
-1. **投票制错误检测**：8 种检测器全部投票，≥2 票 = 确定错误，1 票 + 锚点稀疏 (>30 帧 gap) = 错误
-   - A. 邻帧跳变  A2. V 字形  A3. 悬崖  E. 卡值 (连续 ≥3 帧相同但上下文变化)
-   - B. 锚点趋势偏离  C. 孤立离群  D. 局部趋势偏离
+1. **LCS 错误检测**：compute_lcs_scores + lcs_detect_errors，score < 0.7 标记为错误
 2. **h=32 重 OCR**：与主 OCR h=24 不同高度，约 10% 概率产生不同值
-3. **动态权重评分**：锚点密集区锚点权重高 (~0.5)，稀疏区邻居/平滑权重上升
-4. **多轮迭代**：最多 3 轮
-5. **级联填充**：对无法修复帧，线性插值 + 加速度钳制，最多 10 轮
+3. **LCS 最优选择**：对候选值逐一计算 LCS 分数，选最高分（需 >= 0.7）；无合格候选时插值回退
+4. **多轮迭代**：最多 4 轮，每轮重新 LCS 评分
+5. **级联填充**：对无法修复帧，以左右 HIGH_TRUST/PINNED 帧为约束插值，最多 10 轮
 
-**轻量模式** (light_mode=True): 仅阶段 1-3，只选重 OCR 值或原始值，不生成混淆/推断/插值候选，不迭代不填充。用于 pass1。
+**轻量模式** (light_mode=True): 仅阶段 1-3，只选重 OCR 值或原始值，不迭代不填充。用于 pass1。
 
 ### 5. 置信度评分 (`compute_confidence`)
 4 维度：OCR 偏差 (0.3) + 邻帧加速度 (0.4) + 纠错标记惩罚 (-30) + SG 平滑偏差 (0.2)。→ `find_problem_segments` 聚合成问题段，建议帧 = 段首尾 + 最低分 + 加速度异常点。
 
-### 6. 部分数字推断 (`_infer_partial_pattern`)
+### 6. 部分数字扩展 (`_auto_expand_digits`)
 
-OCR 读到不完整数字 (如 "21" 而邻居约 221) 时自动推断缺失位。模式 "x21" (首位缺失) / "21x" (末位缺失) / "2x1" (误读)。仅在与预期值偏差 <20% 时采纳。
+OCR 读到 1-2 位数字时，暴力生成所有可能的缺位扩展（如 "21" → [21, 121, 221, 321]）。
+不依赖插值猜测，由 LCS 评分自动选择最优候选。
 
 ## Flag 枚举 (CSV 第 4 列)
 
@@ -231,14 +231,14 @@ OCR 读到不完整数字 (如 "21" 而邻居约 221) 时自动推断缺失位�
 | --- | --- | --- |
 | 0 | RAW | 原始 OCR 输出，未纠错 |
 | 11 | REOCR_AUTO | 重 OCR 自动修正 |
-| 12 | FILL_INTERP | 级联插值填充 |
+| 12 | FILL_INTERP | 物理插值填充 |
 | 13 | PARTIAL_AUTO | 部分数字模式推断修正 |
-| 21 | ANCHOR_AUTO | 自动锚点 (硬约束) |
-| 22 | ANCHOR_MANUAL | 人工修正锚点 |
+| 21 | HIGH_TRUST | LCS 高可信帧 |
+| 22 | PINNED | 用户手动修正 (绝对真值) |
 | 23 | CONFIRMED_SEG | 人工确认段内帧 |
 | 30 | FLAGGED_REVIEW | 标记待人工审核 |
 
-辅助方法: `Flag.is_corrected(f)` (10-19), `Flag.is_anchor(f)` (≥20)
+辅助方法: `Flag.is_corrected(f)` (10-19), `Flag.is_trusted(f)` (≥20), `Flag.is_anchor(f)` (backward-compat)
 
 ## GPU 后端 (gpu_setup.py)
 
@@ -254,8 +254,8 @@ OCR 读到不完整数字 (如 "21" 而邻居约 221) 时自动推断缺失位�
 # roi=..., format=..., frame_start=, frame_end=
 # max_speed=..., max_accel=..., div=..., target_h=..., pad=..., buffer=...
 # backend=..., model=... [, reocr_model=...]
-# auto_anchor=1 | manual_anchor=1
-# stats: total=..., anchors=..., corrected=...
+# pinned=N (仅当存在用户修正帧时)
+# stats: total=..., trusted=..., corrected=...
 # timing: ocr=....0s, correction=....0s, ...
 timestamp,distance,speed_kmh,flag
 ```
@@ -274,7 +274,7 @@ timestamp,distance,speed_kmh,flag
 python -m pytest tests/ -v    # 37 个单元测试
 ```
 
-覆盖：SG 滤波、expand_partial、Flag 枚举、normalize_ocr_text、safe_int/float、parse_csv_header、build_speed_candidates、find_neighbor_anchors、8 种错误检测器 (独立 + 集成)、锚点选择 (窗口/中心/邻居)、compute_confidence、score_candidate。
+覆盖：SG 滤波、expand_partial、Flag 枚举、normalize_ocr_text、safe_int/float、parse_csv_header、build_speed_candidates、LCS 评分、compute_confidence、_lcs_pick_best、_auto_expand_digits。
 
 ## 常用命令
 
