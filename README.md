@@ -8,17 +8,20 @@
 pip install rapidocr onnxruntime opencv-python-headless numpy matplotlib pyside6 pyside6-fluent-widgets decord
 ```
 
-## GPU 加速配置
+### GPU 加速（可选）
 
-1. 安装 **CUDA Toolkit 12.x**
-2. 安装 **TensorRT 10.x**，将以下目录加入系统 PATH：
+1. 安装 **CUDA Toolkit 12.x** + **TensorRT 10.x**
+2. 安装 Python 绑定：
+   ```bash
+   pip install tensorrt-10.*-cp313-none-win_amd64.whl cuda-python
+   ```
+   （wheel 文件位于 TensorRT 安装目录的 `python/` 子目录）
+3. 将以下目录加入系统 PATH：
    - `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.x\bin`
    - `C:\Program Files\NVIDIA\TensorRT-10.x\bin`
    - `C:\Program Files\NVIDIA\TensorRT-10.x\lib`
-3. 程序启动时自动扫描 PATH 中的 DLL，检测到 TensorRT 即启用 GPU 加速（首次需构建引擎，可能需要几分钟）
-4. 未检测到则自动使用 CPU 推理，无需额外配置
-
-也可在 GUI 中手动选择后端（TensorRT / CPU），或 CLI `--backend tensorrt` / `--backend cpu`。
+4. 启动程序 → 自动检测 TensorRT → 首次需构建引擎（可能需要几分钟）
+5. 未检测到 GPU 环境则自动使用 CPU 推理，无需额外配置
 
 ## 使用方式
 

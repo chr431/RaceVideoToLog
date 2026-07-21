@@ -1,27 +1,43 @@
 ## v2.5.0 更新日志
 
+### 🚀 TensorRT FP16 推理引擎
+
+- **TensorRT 10.x 替代 ONNX CUDA**：v6_tiny 纯推理 850fps（+59% vs ONNX 534fps），v6_small 393fps（+58%）
+- **自动回退 CPU**：无 GPU 环境自动使用 ONNX Runtime CPU 推理（v6_tiny ~394fps）
+- **首次构建引擎**：~3 分钟（缓存为 `.engine` 文件，后续秒加载）
+- **PATH + 注册表扫描**：自动发现 CUDA/TensorRT DLL，支持未注销重登的会话
+- GUI / CLI 后端选项：TensorRT / 自动 / CPU
+
 ### 🎬 decord NVDEC 硬件加速视频解码
 
-- **decord 替代 cv2.VideoCapture**：视频解码使用 decord (NVDEC GPU 硬件加速)，纯解码速度提升 54-64%
-- **解决 DLL 兼容问题**：decord 捆绑的 FFmpeg 4.x DLL 与 ONNX Runtime 不再冲突（通过正确的导入顺序）
-- **简化 producer 逻辑**：decord 支持随机访问 `vr[i]`，无需 cv2 的 grab/retrieve 顺序读取模式
-- GUI 预览保持 cv2（单帧预览无需 decord，且避免导入顺序问题）
+- decord 替代 cv2.VideoCapture，纯解码 +54-64%（HEVC 752fps / H264 767fps）
+- 解决 DLL 冲突（ORT 先 → decord 后导入顺序）
+- cv2 CPU 自动回退（无 GPU 时）
 
-### ⚡ RapidOCR 模型加载优化
+### ⚡ 性能总览 (RTX 4060, v6_tiny)
 
-- **Monkey-patch RapidOCR._initialize**：跳过未使用的 det/cls 模型加载（`use_det=False` / `use_cls=False`）
-- 减少 2 个 ONNX CUDA session 的初始化开销和 GPU 显存占用
+| 指标 | v2.4 (ONNX GPU) | v2.5 (TRT FP16) | 提升 |
+| --- | --- | --- | --- |
+| 纯推理 | 534 fps | **850 fps** | +59% |
+| 管线 OCR 阶段 | 7.6s | **6.6s** | -13% |
+| 管线总计 | 19.3s | **15.5s** | -20% |
+| EXE 体积 | 637 MB | 443 MB | **-30%** |
 
 ### 📦 依赖变更
 
-- 新增：`decord` — NVDEC 硬件加速视频解码
-- 移除替代：不再使用 `cv2.VideoCapture` 进行视频读取（cv2 保留用于图像预处理）
+- **保留**：rapidocr 3.9.1, onnxruntime (CPU), opencv, PySide6, matplotlib
+- **新增**：decord（视频解码）
+- **可选 GPU**：tensorrt 10.x + cuda-python + CUDA Toolkit 12.x
+- **移除**：onnxruntime-gpu（ORT CUDA provider 不再需要）
 
-### 🧹 代码清理
+### 🧹 架构清理
 
-- `pipeline.py`：移除 cv2 VideoCapture 回退路径，100% decord
-- `_try_import_decord()` 移除（decord 现为必需依赖）
-- 版本号 v2.4.0 → v2.5.0
+- 移除 ONNX CUDA 后端（auto 回退链：TensorRT → CPU）
+- `_register_gpu_dlls()`：PATH 扫描 + 注册表补充，无硬编码路径
+- 取消按钮正常工作（Pipeline 添加 cancel_check 回调）
+- 修复信号泄漏（重导出时旧线程信号覆盖新线程）
+- GUI 死代码清理（_debug_log, debug_cb, _log）
+- 全面更新文档、docstring、README
 
 ---
 
