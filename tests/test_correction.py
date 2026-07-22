@@ -176,28 +176,57 @@ class TestBuildSpeedCandidates:
 
 
 class TestComputeConfidence:
-	def test_all_trusted(self):
-		"""All frames are HIGH_TRUST — should have high confidence."""
-		rows = [[float(i), 0.0, 100.0, Flag.HIGH_TRUST] for i in range(10)]
-		obs = [SpeedObservation(float(i), 100.0, "100") for i in range(10)]
+	def test_all_consistent(self):
+		"""All frames identical → LCS=1.0, all scores=100."""
+		rows = [[i * 0.1, 0.0, 100.0, Flag.RAW] for i in range(20)]
+		obs = [SpeedObservation(r[0], r[2], "100") for r in rows]
 		result = compute_confidence(rows, obs, 400, 50)
-		assert len(result) == 10
-		assert all(c["score"] >= 60 for c in result)
+		assert len(result) == 20
+		assert all(c["score"] >= 90 for c in result)  # LCS ~1.0
 
-	def test_low_confidence(self):
-		"""Frame with corrected flag gets penalty."""
-		rows = [[i * 0.1, 0.0, 100.0, Flag.RAW] for i in range(10)]
-		rows[5][3] = Flag.REOCR_AUTO  # auto-corrected flag → -30 penalty
+	def test_physically_inconsistent(self):
+		"""Frame at 300 km/h surrounded by 100 km/h → very low LCS."""
+		rows = [[0.0, 0.0, 100.0, Flag.RAW],
+		        [0.1, 0.0, 300.0, Flag.RAW],
+		        [0.2, 0.0, 100.0, Flag.RAW]]
 		obs = [SpeedObservation(r[0], r[2], str(int(r[2]))) for r in rows]
 		result = compute_confidence(rows, obs, 400, 50)
-		assert result[5]["score"] < result[4]["score"]  # corrected has lower score
+		assert result[1]["score"] < 30  # LCS < 0.3 → <30
+		assert result[0]["score"] > 70  # neighbors are fine
 
-	def test_extreme_accel(self):
-		"""Extreme acceleration → confidence drops."""
-		rows = [[0.0, 0.0, 100.0, Flag.RAW], [0.1, 0.0, 300.0, Flag.RAW]]
+	def test_reason_labels(self):
+		"""Score thresholds produce correct reason labels."""
+		# Inconsistent outlier
+		rows = [[0.0, 0.0, 100.0, Flag.RAW],
+		        [0.1, 0.0, 200.0, Flag.RAW],  # bad — jumps 100 km/h
+		        [0.2, 0.0, 100.0, Flag.RAW]]
 		obs = [SpeedObservation(r[0], r[2], str(int(r[2]))) for r in rows]
 		result = compute_confidence(rows, obs, 400, 50)
-		assert result[1]["score"] < 90
+		assert result[1]["reason"] != '正常'  # middle frame is inconsistent
+
+	def test_out_of_range(self):
+		"""Speed out of range → score=0."""
+		rows = [[0.0, 0.0, -1.0, Flag.RAW],
+		        [0.1, 0.0, 500.0, Flag.RAW]]
+		obs = [SpeedObservation(r[0], r[2], "") for r in rows]
+		result = compute_confidence(rows, obs, 400, 50)
+		assert result[0]["score"] == 0
+		assert result[0]["reason"] == '速度超出范围'
+		assert result[1]["score"] == 0
+
+	def test_pinned_boost(self):
+		"""Pinned frames boost neighbor confidence when consistent — tight spacing."""
+		# dt=0.02s (50fps): pinned frame at index 0, outlier at index 1, test at index 2
+		rows = [[0.0, 0.0, 100.0, Flag.PINNED],
+		        [0.02, 0.0, 300.0, Flag.RAW],   # disagrees with pinned
+		        [0.04, 0.0, 101.0, Flag.RAW]]   # close to pinned
+		obs = [SpeedObservation(r[0], r[2], str(int(r[2]))) for r in rows]
+		result = compute_confidence(rows, obs, 400, 50, pinned={0})
+		# Frame 2 close to pinned frame 0 (dt=0.04, exp(-0.04/0.06)=0.51, ×3 pin weight)
+		# → pinned dominates over the disagreeing frame 1
+		assert result[2]["score"] > 60
+		# Frame 1 disagrees with both neighbors → low
+		assert result[1]["score"] < result[2]["score"]
 
 
 class TestAutoExpandDigits:

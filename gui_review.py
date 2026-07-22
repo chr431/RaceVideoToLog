@@ -477,51 +477,24 @@ class ReviewDialog(QDialog):
 		self._redraw_chart()
 
 	def _quick_correct(self, fi: int, val: float) -> None:
-		"""点击建议帧按钮：导航到该帧并自动添加修正。"""
-		self._current_frame = fi; self._frame_label.setText(f"#{fi}")
-		# 自动存储为修正值
-		self._corrections[fi] = val
-		self._partial_corrections.pop(fi, None)
-		self._speed_edit.setText(self._speed_display(val))
-		self._btn_delete.setEnabled(True)
-		self._show_frame_image(fi)
+		"""点击建议帧按钮：仅导航到该帧，不自动提交修正。"""
+		self._navigate_to(fi)
 		self._redraw_chart()
-		# 更新建议按钮文本
-		for btn in self._suggested_btns:
-			try:
-				f = btn.property("frame_idx")
-			except Exception:
-				continue
-			if f == fi:
-				btn.setText(f"#{fi} ({self._speed_label(val)})")
-				break
 
 	def _check_accel(self, fi: int, v: float) -> tuple[bool, str]:
-		"""检查输入值 v 与前后帧的加速度是否超标。
+		"""使用 LCS 评分检查输入值 v 与邻居帧的物理一致性。
 
 		Returns: (is_ok, warning_message)
 		"""
-		from config import MPS_TO_KMH
-		n = len(self._rows)
-		issues = []
-		# 检查前后各 5 帧
-		for j in range(max(0, fi - 5), min(n, fi + 6)):
-			if j == fi:
-				continue
-			vj = self._rows[j][2]
-			if vj < 0 or vj > self._max_speed:
-				continue
-			dt = abs(self._rows[fi][0] - self._rows[j][0])
-			if dt <= 0:
-				continue
-			accel = abs(v - vj) / dt / MPS_TO_KMH
-			if accel > self._max_accel:
-				issues.append(f"  帧 #{j} ({vj:.0f} km/h): "
-				              f"需加速度 {accel:.0f} m/s² (上限 {self._max_accel:.0f})")
-		if issues:
-			msg = (f"帧 #{fi} 输入值 {v:.0f} 与邻居帧物理不一致:\n\n"
-			       + "\n".join(issues[:3])
-			       + "\n\n确定要使用此值吗？")
+		from ocr_engine import _lcs_score_for_value
+		times = [r[0] for r in self._rows]
+		score = _lcs_score_for_value(fi, v, self._rows, times,
+		                              self._max_speed, self._max_accel)
+		if score < 0.5:
+			msg = (f"帧 #{fi} 输入值 {v:.0f} km/h 与周围邻居物理不一致\n\n"
+			       f"LCS 一致性分数: {score:.2f} / 1.00\n"
+			       f"该值在 {self._max_accel:.0f} m/s² 约束下与邻近帧矛盾。\n\n"
+			       f"确定要使用此值吗？")
 			return False, msg
 		return True, ""
 

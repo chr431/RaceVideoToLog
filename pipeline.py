@@ -153,6 +153,11 @@ class ProcessingPipeline:
 			progress_fn=_prog, skip_fill=True, light_mode=True,
 			reocr_cache=self._reocr_cache)
 
+		# 验证：两次 OCR 的最佳值若超过最大速度则输出 -1
+		for row in self._rows:
+			if row[2] > self._max_speed:
+				row[2] = -1.0
+
 		self._emit("计算置信度...", 95.0)
 		confidences = compute_confidence(self._rows, self._observations,
 										 self._max_speed, self._max_accel)

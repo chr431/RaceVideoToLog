@@ -450,95 +450,57 @@ def _fill_unrecoverable(rows: list, anchors: set, error_set: set, times: list, m
 # ═══════════════════════════════════════════════════════════════
 
 def compute_confidence(rows: list, observations: list, max_speed: float,
-					   max_accel: float) -> list[dict]:
-	"""计算每帧置信度 (0-100)，返回 [{index, score, is_corrected, reason}, ...]。
+					   max_accel: float, pinned: set[int] | None = None) -> list[dict]:
+	"""LCS 置信度评分 (0-100)。
 
-	评分维度:
-	- OCR 偏差: 原始 OCR 值与纠错后值的差 (权重 0.3)
-	- 邻帧加速度: 与前后帧的加速度是否超限 (权重 0.4)
-	- 纠错标记: flag=1 惩罚 (权重 1.0, -30分)
-	- 局部平滑: SG 滤波偏差 (权重 0.2)
+	直接用 compute_lcs_scores 的局部一致性分数，
+	mapping: confidence = lcs_score × 100。
+
+	- 100 分: 当前值与 0.5s 时间窗内所有邻居物理自洽
+	- 0 分: 与所有邻居物理矛盾 / 速度超出范围
+	- 70 分: LCS 0.7（correction 阶段的 borderline 阈值）
+	- 30 分: LCS 0.3（correction 阶段的 error 阈值）
+
+	pinned 帧在评分中获得 3× 权重。
 	"""
-	from ocr_engine import _savgol_filter_np
 	n = len(rows)
-	vals = [r[2] for r in rows]
+	scores = compute_lcs_scores(rows, max_speed, max_accel, pinned=pinned)
 	flags = [r[3] for r in rows]
-
-	# SG 平滑曲线
-	win = min(11, n - 2)
-	if win >= 5:
-		if win % 2 == 0:
-			win += 1
-		try:
-			smoothed = _savgol_filter_np(np.array(vals), win, min(3, win - 1))
-		except Exception:
-			smoothed = vals
-	else:
-		smoothed = vals
 
 	confidences = []
 	for i in range(n):
-		score = 100.0
-		reasons = []
+		lcs = scores[i]
+		cur = rows[i][2]
 
-		cur = vals[i]
 		if cur < 0 or cur > max_speed:
-			confidences.append({'index': i, 'score': 0, 'is_corrected': Flag.is_corrected(flags[i]),
-								'speed': cur, 'reason': '速度超出范围'})
+			confidences.append({
+				'index': i, 'score': 0.0, 'is_corrected': Flag.is_corrected(flags[i]),
+				'speed': cur, 'reason': '速度超出范围',
+			})
 			continue
 
-		# OCR 偏差
-		if i < len(observations):
-			obs = observations[i]
-			ocr_val = obs.raw_speed_kmh if obs.raw_speed_kmh >= 0 else None
-			if ocr_val is not None and ocr_val > 0:
-				dev = abs(ocr_val - cur) / max(max_speed, 1.0) * 100
-				score -= 0.3 * dev
-				if dev > 5:
-					reasons.append(f'OCR偏差{dev:.0f}%')
+		if lcs < 0.3:
+			reason = 'LCS错误(物理矛盾)'
+		elif lcs < 0.7:
+			reason = 'LCS存疑(临界的)'
+		else:
+			reason = '正常'
 
-		# 邻帧加速度
-		if i > 0 and vals[i - 1] >= 0:
-			dt = max(rows[i][0] - rows[i - 1][0], 0.001)
-			accel = abs(cur - vals[i - 1]) / dt / MPS_TO_KMH
-			if accel > max_accel:
-				penalty = 0.4 * min(40, (accel / max_accel - 1) * 50)
-				score -= penalty
-				reasons.append(f'前向加速度{accel:.0f}m/s²')
-
-		if i + 1 < n and vals[i + 1] >= 0:
-			dt = max(rows[i + 1][0] - rows[i][0], 0.001)
-			accel = abs(vals[i + 1] - cur) / dt / MPS_TO_KMH
-			if accel > max_accel:
-				penalty = 0.4 * min(40, (accel / max_accel - 1) * 50)
-				score -= penalty
-				r = f'后向加速度{accel:.0f}m/s²'
-				if r not in reasons:
-					reasons.append(r)
-
-		# 纠错标记
-		if Flag.is_corrected(flags[i]):
-			score -= 30
-			reasons.append('auto-corrected')
-
-		# SG 平滑偏差
-		if win >= 5:
-			sg_dev = abs(cur - smoothed[i]) / max(max_speed, 1.0) * 100
-			score -= 0.2 * sg_dev
-			if sg_dev > 10:
-				reasons.append(f'SG偏差{sg_dev:.0f}%')
-
-		score = max(0.0, min(100.0, score))
-		confidences.append({'index': i, 'score': round(score, 1),
-							'is_corrected': Flag.is_corrected(flags[i]), 'speed': cur,
-							'reason': reasons[0] if reasons else '正常'})
+		confidences.append({
+			'index': i, 'score': round(lcs * 100, 1),
+			'is_corrected': Flag.is_corrected(flags[i]),
+			'speed': cur, 'reason': reason,
+		})
 
 	return confidences
 
 
-def find_problem_segments(confidences: list[dict], min_score: float = 70.0,
+def find_problem_segments(confidences: list[dict], min_score: float = 30.0,
 						  min_gap: int = 3, min_segment_len: int = 3) -> list[dict]:
 	"""将低置信度连续帧聚合成问题段。
+
+	min_score 默认 30（对应 LCS 0.3，即 correction 阶段的 error 阈值）。
+	低于此分数的帧才被视为"需要人工审核"的问题帧。
 
 	Returns: [{start, end, count, avg_score, min_score, frames, reason, suggested}]
 	"""
