@@ -131,21 +131,54 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
 		if rows[pi][3] < Flag.HIGH_TRUST:
 			rows[pi][3] = Flag.PINNED
 	pinned_set = pinned  # user-verified frames treated as ground truth
+	anchors = pinned_set  # kept as internal var name for backward compat
 	times = [r[0] / fps for r in rows]
 	cache: dict = reocr_cache if reocr_cache is not None else {}
 
+	# ── 全局一致性参考剖面：用于 HIGH_TRUST 标记前的一致性验证 ──
+	# 中值滤波天然抗离群值，能检测"一致性孤岛"——局部物理自洽但偏离全局趋势的误读
+	# 相比 SG 滤波，中值滤波不会被少量离群值污染剖面
+
+	def _median_filter_np(y: "np.ndarray", window: int) -> "np.ndarray":
+		"""滑动中值滤波，O(N*W) 但 N≈6k, W≈15 时可接受。"""
+		half = window // 2
+		result = np.zeros(len(y), dtype=float)
+		for i in range(len(y)):
+			lo = max(0, i - half)
+			hi = min(len(y), i + half + 1)
+			result[i] = float(np.median(y[lo:hi]))
+		return result
+
+	_vals = np.array([r[2] for r in rows], dtype=float)
+	_med_win = min(15, n - 2)
+	if _med_win >= 5 and n >= _med_win:
+		if _med_win % 2 == 0:
+			_med_win += 1
+		_ref_profile = _median_filter_np(_vals, _med_win)
+	else:
+		_ref_profile = _vals.copy()
+
+	def _profile_trust_ok(idx: int) -> bool:
+		"""检查帧 idx 的值与中值参考剖面的偏差是否在可接受范围内。"""
+		v = rows[idx][2]
+		ref_v = _ref_profile[idx]
+		if v < 0 or ref_v <= 0:
+			return True  # 无法判断时不过滤
+		return abs(v - ref_v) <= max(4.0, ref_v * 0.02)
+
 	if log_fn:
 		mode_str = " (light)" if light_mode else ""
-		log_fn(f"Correction{mode_str}: {n} rows, {len(pinned_set)} trusted/pinned")
+		log_fn(f"Correction{mode_str}: {n} rows, {len(anchors)} trusted/pinned")
 
 	# ── 阶段 1：错误检测 ──
 	error_set, _scores_l, _scores_r = _detect_errors(rows, anchors, times, max_speed_kmh, max_accel_mps2, fps=fps)
 	if log_fn:
 		log_fn(f"  Stage 1: detected {len(error_set)} errors")
-	# 标记高信帧（两侧均 >= TRUST_HIGH）
+	# 标记高信帧（两侧均 >= TRUST_HIGH + 中值参考剖面一致性）
 	for i in range(len(_scores_l)):
 		if (_scores_l[i] >= LCS_TRUST_HIGH and _scores_r[i] >= LCS_TRUST_HIGH
-				and rows[i][3] == Flag.RAW and i not in error_set):
+				and rows[i][3] == Flag.RAW and i not in error_set
+				and _profile_trust_ok(i)):
 			rows[i][3] = Flag.HIGH_TRUST
 	if not error_set:
 		return rows
@@ -203,11 +236,15 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
 				log_fn(f"  Stage 5 pass {fill_pass+1}: filled {len(error_set)} unrecoverable frames")
 			fill_pass += 1
 
-	# 最终标记高信帧（两侧均 >= TRUST_HIGH）
+	# 最终标记高信帧（两侧均 >= TRUST_HIGH + 中值参考剖面一致性）
+	# 在修正后重新计算 中值参考剖面，避免被原始 OCR 离群值污染
+	_corrected_vals = np.array([r[2] for r in rows], dtype=float)
+	_ref_profile = _median_filter_np(_corrected_vals, _med_win)
 	scores_l, scores_r = compute_lcs_scores_lr(rows, max_speed_kmh, max_accel_mps2, pinned=anchors, fps=fps)
 	for i in range(len(scores_l)):
 		if (scores_l[i] >= LCS_TRUST_HIGH and scores_r[i] >= LCS_TRUST_HIGH
-				and rows[i][3] == Flag.RAW):
+				and rows[i][3] == Flag.RAW
+				and _profile_trust_ok(i)):
 			rows[i][3] = Flag.HIGH_TRUST
 	return rows
 
@@ -299,7 +336,8 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
 		if la is not None: d = min(d, fi - la)
 		if ra is not None: d = min(d, ra - fi)
 		return d
-	error_list = sorted((i for i in error_set if i not in anchors),
+	# 跳过已标记为高信/固定的帧（阻止级联错误传播）
+	error_list = sorted((i for i in error_set if i not in anchors and not Flag.is_trusted(rows[i][3])),
 	                    key=_dist_to_trusted)
 	total = len(error_list)
 	for i in error_list:
@@ -447,7 +485,8 @@ def _fill_unrecoverable(rows: list, anchors: set, error_set: set, times: list, m
 	左右均使用 HIGH_TRUST/PINNED 帧作为约束，防止 fill 链式累积。
 	"""
 	n = len(rows)
-	sorted_errors = sorted(i for i in error_set if i not in anchors)
+	# 跳过已标记为高信/固定的帧（阻止级联错误传播）
+	sorted_errors = sorted(i for i in error_set if i not in anchors and not Flag.is_trusted(rows[i][3]))
 	total = len(sorted_errors)
 	progress_done = 0
 	for i in sorted_errors:
