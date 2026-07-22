@@ -21,7 +21,7 @@ from PySide6.QtGui import (
 )
 
 from ocr_engine import (
-    VideoMetadata,
+    VideoMetadata, Flag,
     codec_from_fourcc, format_duration,
     _reset_backend, _select_backend, _get_model_params,
     _CancelExport,
@@ -97,15 +97,20 @@ class _ExportThread(QThread):
 					progress_cb=self._emit_progress,
 					cancel_check=self._check_cancel,
 					log_level=self._log_level,
+					final_check=True,
 				)
 				if mode == "auto":
 					pipeline.run_auto(self._output_path)
 					result_container["mode"] = "auto"
+					self.app._pipeline = pipeline
+					self.app._review_output_path = self._output_path
 				else:
 					result = pipeline.run_review_pass1(self._output_path)
 					if result is None:
 						# No problem segments, CSV already written
 						result_container["mode"] = "auto"
+						self.app._pipeline = pipeline
+						self.app._review_output_path = self._output_path
 					else:
 						result_container["mode"] = "review"
 						result_container["review_data"] = result
@@ -893,8 +898,35 @@ class RaceVideoToLogApp(QMainWindow):
 			self._export_thread = None
 			self._show_review_dialog()
 		else:
+			self._show_final_check()
 			self._finish_export()
 			self._status_label.setText("自动纠错完成 — 结果已保存。")
+
+	def _show_final_check(self) -> None:
+		"""主线程中显示最终检查对话框。"""
+		pipeline = getattr(self, "_pipeline", None)
+		out = getattr(self, "_review_output_path", None)
+		if pipeline is None or out is None:
+			return
+		if not getattr(pipeline, "_final_check", False):
+			pipeline.finalize(out)
+			return
+		from gui_review import ReviewDialog
+		rows = pipeline._rows
+		n = len(rows)
+		confidences = [{"index": i, "score": 100.0, "is_corrected": False,
+						"speed": rows[i][2], "reason": ""} for i in range(n)]
+		dlg = ReviewDialog(self, rows, pipeline._observations,
+						   pipeline._raw_frames, confidences, [],
+						   pipeline._max_speed, pipeline._max_accel,
+						   final_check=True)
+		if dlg.exec() == QDialog.DialogCode.Accepted:
+			corrections = dlg.get_corrections()
+			for fi, v in corrections.items():
+				if 0 <= fi < len(rows):
+					rows[fi][2] = v
+					rows[fi][3] = Flag.PINNED
+		pipeline.finalize(out)
 
 	def _on_error(self, err: str) -> None:
 		if self.sender() is not self._export_thread:
@@ -965,6 +997,8 @@ class RaceVideoToLogApp(QMainWindow):
 		self._pass2_thread.start()
 
 	def _on_pass2_done(self, success: bool, message: str) -> None:
+		if success:
+			self._show_final_check()
 		self._export_btn.setEnabled(True)
 		self._progress_bar.setValue(100 if success else 0)
 		self._status_label.setText(message)

@@ -388,7 +388,7 @@ def _interp_candidate(i: int, rows: list, anchors: set, times: list, max_speed_k
 		frac = (times[i] - lt) / total_dt
 		val = lv + (rv - lv) * frac
 		if 0 <= val <= max_speed_kmh:
-			return val
+			return round(val)
 	return None
 
 
@@ -430,11 +430,11 @@ def _fill_unrecoverable(rows: list, anchors: set, error_set: set, times: list, m
 			lo = max(lo, rv - right_max_dv)
 			hi = min(hi, rv + right_max_dv)
 			interp = lv + (rv - lv) * (left_dt / max(left_dt + right_dt, 0.001))
-			val = max(lo, min(hi, interp))
+			val = round(max(lo, min(hi, interp)))
 		else:
 			# 无右侧高信帧 → 跳过（无法可靠约束）
 			continue
-		rows[i][2] = val
+		rows[i][2] = float(val)
 		if rows[i][3] == Flag.RAW:
 			rows[i][3] = Flag.FILL_INTERP
 		if notes is not None:

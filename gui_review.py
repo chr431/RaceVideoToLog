@@ -26,9 +26,14 @@ class ReviewDialog(QDialog):
 	def __init__(self, parent: QWidget, rows: list, observations: list,
 				 raw_frames: list, confidences: list[dict],
 				 segments: list[dict], max_speed: float,
-				 max_accel: float = 50.0) -> None:
+				 max_accel: float = 50.0,
+				 final_check: bool = False) -> None:
 		super().__init__(parent)
-		self.setWindowTitle("人工审核 — 聚焦问题段 (← → 逐帧导航)")
+		self._final_check = final_check
+		if final_check:
+			self.setWindowTitle("最终检查 — 点击图中任意点修正单帧")
+		else:
+			self.setWindowTitle("人工审核 — 聚焦问题段 (← → 逐帧导航)")
 		self.resize(1200, 750)
 		self.setMinimumSize(1000, 600)
 		self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -73,17 +78,21 @@ class ReviewDialog(QDialog):
 
 		# Header
 		header = QHBoxLayout()
-		header.addWidget(StrongBodyLabel("聚焦人工审核"))
-		header.addStretch()
-		total = sum(s['count'] for s in self._segments)
-		header.addWidget(CaptionLabel(f"发现 {len(self._segments)} 个问题段，共 {total} 帧待审核"))
+		if self._final_check:
+			header.addWidget(StrongBodyLabel("最终检查"))
+			header.addWidget(CaptionLabel("  — 点击散点图中任意帧查看图像并修正，完成后点击「确认保存」"))
+		else:
+			header.addWidget(StrongBodyLabel("聚焦人工审核"))
+			header.addStretch()
+			total = sum(s['count'] for s in self._segments)
+			header.addWidget(CaptionLabel(f"发现 {len(self._segments)} 个问题段，共 {total} 帧待审核"))
 		root.addLayout(header)
 
 		# ── 主内容：左右分栏 ──
 		splitter = QSplitter(Qt.Orientation.Horizontal)
 		self._splitter = splitter
 
-		# 左侧：问题段列表
+		# 左侧：问题段列表（最终检查模式下隐藏）
 		left = QWidget()
 		ll = QVBoxLayout(left); ll.setContentsMargins(0, 0, 8, 0); ll.setSpacing(4)
 		ll.addWidget(CaptionLabel("问题段"))
@@ -94,6 +103,8 @@ class ReviewDialog(QDialog):
 		for seg in self._segments:
 			self._add_segment_item(seg)
 		splitter.addWidget(left)
+		if self._final_check:
+			left.setVisible(False)
 
 		# 右侧：图表 + 原始图像 + 控件
 		right = QWidget()
@@ -102,7 +113,10 @@ class ReviewDialog(QDialog):
 		# 速度曲线
 		chart_card = make_static_card()
 		cl = QVBoxLayout(chart_card); cl.setContentsMargins(8, 8, 8, 4)
-		cl.addWidget(CaptionLabel("速度曲线（当前段加粗高亮，红色=问题段，绿色=已确认，蓝点=已修正）"))
+		if self._final_check:
+			cl.addWidget(CaptionLabel("速度曲线（点击数据点选帧，蓝点=已修正，橙圈=当前帧）"))
+		else:
+			cl.addWidget(CaptionLabel("速度曲线（当前段加粗高亮，红色=问题段，绿色=已确认，蓝点=已修正）"))
 		self._figure, self._ax, self._canvas = self._create_chart()
 		cl.addWidget(self._canvas, 1)
 		rl.addWidget(chart_card, 2)
@@ -129,6 +143,9 @@ class ReviewDialog(QDialog):
 		cf_row.addWidget(BodyLabel("当前帧: "))
 		self._frame_label = BodyLabel("—")
 		cf_row.addWidget(self._frame_label)
+		cf_row.addSpacing(12)
+		self._speed_value_label = BodyLabel("")
+		cf_row.addWidget(self._speed_value_label)
 		cf_row.addStretch()
 		ctrl.addLayout(cf_row)
 
@@ -144,13 +161,40 @@ class ReviewDialog(QDialog):
 		ctrl.addSpacing(4)
 		cr = QHBoxLayout()
 		cr.addWidget(BodyLabel("修正速度"))
-		self._speed_edit = QLineEdit()
-		self._speed_edit.setFixedWidth(90)
-		self._speed_edit.setPlaceholderText("ex: 123 or 12x")
+		from qfluentwidgets import CompactSpinBox
+		self._speed_edit = CompactSpinBox()
+		self._speed_edit.setFixedWidth(110)
+		self._speed_edit.setRange(0, int(self._max_speed))
+		self._speed_edit.setSuffix(" km/h")
+		self._speed_edit.setSpecialValueText("(无效)")
+		# 禁用 flyout 面板
+		try:
+			self._speed_edit.compactSpinButton.clicked.disconnect()
+		except Exception:
+			pass
+		self._speed_edit._showFlyout = lambda: None
+		# 值变化时实时预览
+		self._speed_edit.valueChanged.connect(self._on_spinbox_changed)
+		# 拦截 spinbox 的左右箭头键 → 传递给 dialog 用于帧导航
+		self._speed_edit.installEventFilter(self)
 		cr.addWidget(self._speed_edit)
-		cr.addWidget(BodyLabel("km/h"))
 		cr.addStretch()
 		ctrl.addLayout(cr)
+
+		# 部分修正行（最终检查模式下隐藏）
+		part_row = QHBoxLayout()
+		part_row.addWidget(CaptionLabel("部分模式"))
+		self._partial_edit = QLineEdit()
+		self._partial_edit.setFixedWidth(90)
+		self._partial_edit.setPlaceholderText("ex: 12x")
+		part_row.addWidget(self._partial_edit)
+		part_row.addStretch()
+		ctrl.addLayout(part_row)
+		if self._final_check:
+			# 隐藏部分修正行的所有子控件
+			for i in range(part_row.count()):
+				w = part_row.itemAt(i).widget()
+				if w: w.setVisible(False)
 
 		btn_row = QHBoxLayout()
 		btn_add = PrimaryPushButton("添加修正")
@@ -169,8 +213,12 @@ class ReviewDialog(QDialog):
 		rl.addLayout(bottom_row, 1)
 
 		# 底部完成按钮
-		btn_finish = PrimaryPushButton("完成审核，重新纠错")
-		btn_finish.setFixedWidth(200)
+		if self._final_check:
+			btn_finish = PrimaryPushButton("确认保存")
+			btn_finish.setFixedWidth(150)
+		else:
+			btn_finish = PrimaryPushButton("完成审核，重新纠错")
+			btn_finish.setFixedWidth(200)
 		finish_row = QHBoxLayout()
 		finish_row.addStretch()
 		finish_row.addWidget(btn_finish)
@@ -204,6 +252,10 @@ class ReviewDialog(QDialog):
 		canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 		canvas.setMinimumHeight(150)
 		self._canvas = canvas
+
+		if self._final_check:
+			canvas.mpl_connect('pick_event', self._on_pick)
+			canvas.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # 让箭头键直达 dialog
 
 		self._setup_chart_zoom_pan(ax, canvas)
 		self._redraw_chart(ax, fig)
@@ -245,15 +297,17 @@ class ReviewDialog(QDialog):
 		prev_dark = getattr(self, '_chart_params', {}).get('dark')
 		prev_seg = getattr(self, '_chart_seg_start', -2)
 		needs_rebuild = (prev_dark != dark or prev_seg != cur_seg_start
-		                 or not hasattr(self, '_chart_cache'))
+		                 or not hasattr(self, '_chart_cache')
+		                 or self._final_check)  # 最终检查模式每次全量重建
 
-		# ── 缓存 times/speeds（不变）──
-		if not hasattr(self, '_chart_cache'):
+		# ── times/speeds（最终检查模式每次从 rows 实时读取）──
+		if self._final_check or not hasattr(self, '_chart_cache'):
 			times = [r[0] for r in self._rows]
 			speeds = [r[2] for r in self._rows]
 			self._chart_cache = {'times': times, 'speeds': speeds}
-		times = self._chart_cache['times']
-		speeds = self._chart_cache['speeds']
+		else:
+			times = self._chart_cache['times']
+			speeds = self._chart_cache['speeds']
 
 		if needs_rebuild:
 			ax.clear()
@@ -261,11 +315,34 @@ class ReviewDialog(QDialog):
 			self._chart_seg_start = cur_seg_start
 			self._chart_artists = {}
 
-			# ── 全曲线背景散点（创建一次，永不重建）──
+			# ── 全曲线背景散点（最终检查模式：已修正帧用 NaN 隐藏）──
 			bg_gray = COLOR_LIGHT_GRAY if not dark else COLOR_LIGHTER_GRAY
+			kwargs = {"color": bg_gray, "markersize": 1, "alpha": 0.5,
+					  "zorder": 0, "rasterized": True}
+			if self._final_check:
+				kwargs["picker"] = True
+				kwargs["pickradius"] = 5
+				kwargs["markersize"] = 3
+				# 已修正帧用 NaN 隐藏灰色背景点
+				bg_speeds = [float('nan') if i in self._corrections else s
+							 for i, s in enumerate(speeds)]
+			else:
+				bg_speeds = speeds
 			self._chart_artists['bg'] = ax.plot(
-				times, speeds, ".", color=bg_gray, markersize=1, alpha=0.5,
-				zorder=0, rasterized=True)
+				times, bg_speeds, ".", **kwargs)
+
+			# ── 当前选中帧红色高亮 ──
+			cur_fi = self._current_frame
+			if 0 <= cur_fi < len(times):
+				cur_v = self._rows[cur_fi][2]
+				if cur_v >= 0:
+					self._chart_artists['cur_highlight'] = ax.scatter(
+						[times[cur_fi]], [cur_v], c=COLOR_RED, s=12,
+						zorder=5, edgecolors='white', linewidths=0.5, marker='o')
+				else:
+					self._chart_artists['cur_highlight'] = None
+			else:
+				self._chart_artists['cur_highlight'] = None
 
 			# ── 当前段背景高亮 ──
 			self._chart_artists['vspan'] = None
@@ -384,8 +461,28 @@ class ReviewDialog(QDialog):
 				return
 		self._img_label.setText("(无图像)")
 
+	def eventFilter(self, obj, event) -> bool:
+		"""拦截 spinbox 的左右箭头键，重定向到 dialog 用于帧导航。"""
+		from PySide6.QtCore import QEvent
+		if event.type() == QEvent.Type.KeyPress:
+			if event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right):
+				self.keyPressEvent(event)
+				return True  # 事件已处理，不再传递给 spinbox
+		return super().eventFilter(obj, event)
+
 	def keyPressEvent(self, event) -> None:
-		"""← → 键在当前段内逐帧导航。"""
+		"""← → 键在当前段内逐帧导航。最终检查模式：全范围导航。"""
+		if self._final_check:
+			n = len(self._rows)
+			cur = self._current_frame
+			if event.key() == Qt.Key.Key_Left and cur > 0:
+				self._navigate_to(cur - 1)
+			elif event.key() == Qt.Key.Key_Right and cur < n - 1:
+				self._navigate_to(cur + 1)
+			else:
+				super().keyPressEvent(event)
+			return
+
 		row = self._list.currentRow()
 		if row < 0:
 			return super().keyPressEvent(event)
@@ -400,6 +497,13 @@ class ReviewDialog(QDialog):
 		else:
 			super().keyPressEvent(event)
 
+	def _on_pick(self, event) -> None:
+		"""matplotlib pick_event：点击数据点 → 导航到该帧。"""
+		ind = event.ind
+		if ind is None or len(ind) == 0:
+			return
+		self._navigate_to(ind[0])
+
 	@staticmethod
 	def _speed_display(val: float) -> str:
 		"""格式化速度显示：-1 → 空字符串，正常值 → 整数。"""
@@ -410,22 +514,53 @@ class ReviewDialog(QDialog):
 		"""格式化速度标签：-1 → '失败'，正常值 → '{val:.0f}km/h'。"""
 		return "失败" if val < 0 else f"{val:.0f}km/h"
 
-	def _speed_input_text(self, fi: int) -> str:
-		"""获取指定帧应显示在输入框中的文本。"""
-		if fi in self._partial_corrections:
-			return self._partial_corrections[fi]
+	def _speed_input_value(self, fi: int) -> int:
+		"""获取指定帧应在 spinbox 中显示的整数值。"""
 		if fi in self._corrections:
-			return str(int(self._corrections[fi]))
-		return self._speed_display(self._rows[fi][2])
+			return int(self._corrections[fi])
+		v = self._rows[fi][2]
+		return int(v) if v >= 0 else 0
 
 	def _navigate_to(self, fi: int) -> None:
 		"""导航到指定帧并更新控件。"""
+		# 离开当前帧时恢复未确认的预览值
+		prev = self._current_frame
+		backup = getattr(self, '_preview_backup', {})
+		if prev != fi and prev in backup and prev not in self._corrections:
+			self._rows[prev][2] = backup.pop(prev)
 		self._current_frame = fi
 		self._frame_label.setText(f"#{fi}")
 		self._show_frame_image(fi)
-		self._speed_edit.setText(self._speed_input_text(fi))
+		# blockSignals 避免 setValue 触发 _on_spinbox_changed
+		self._speed_edit.blockSignals(True)
+		self._speed_edit.setValue(self._speed_input_value(fi))
+		self._speed_edit.blockSignals(False)
+		# 更新速度标签
+		v = self._rows[fi][2]
+		self._speed_value_label.setText(f"速度: (无效)" if v < 0 else f"速度: {v:.0f} km/h")
+		# 部分修正文本
+		if fi in self._partial_corrections:
+			self._partial_edit.setText(self._partial_corrections[fi])
+		else:
+			self._partial_edit.clear()
 		self._btn_delete.setEnabled(
 			fi in self._corrections or fi in self._partial_corrections)
+		self._redraw_chart()
+
+	def _on_spinbox_changed(self, value: int) -> None:
+		"""SpinBox 值变化时实时预览：临时更新行数据并重绘图表。"""
+		fi = self._current_frame
+		if fi < 0 or fi >= len(self._rows):
+			return
+		# 首次修改时备份原始值
+		if not hasattr(self, '_preview_backup'):
+			self._preview_backup: dict[int, float] = {}
+		if fi not in self._preview_backup and fi not in self._corrections:
+			self._preview_backup[fi] = self._rows[fi][2]
+		# 临时覆盖当前帧速度用于预览
+		self._rows[fi][2] = float(value)
+		self._redraw_chart()
+		self._speed_value_label.setText(f"速度: {value:.0f} km/h (预览)")
 
 	def resizeEvent(self, event) -> None:
 		super().resizeEvent(event)
@@ -471,7 +606,11 @@ class ReviewDialog(QDialog):
 		self._current_frame = target_frame
 		self._frame_label.setText(f"#{target_frame}")
 		self._show_frame_image(target_frame)
-		self._speed_edit.setText(self._speed_input_text(target_frame))
+		self._speed_edit.setValue(self._speed_input_value(target_frame))
+		if target_frame in self._partial_corrections:
+			self._partial_edit.setText(self._partial_corrections[target_frame])
+		else:
+			self._partial_edit.clear()
 		self._btn_delete.setEnabled(
 			target_frame in self._corrections or target_frame in self._partial_corrections)
 		self._redraw_chart()
@@ -500,30 +639,39 @@ class ReviewDialog(QDialog):
 
 	def _add_correction(self) -> None:
 		fi = getattr(self, "_current_frame", 0)
-		text = self._speed_edit.text().strip()
-		if not text:
-			return
-		# Parse: pure digits = exact, contains 'x' = partial
-		if 'x' in text.lower():
-			self._partial_corrections[fi] = text
+		# 优先检查部分修正输入
+		part_text = self._partial_edit.text().strip()
+		if part_text and 'x' in part_text.lower():
+			self._partial_corrections[fi] = part_text
 			self._corrections.pop(fi, None)
-			label = text
-		else:
-			try:
-				v = float(text)
-			except ValueError:
+			self._redraw_chart()
+			for btn in self._suggested_btns:
+				try:
+					f = btn.property("frame_idx")
+				except Exception:
+					continue
+				if f == fi:
+					btn.setText(f"#{fi} ({part_text})")
+					break
+			self._show_frame_image(fi)
+			self._btn_delete.setEnabled(True)
+			return
+
+		v = float(self._speed_edit.value())
+		# 物理一致性检查
+		ok, warning = self._check_accel(fi, v)
+		if not ok:
+			reply = QMessageBox.warning(self, "加速度异常", warning,
+				QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+				QMessageBox.StandardButton.No)
+			if reply == QMessageBox.StandardButton.No:
 				return
-			# 物理一致性检查
-			ok, warning = self._check_accel(fi, v)
-			if not ok:
-				reply = QMessageBox.warning(self, "加速度异常", warning,
-					QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-					QMessageBox.StandardButton.No)
-				if reply == QMessageBox.StandardButton.No:
-					return
-			self._corrections[fi] = v
-			self._partial_corrections.pop(fi, None)
-			label = self._speed_label(v)
+		self._corrections[fi] = v
+		self._partial_corrections.pop(fi, None)
+		self._partial_edit.clear()
+		# 确认修正后清除预览备份
+		getattr(self, '_preview_backup', {}).pop(fi, None)
+		label = self._speed_label(v)
 		self._redraw_chart()
 		for btn in self._suggested_btns:
 			try:
@@ -542,8 +690,8 @@ class ReviewDialog(QDialog):
 			return
 		self._corrections.pop(fi, None)
 		self._partial_corrections.pop(fi, None)
-		orig = self._rows[fi][2]
-		self._speed_edit.setText(self._speed_display(orig))
+		self._partial_edit.clear()
+		self._speed_edit.setValue(self._speed_input_value(fi))
 		for btn in self._suggested_btns:
 			try:
 				f = btn.property("frame_idx")
@@ -557,8 +705,8 @@ class ReviewDialog(QDialog):
 		self._show_frame_image(fi)
 
 	def _finish(self) -> None:
-		"""完成审核：无修正时提示，确认后接受。"""
-		if not self._corrections and not self._partial_corrections:
+		"""完成审核：无修正时提示（最终检查模式跳过），确认后接受。"""
+		if not self._final_check and not self._corrections and not self._partial_corrections:
 			reply = QMessageBox.question(self, "提示",
 				"未添加任何修正。\n将直接使用轻量纠错结果。\n确定要完成审核吗？")
 			if reply == QMessageBox.StandardButton.No:

@@ -58,7 +58,8 @@ class ProcessingPipeline:
 				 progress_cb: ProgressFn | None = None,
 				 reocr_model: str | None = None,
 				 cancel_check: "Callable[[], None] | None" = None,
-				 log_level: str = "normal"):
+				 log_level: str = "normal",
+			 final_check: bool = False):
 		if target_h < 8:
 			raise ValueError(f"target_h 必须 >= 8，当前为 {target_h}")
 		if pad < 0:
@@ -80,6 +81,7 @@ class ProcessingPipeline:
 		self._cancel_check = cancel_check
 		self._frame_end = frame_end
 		self._progress = progress_cb
+		self._final_check = final_check
 
 		# 状态
 		self._ocr: "RapidOCR | None" = None
@@ -286,14 +288,17 @@ class ProcessingPipeline:
 		if corr_timing.get("re_ocr", 0) > 0:
 			logger.info("重OCR 耗时: %.2fs", corr_timing["re_ocr"])
 
+	def finalize(self, output_path: str | Path) -> None:
+		"""最终检查后写入 CSV：积分距离 + 写 CSV + 诊断日志。"""
+		self._integrate_distance()
+		self._write_csv(self._rows, Path(output_path))
+		self._write_diagnostics(Path(output_path))
+
 	def _run_correction(self, output_path: Path, skip_fill: bool) -> None:
 		"""自动纠错模式的完整纠错 + 写 CSV（调用 _correct 后继续）。"""
 		self._correct(91.0, 6.0, skip_fill=skip_fill)
-		t1 = _time.perf_counter()
-		self._integrate_distance()
-		self._write_csv(self._rows, output_path)
-		self._write_diagnostics(output_path)
-		self._timing["integrate_write"] = _time.perf_counter() - t1
+		if not self._final_check:
+			self.finalize(output_path)
 
 	def _run_ocr(self) -> None:
 		"""解码 + OCR：producer 解码(decord/cv2)/预处理 → consumer 推理。
