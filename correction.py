@@ -150,10 +150,17 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
 		return result
 
 	_vals = np.array([r[2] for r in rows], dtype=float)
-	_med_win = min(15, n - 2)
+	# 基于时间的窗口：目标 0.5s，最少 5 帧
+	# 使用 times 数组推导实际帧间隔（兼容不同 fps 和 div 参数）
+	if n >= 2:
+		_dt = times[1] - times[0]  # 连续行之间的秒数
+	else:
+		_dt = 1.0 / max(fps, 1.0)
+	_med_win = max(5, int(0.5 / _dt + 0.5))
+	if _med_win % 2 == 0:
+		_med_win += 1
+	_med_win = min(_med_win, n - 2)
 	if _med_win >= 5 and n >= _med_win:
-		if _med_win % 2 == 0:
-			_med_win += 1
 		_ref_profile = _median_filter_np(_vals, _med_win)
 	else:
 		_ref_profile = _vals.copy()
