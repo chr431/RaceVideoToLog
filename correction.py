@@ -15,7 +15,8 @@ from ocr_engine import (
 	_lcs_score_for_value,
 )
 from config import (MPS_TO_KMH, LCS_TRUST_HIGH, LCS_CANDIDATE_ACCEPT,
-	LCS_CONFIDENCE_MIN_SCORE, LCS_ERROR_LOW)
+	LCS_CONFIDENCE_MIN_SCORE, LCS_ERROR_LOW,
+	LCS_INTERP_WEIGHT, LCS_NOVELTY_WEIGHT)
 
 if TYPE_CHECKING:
 	from rapidocr import RapidOCR
@@ -243,29 +244,35 @@ def _lcs_pick_best(candidates: list[float], i: int, rows: list,
                    times: list[float], max_speed_kmh: float,
                    max_accel_mps2: float,
                    pinned: set[int] | None = None,
-                   sg_value: float | None = None,
-                   sg_weight: float = 0.0) -> tuple[float | None, float]:
-	"""对候选值逐一计算 LCS 分数，可选融合 SG 平滑接近度。
+                   interp_value: float | None = None,
+                   raw_val: float | None = None) -> tuple[float | None, float]:
+	"""对候选值计算综合评分：LCS 一致性 + 插值接近度 + 新颖性。
 
-	pinned 帧在 LCS 评分中获得 3× 权重。
-	sg_value 非 None 时，blended = lcs*(1-sg_weight) + sg_proximity*sg_weight。
-	best_value 为 None 表示没有有效候选值。
+	blended = LCS*w_lcs + interp_prox*w_interp + novelty*w_novel
+	- interp_prox: 候选值与插值估计的接近度 (0-1)
+	- novelty: 候选值 != 原始OCR值时 = 1（纠错场景下偏好非原始值）
 	"""
-	from config import LCS_SG_WEIGHT
-	if sg_weight <= 0:
-		sg_weight = LCS_SG_WEIGHT
+	from config import (LCS_SG_WEIGHT, LCS_INTERP_WEIGHT, LCS_NOVELTY_WEIGHT)
+	has_bonus = (interp_value is not None and interp_value > 0) or (raw_val is not None)
+	w_lcs = 1.0 - LCS_INTERP_WEIGHT - LCS_NOVELTY_WEIGHT if has_bonus else 1.0
+	if w_lcs < 0.3:
+		w_lcs = 0.3  # LCS 保底权重
 	best_val = None
 	best_score = -1.0
 	for cand in set(candidates):
 		if not (0 <= cand <= max_speed_kmh):
 			continue
-		score = _lcs_score_for_value(i, cand, rows, times,
-		                              max_speed_kmh, max_accel_mps2,
-		                              high_weight=pinned)
-		# SG 平滑接近度加成
-		if sg_value is not None and sg_weight > 0 and sg_value > 0:
-			sg_prox = max(0.0, 1.0 - abs(cand - sg_value) / max(20.0, sg_value * 0.1))
-			score = score * (1.0 - sg_weight) + sg_prox * sg_weight
+		lcs = _lcs_score_for_value(i, cand, rows, times,
+		                            max_speed_kmh, max_accel_mps2,
+		                            high_weight=pinned)
+		score = lcs * w_lcs
+		# 插值接近度
+		if interp_value is not None and interp_value > 0:
+			interp_prox = max(0.0, 1.0 - abs(cand - interp_value) / max(20.0, interp_value * 0.1))
+			score += interp_prox * LCS_INTERP_WEIGHT
+		# 新颖性：偏好与原始 OCR 不同的候选（纠错场景）
+		if raw_val is not None and abs(cand - raw_val) > 0.5:
+			score += LCS_NOVELTY_WEIGHT
 		if score > best_score:
 			best_score = score
 			best_val = cand
@@ -282,24 +289,19 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
 				notes: dict[int, str] | None = None,
 				fps: float = 1.0) -> int:
 	"""阶段 2+3：对每个 error 帧重 OCR 获取备选，LCS 评分选最优值填入。"""
-	# SG 平滑值（用于候选评分 tiebreaker）
 	from ocr_engine import _savgol_filter_np
-	from config import LCS_SG_WEIGHT
 	n = len(rows)
-	vals = [r[2] for r in rows]
-	sg_vals = None
-	if LCS_SG_WEIGHT > 0:
-		win = min(11, n - 2)
-		if win >= 5 and n >= win:
-			if win % 2 == 0:
-				win += 1
-			try:
-				sg_vals = _savgol_filter_np(np.array(vals, dtype=float), win, min(3, win - 1))
-			except Exception:
-				pass
 	fixed = 0
 	progress_done = 0
-	error_list = sorted(i for i in error_set if i not in anchors)
+	# 按到最近 trusted 帧的距离排序：边界帧优先处理，修正可级联向内传播
+	def _dist_to_trusted(fi: int) -> int:
+		la, ra = _find_neighbor_trusted(fi, n, rows)
+		d = n
+		if la is not None: d = min(d, fi - la)
+		if ra is not None: d = min(d, ra - fi)
+		return d
+	error_list = sorted((i for i in error_set if i not in anchors),
+	                    key=_dist_to_trusted)
 	total = len(error_list)
 	for i in error_list:
 		has_partial = partial_corrections and i in partial_corrections
@@ -331,63 +333,50 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
 		if not light_mode and interp_cand is not None:
 			candidates.append(interp_cand)
 
-		# ── 选择最佳候选 ──
+		# ── 选择最佳候选：候选 + 当前值 + 参考值 统一评分 ──
 		if candidates:
 			raw_val = rows[i][2]
-			# re-OCR 无结果且插值与当前值差异大 → 直接插值，light 模式跳过
-			if len(reocr_set) <= 1 and interp_cand is not None and abs(interp_cand - raw_val) > 10.0:
-				if not light_mode and abs(raw_val - interp_cand) > 0.5:
-					if notes is not None:
-						notes[i] = f"interp: {raw_val:.0f}→{interp_cand:.0f}"
-					rows[i][2] = interp_cand
-					if rows[i][3] == Flag.RAW:
-						rows[i][3] = Flag.PARTIAL_AUTO if has_partial else Flag.REOCR_AUTO
-					fixed += 1
-			else:
-				best_val, best_score = _lcs_pick_best(
-					candidates, i, rows, times, max_speed_kmh, max_accel_mps2,
-					pinned=anchors)
+			ref_value = interp_cand
+			options: list[tuple[float, str]] = []
+			for c in candidates:
+				if 0 <= c <= max_speed_kmh:
+					options.append((c, "candidate"))
+			if interp_cand is not None and not light_mode:
+				options.append((interp_cand, "interp"))
+			if 0 <= raw_val <= max_speed_kmh:
+				options.append((raw_val, "current"))
 
-				if best_val is not None and best_score >= LCS_CANDIDATE_ACCEPT and abs(rows[i][2] - best_val) > 0.5:
-					old_val = rows[i][2]
-					rows[i][2] = best_val
-					if rows[i][3] == Flag.RAW:
+			if not options:
+				progress_done += 1
+				if progress_fn: progress_fn(progress_done, total)
+				continue
+
+			best_val = None; best_score = -1.0; best_tag = ""
+			for val, tag in options:
+				score = _lcs_score_for_value(i, val, rows, times,
+				                              max_speed_kmh, max_accel_mps2,
+				                              high_weight=anchors)
+				# 参考值接近度加成
+				if ref_value is not None and ref_value > 0:
+					ref_prox = max(0.0, 1.0 - abs(val - ref_value) / max(15.0, ref_value * 0.07))
+					score += ref_prox * LCS_INTERP_WEIGHT
+				# 新颖性
+				if abs(val - raw_val) > 0.5:
+					score += LCS_NOVELTY_WEIGHT
+				if score > best_score:
+					best_score = score; best_val = val; best_tag = tag
+
+			if (best_tag != "current" and best_val is not None
+					and abs(raw_val - best_val) > 0.5 and best_score > 0.35):
+				if notes is not None:
+					notes[i] = f"{best_tag}: {raw_val:.0f}→{best_val:.0f}"
+				rows[i][2] = best_val
+				if rows[i][3] == Flag.RAW:
+					if best_tag == "interp":
+						rows[i][3] = Flag.FILL_INTERP
+					else:
 						rows[i][3] = Flag.PARTIAL_AUTO if has_partial else Flag.REOCR_AUTO
-					if notes is not None:
-						source = "partial" if has_partial else "reOCR"
-						notes[i] = f"{source}: {old_val:.0f}→{best_val:.0f}"
-					fixed += 1
-				elif not light_mode:
-					# 无候选达到高阈值 → 比较最佳候选与插值的 LCS，取更优者
-					interp = _interp_candidate(i, rows, anchors, times, max_speed_kmh, fps=fps)
-					if (best_val is not None and best_score >= 0.5
-							and abs(rows[i][2] - best_val) > 0.5):
-						# 候选 LCS 在 0.5-0.7：与插值竞争
-						interp_score = (_lcs_score_for_value(i, interp, rows, times,
-						                                      max_speed_kmh, max_accel_mps2,
-						                                      high_weight=anchors)
-						                if interp is not None else -1.0)
-						if interp_score > best_score:
-							rows[i][2] = interp
-							if rows[i][3] == Flag.RAW:
-								rows[i][3] = Flag.FILL_INTERP
-							if notes is not None:
-								notes[i] = f"fill(win): {rows[i][2]:.0f}→{interp:.0f}"
-						else:
-							old_val = rows[i][2]
-							rows[i][2] = best_val
-							if rows[i][3] == Flag.RAW:
-								rows[i][3] = Flag.PARTIAL_AUTO if has_partial else Flag.REOCR_AUTO
-							if notes is not None:
-								notes[i] = f"reOCR(borderline): {old_val:.0f}→{best_val:.0f}"
-						fixed += 1
-					elif interp is not None and abs(rows[i][2] - interp) > 0.5:
-						if notes is not None:
-							notes[i] = f"fill: {rows[i][2]:.0f}→{interp:.0f}"
-						rows[i][2] = interp
-						if rows[i][3] == Flag.RAW:
-							rows[i][3] = Flag.FILL_INTERP
-						fixed += 1
+				fixed += 1
 
 		progress_done += 1
 		if progress_fn:

@@ -49,4 +49,6 @@ LCS_TRUST_HIGH: float = 0.7          # error/borderline 分界 & HIGH_TRUST 标�
 LCS_CANDIDATE_ACCEPT: float = 0.7    # _lcs_pick_best 接受阈值
 LCS_WARNING_THRESHOLD: float = 0.5   # 人工修正加速度警告阈值
 LCS_CONFIDENCE_MIN_SCORE: float = 30.0  # find_problem_segments 默认 min_score
+LCS_INTERP_WEIGHT: float = 0.25        # 插值接近度权重 (加性)
+LCS_NOVELTY_WEIGHT: float = 0.10       # 新颖性权重（非原始OCR加分）
 LCS_SG_WEIGHT: float = 0.15            # SG 平滑接近度在候选评分中的权重
