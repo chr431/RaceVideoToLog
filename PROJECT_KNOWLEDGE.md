@@ -160,6 +160,21 @@ PaddlePaddle 框架开销（设备同步、executor 调度）对小模型每次�
 | decord NVDEC 视频解码 | 纯解码 +60%，管线瓶颈不在此 |
 | cv2 CPU 自动回退 | 无 GPU 环境零配置运行 |
 
+
+## 准确率基准 (2026-07-22)
+
+在 test4.mp4 上以 ground_truth_csv/test4_truth.csv 为基准的自动化测试
+(参数: v6_tiny+v6_small, TensorRT, div=1, max_accel=70):
+
+| 指标 | 值 |
+|------|-----|
+| 总帧数 | 6203 |
+| 错误率 | ~4.0% |
+| False trusted (flag≥21 但错误) | ~12 帧 |
+| 主要残留错误模式 | 一致性孤岛 (211→219) |
+
+验证工具: 
+
 ## GUI 架构
 
 ### 主窗口 (gui.py)
@@ -209,13 +224,24 @@ pinned 帧（用户手动修正）在评分中获得 3× 权重，确保人工�
 
 ### 4. 纠错算法 (`correct_with_trust`, 5 阶段)
 
-1. **LCS 错误检测**：compute_lcs_scores + lcs_detect_errors，score < 0.7 标记为错误
-2. **h=32 重 OCR**：与主 OCR h=24 不同高度，约 10% 概率产生不同值
-3. **LCS 最优选择**：对候选值逐一计算 LCS 分数，选最高分（需 >= 0.7）；无合格候选时插值回退
+1. **LCS 左右分侧错误检测**：compute_lcs_scores_lr 分别计算左右侧分数，
+   lcs_detect_errors：任一侧 < LCS_ERROR_LOW(0.3) → error，
+   任一侧 < LCS_TRUST_HIGH(0.7) → borderline。两侧均 >= TRUST_HIGH → 可信。
+2. **候选生成**：
+   - 重 OCR：尝试 3 种高度 (24,32,48)，取所有结果的并集
+   - 混淆替换：CONFUSION_MAP 覆盖常见 OCR 误读 (1↔9, 2↔9, 0↔8 等)
+   - 缺位扩展：`_auto_expand_digits` 对 1-3 位输入做插入+替换展开
+   - 线性插值：以左右 HIGH_TRUST/PINNED 帧为基准估计
+3. **统一评分选择**：候选 + 插值 + 当前值统一参与评分，
+   综合 LCS 物理一致性 + 插值接近度 + 新颖性加成，选最高分。
+   边界优先处理：按距可信帧距离排序，簇边界先修有助于级联修复。
 4. **多轮迭代**：最多 4 轮，每轮重新 LCS 评分
 5. **级联填充**：对无法修复帧，以左右 HIGH_TRUST/PINNED 帧为约束插值，最多 10 轮
 
 **轻量模式** (light_mode=True): 仅阶段 1-3，只选重 OCR 值或原始值，不迭代不填充。用于 pass1。
+
+**已知局限**："一致性孤岛"——当连续多帧被 OCR 误读为相同错误值时，LCS 在局部
+无法区分对错。当前通过候选生成和评分加成缓解，但仍有约 0.2% 的此类错误需要人工审核。
 
 ### 5. 置信度评分 (`compute_confidence`)
 4 维度：OCR 偏差 (0.3) + 邻帧加速度 (0.4) + 纠错标记惩罚 (-30) + SG 平滑偏差 (0.2)。→ `find_problem_segments` 聚合成问题段，建议帧 = 段首尾 + 最低分 + 加速度异常点。
@@ -274,7 +300,9 @@ timestamp,distance,speed_kmh,flag
 python -m pytest tests/ -v    # 37 个单元测试
 ```
 
-覆盖：SG 滤波、expand_partial、Flag 枚举、normalize_ocr_text、safe_int/float、parse_csv_header、build_speed_candidates、LCS 评分、compute_confidence、_lcs_pick_best、_auto_expand_digits。
+覆盖：SG 滤波、expand_partial、Flag 枚举、normalize_ocr_text、safe_int/float、
+parse_csv_header、build_speed_candidates、LCS 左右分侧评分、compute_confidence、
+_lcs_pick_best、_auto_expand_digits、候选生成与选择。
 
 ## 常用命令
 

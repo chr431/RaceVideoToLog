@@ -104,7 +104,7 @@ def _auto_expand_digits(raw_text: str, max_speed_kmh: float) -> list[float]:
 
 
 def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR",
-						 max_speed_kmh: float, max_accel_mps2: float, anchor_indices: set | None = None,
+						 max_speed_kmh: float, max_accel_mps2: float, anchor_indices: set | None = None,  # deprecated, use pinned
 						 log_fn: "Callable | None" = None,
 						 progress_fn: "Callable | None" = None,
 						 skip_fill: bool = False,
@@ -130,13 +130,13 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
 	for pi in (pinned or set()):
 		if rows[pi][3] < Flag.HIGH_TRUST:
 			rows[pi][3] = Flag.PINNED
-	anchors = pinned  # kept as internal var name
+	pinned_set = pinned  # user-verified frames treated as ground truth
 	times = [r[0] / fps for r in rows]
 	cache: dict = reocr_cache if reocr_cache is not None else {}
 
 	if log_fn:
 		mode_str = " (light)" if light_mode else ""
-		log_fn(f"Correction{mode_str}: {n} rows, {len(anchors)} trusted/pinned")
+		log_fn(f"Correction{mode_str}: {n} rows, {len(pinned_set)} trusted/pinned")
 
 	# ── 阶段 1：错误检测 ──
 	error_set, _scores_l, _scores_r = _detect_errors(rows, anchors, times, max_speed_kmh, max_accel_mps2, fps=fps)
@@ -289,7 +289,6 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
 				notes: dict[int, str] | None = None,
 				fps: float = 1.0) -> int:
 	"""阶段 2+3：对每个 error 帧重 OCR 获取备选，LCS 评分选最优值填入。"""
-	from ocr_engine import _savgol_filter_np
 	n = len(rows)
 	fixed = 0
 	progress_done = 0
