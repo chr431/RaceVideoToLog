@@ -324,7 +324,7 @@ python -m pytest tests/ -v    # 37 个单元测试
 
 覆盖：SG 滤波、expand_partial、Flag 枚举、normalize_ocr_text、safe_int/float、
 parse_csv_header、build_speed_candidates、LCS 左右分侧评分、compute_confidence、
-_lcs_pick_best、_auto_expand_digits、候选生成与选择。
+_auto_expand_digits、候选生成与选择。
 
 ## 常用命令
 

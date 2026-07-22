@@ -2,7 +2,7 @@
 import pytest
 from correction import (
 	expand_partial, _find_neighbor_trusted, _interp_candidate,
-	compute_confidence, _auto_expand_digits, _lcs_pick_best,
+	compute_confidence, _auto_expand_digits,
 	_detect_errors,
 )
 from ocr_engine import (
@@ -349,37 +349,6 @@ class TestDetectErrors:
 		assert len(sr) == 10
 		assert all(0 <= s <= 1.0 for s in sl)
 		assert all(0 <= s <= 1.0 for s in sr)
-
-
-class TestLcsPickBest:
-	def _make_context(self, speeds, pinned=None, dt=0.1):
-		times = [i * dt for i in range(len(speeds))]
-		rows = [[times[i], 0.0, float(speeds[i]), Flag.RAW] for i in range(len(speeds))]
-		return rows, times
-
-	def test_consistent_wins(self):
-		"""Candidate consistent with neighbors should score highest."""
-		rows, times = self._make_context([100, 102, 101, 103])
-		best_val, best_score = _lcs_pick_best(
-			[50, 101, 200], 2, rows, times, 400, 50)
-		assert best_val == 101
-		assert best_score > 0.5
-
-	def test_out_of_range_candidate_skipped(self):
-		rows, times = self._make_context([100, 102, 101, 103])
-		best_val, best_score = _lcs_pick_best(
-			[500], 2, rows, times, 400, 50)
-		assert best_val is None
-		assert best_score == -1.0
-
-	def test_pinned_influence(self):
-		"""Pinned neighbors should influence candidate selection."""
-		rows, times = self._make_context([50, 102, 101])
-		rows[0][3] = Flag.PINNED  # frame 0 is 50 km/h, pinned
-		# Candidate 55 is closer to pinned neighbor 50
-		best_val, _ = _lcs_pick_best(
-			[55, 200], 2, rows, times, 400, 100, pinned={0})
-		assert best_val == 55
 
 
 class TestInterpCandidate:

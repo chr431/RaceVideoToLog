@@ -14,9 +14,13 @@ from ocr_engine import (
 	compute_lcs_scores, compute_lcs_scores_lr, lcs_detect_errors,
 	_lcs_score_for_value,
 )
-from config import (MPS_TO_KMH, LCS_TRUST_HIGH, LCS_CANDIDATE_ACCEPT,
+from config import (MPS_TO_KMH, LCS_TRUST_HIGH,
 	LCS_CONFIDENCE_MIN_SCORE, LCS_ERROR_LOW,
-	LCS_INTERP_WEIGHT, LCS_NOVELTY_WEIGHT)
+	LCS_INTERP_WEIGHT, LCS_NOVELTY_WEIGHT,
+	PROFILE_TIME_WINDOW, PROFILE_MIN_WINDOW,
+	PROFILE_ABS_TOLERANCE, PROFILE_PCT_TOLERANCE,
+	CORRECTION_MAX_ROUNDS, FILL_MAX_PASSES,
+	CORRECTION_ACCEPT_MIN_SCORE)
 
 if TYPE_CHECKING:
 	from rapidocr import RapidOCR
@@ -156,11 +160,11 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
 		_dt = times[1] - times[0]  # 连续行之间的秒数
 	else:
 		_dt = 1.0 / max(fps, 1.0)
-	_med_win = max(5, int(0.5 / _dt + 0.5))
+	_med_win = max(PROFILE_MIN_WINDOW, int(PROFILE_TIME_WINDOW / _dt + 0.5))
 	if _med_win % 2 == 0:
 		_med_win += 1
 	_med_win = min(_med_win, n - 2)
-	if _med_win >= 5 and n >= _med_win:
+	if _med_win >= PROFILE_MIN_WINDOW and n >= _med_win:
 		_ref_profile = _median_filter_np(_vals, _med_win)
 	else:
 		_ref_profile = _vals.copy()
@@ -171,7 +175,7 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
 		ref_v = _ref_profile[idx]
 		if v < 0 or ref_v <= 0:
 			return True  # 无法判断时不过滤
-		return abs(v - ref_v) <= max(4.0, ref_v * 0.02)
+		return abs(v - ref_v) <= max(PROFILE_ABS_TOLERANCE, ref_v * PROFILE_PCT_TOLERANCE)
 
 	if log_fn:
 		mode_str = " (light)" if light_mode else ""
@@ -210,8 +214,7 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
 		return rows
 
 	# ── 阶段 4：多轮迭代 ──
-	max_rounds = 4
-	for rnd in range(2, max_rounds + 1):
+	for rnd in range(2, CORRECTION_MAX_ROUNDS + 1):
 		error_set, _scores_l, _scores_r = _detect_errors(rows, anchors, times, max_speed_kmh, max_accel_mps2, fps=fps)
 		if not error_set:
 			break
@@ -233,7 +236,7 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
 			log_fn(f"  Stage 5: {len(error_set)} frames flagged for manual review")
 	else:
 		fill_pass = 0
-		while fill_pass < 10:
+		while fill_pass < FILL_MAX_PASSES:
 			error_set, _scores_l, _scores_r = _detect_errors(rows, anchors, times, max_speed_kmh, max_accel_mps2, fps=fps)
 			if not error_set:
 				break
@@ -282,45 +285,6 @@ def _detect_errors(rows: list, anchors: set, times: list,
 	error_set -= anchors
 
 	return error_set, scores_l, scores_r
-
-
-def _lcs_pick_best(candidates: list[float], i: int, rows: list,
-                   times: list[float], max_speed_kmh: float,
-                   max_accel_mps2: float,
-                   pinned: set[int] | None = None,
-                   interp_value: float | None = None,
-                   raw_val: float | None = None) -> tuple[float | None, float]:
-	"""对候选值计算综合评分：LCS 一致性 + 插值接近度 + 新颖性。
-
-	blended = LCS*w_lcs + interp_prox*w_interp + novelty*w_novel
-	- interp_prox: 候选值与插值估计的接近度 (0-1)
-	- novelty: 候选值 != 原始OCR值时 = 1（纠错场景下偏好非原始值）
-	"""
-	from config import (LCS_SG_WEIGHT, LCS_INTERP_WEIGHT, LCS_NOVELTY_WEIGHT)
-	has_bonus = (interp_value is not None and interp_value > 0) or (raw_val is not None)
-	w_lcs = 1.0 - LCS_INTERP_WEIGHT - LCS_NOVELTY_WEIGHT if has_bonus else 1.0
-	if w_lcs < 0.3:
-		w_lcs = 0.3  # LCS 保底权重
-	best_val = None
-	best_score = -1.0
-	for cand in set(candidates):
-		if not (0 <= cand <= max_speed_kmh):
-			continue
-		lcs = _lcs_score_for_value(i, cand, rows, times,
-		                            max_speed_kmh, max_accel_mps2,
-		                            high_weight=pinned)
-		score = lcs * w_lcs
-		# 插值接近度
-		if interp_value is not None and interp_value > 0:
-			interp_prox = max(0.0, 1.0 - abs(cand - interp_value) / max(20.0, interp_value * 0.1))
-			score += interp_prox * LCS_INTERP_WEIGHT
-		# 新颖性：偏好与原始 OCR 不同的候选（纠错场景）
-		if raw_val is not None and abs(cand - raw_val) > 0.5:
-			score += LCS_NOVELTY_WEIGHT
-		if score > best_score:
-			best_score = score
-			best_val = cand
-	return best_val, best_score
 
 
 def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR", error_set: set,
@@ -411,7 +375,7 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
 					best_score = score; best_val = val; best_tag = tag
 
 			if (best_tag != "current" and best_val is not None
-					and abs(raw_val - best_val) > 0.5 and best_score > 0.35):
+					and abs(raw_val - best_val) > 0.5 and best_score > CORRECTION_ACCEPT_MIN_SCORE):
 				if notes is not None:
 					notes[i] = f"{best_tag}: {raw_val:.0f}→{best_val:.0f}"
 				rows[i][2] = best_val
