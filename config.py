@@ -39,3 +39,14 @@ _gpu_backend: str = "CPU"
 def get_gpu_backend() -> str:
 	"""返回当前实际使用的 GPU 后端名称（CUDA 或 CPU）。"""
 	return _gpu_backend
+
+# ═══════════════════ LCS 局部一致性评分 ═══════════════════
+LCS_TIME_WINDOW: float = 0.5         # 时间窗 (秒)
+LCS_TAU: float = 0.06                 # 指数衰减常数 exp(-dt/tau)
+LCS_HIGH_WEIGHT: float = 3.0         # pinned 帧权重倍率
+LCS_ERROR_LOW: float = 0.3           # detect: < this = error
+LCS_TRUST_HIGH: float = 0.7          # error/borderline 分界 & HIGH_TRUST 标记阈值
+LCS_CANDIDATE_ACCEPT: float = 0.7    # _lcs_pick_best 接受阈值
+LCS_WARNING_THRESHOLD: float = 0.5   # 人工修正加速度警告阈值
+LCS_CONFIDENCE_MIN_SCORE: float = 30.0  # find_problem_segments 默认 min_score
+LCS_SG_WEIGHT: float = 0.15            # SG 平滑接近度在候选评分中的权重

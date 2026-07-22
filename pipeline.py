@@ -95,6 +95,7 @@ class ProcessingPipeline:
 		self._timing: dict[str, float] = {}
 		# ── 重 OCR 缓存（绑定到 Pipeline 实例生命周期）──
 		self._reocr_cache: dict[int, set[float]] = {}
+		self._fps: float = 0.0  # 视频帧率，用于帧号→高精度时间
 	
 	# ═══════════════ 公开接口 ═══════════════
 
@@ -282,7 +283,8 @@ class ProcessingPipeline:
 			partial_corrections=partial_corrections,
 			reocr_cache=self._reocr_cache,
 			notes=self._diag_notes if self._diag else None,
-			pinned=self._pinned if self._pinned else None)
+			pinned=self._pinned if self._pinned else None,
+							fps=self._fps)
 		self._populate_diag_final()
 		self._timing["correction"] = _time.perf_counter() - t0
 		if corr_timing.get("re_ocr", 0) > 0:
@@ -325,7 +327,7 @@ class ProcessingPipeline:
 			from decord import VideoReader as _VR, cpu as _decord_cpu
 			_vr = _VR(str(self._video_path), ctx=_decord_cpu(0))
 			total_video_frames = len(_vr)
-			fps = _vr.get_avg_fps()
+			fps = _vr.get_avg_fps(); self._fps = fps
 			_first = _vr[0].asnumpy()
 			h, w = _first.shape[:2]
 			_src_type = "decord"
@@ -334,7 +336,7 @@ class ProcessingPipeline:
 			logger.info("Video source: cv2 (CPU fallback — %s)", _e)
 			_cap = cv2.VideoCapture(str(self._video_path))
 			total_video_frames = int(_cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-			fps = float(_cap.get(cv2.CAP_PROP_FPS) or 0.0)
+			fps = float(_cap.get(cv2.CAP_PROP_FPS) or 0.0); self._fps = fps
 			w = int(_cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
 			h = int(_cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
 
@@ -359,9 +361,9 @@ class ProcessingPipeline:
 						_frame = _vr[_fi].asnumpy()
 						_ts = _fi / fps if fps > 0 else 0.0
 						_crop = _frame[y1:y2 + 1, x1:x2 + 1].copy()
-						self._raw_frames.append((_ts, _crop))
+						self._raw_frames.append((_fi, _crop))
 						_proc = _preprocess_standard(_crop, target_h, pad)
-						q.put((_ts, _proc))
+						q.put((_fi, _proc))
 				else:
 					fi = 0
 					while fi < total_video_frames:
@@ -404,18 +406,18 @@ class ProcessingPipeline:
 			item = q.get()
 			if item is None:
 				break
-			ts, proc = item
+			fi, proc = item
 			t_ocr0 = _time.perf_counter()
 			ocr_result = ocr(proc)
 			t_ocr = (_time.perf_counter() - t_ocr0) * 1000.0
 			sv, rt, conf = extract_speed_value(ocr_result)
 			if sv is not None and rt is not None:
 				observations.append(SpeedObservation(
-					timestamp=ts,
+					timestamp=fi,
 					raw_speed_kmh=sv * SOURCE_TO_KMH[speed_format],
 					raw_text=rt))
 			else:
-				observations.append(SpeedObservation(ts, -1.0, ""))
+				observations.append(SpeedObservation(fi, -1.0, ""))
 			if _collect_diag:
 				diag.append({
 					"raw_text": rt or "",
@@ -438,14 +440,16 @@ class ProcessingPipeline:
 					 len(observations), self._timing["ocr"])
 
 	def _integrate_distance(self) -> None:
-		dist = 0.0; prev_t = prev_v = None
+		fps = self._fps if self._fps > 0 else 1.0
+		dist = 0.0; prev_fi = prev_v = None
 		for r in self._rows:
 			v = r[2] / MPS_TO_KMH if r[2] >= 0 else 0.0
-			if prev_t is not None and prev_v is not None:
-				dt = r[0] - prev_t
+			fi = r[0]
+			if prev_fi is not None and prev_v is not None:
+				dt = (fi - prev_fi) / fps
 				if dt > 0:
 					dist += (prev_v + v) * 0.5 * dt
-			prev_t, prev_v = r[0], v
+			prev_fi, prev_v = fi, v
 			r[1] = dist
 
 	def _write_csv(self, rows: list, output_path: Path) -> None:

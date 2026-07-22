@@ -174,6 +174,18 @@ class TestBuildSpeedCandidates:
 		result = build_speed_candidates("80", 400)
 		assert len(result) > 1
 
+	def test_confusion_1_to_9(self):
+		"""211 → 219: '1'→'9' confusion (critical fix)."""
+		result = build_speed_candidates("211", 400)
+		assert 219.0 in result  # last digit 1→9
+		assert 291.0 in result  # middle digit 1→9
+		assert 911.0 not in result  # first digit 1→9 → 911 > 400
+
+	def test_confusion_9_to_1(self):
+		"""219 → 211: '9'→'1' confusion (reverse direction)."""
+		result = build_speed_candidates("219", 400)
+		assert 211.0 in result  # last digit 9→1
+
 
 class TestComputeConfidence:
 	def test_all_consistent(self):
@@ -191,8 +203,8 @@ class TestComputeConfidence:
 		        [0.2, 0.0, 100.0, Flag.RAW]]
 		obs = [SpeedObservation(r[0], r[2], str(int(r[2]))) for r in rows]
 		result = compute_confidence(rows, obs, 400, 50)
-		assert result[1]["score"] < 30  # LCS < 0.3 → <30
-		assert result[0]["score"] > 70  # neighbors are fine
+		assert result[1]["score"] < 30  # 中间帧两侧都不一致 → 极低分
+		assert result[0]["score"] < 70  # 左边界帧，右侧被 300 拖累
 
 	def test_reason_labels(self):
 		"""Score thresholds produce correct reason labels."""
@@ -243,10 +255,13 @@ class TestAutoExpandDigits:
 		assert 121 in result
 		assert 221 in result
 
-	def test_3_digits_no_expand(self):
-		"""Three digits assumed complete — no auto-expand candidates."""
+	def test_3_digits(self):
+		"""Three digits: single-char replace generates candidates (e.g. x23, 1x3, 12x)."""
 		result = _auto_expand_digits("123", 400)
-		assert result == []  # 3-digit values are assumed complete
+		assert 123.0 in result
+		assert 23.0 in result   # x23 → 023
+		assert 223.0 in result  # 2x3 → 223
+		assert len(result) > 10  # many 3-digit expansions
 
 	def test_empty(self):
 		assert _auto_expand_digits("", 400) == []
@@ -315,7 +330,7 @@ class TestDetectErrors:
 		rows = [[0.0, 0.0, 100.0, Flag.RAW],
 		        [0.1, 0.0, -1.0, Flag.RAW],
 		        [0.2, 0.0, 500.0, Flag.RAW]]
-		errors, scores = _detect_errors(rows, set(), [r[0] for r in rows], 400, 50)
+		errors, sl, sr = _detect_errors(rows, set(), [r[0] for r in rows], 400, 50)
 		assert 1 in errors
 		assert 2 in errors
 
@@ -323,15 +338,17 @@ class TestDetectErrors:
 		"""Pinned/anchored frames should never be in error set."""
 		rows = [[0.0, 0.0, 100.0, Flag.PINNED],
 		        [0.1, 0.0, 500.0, Flag.PINNED]]  # out of range but pinned
-		errors, scores = _detect_errors(rows, {0, 1}, [r[0] for r in rows], 400, 50)
+		errors, sl, sr = _detect_errors(rows, {0, 1}, [r[0] for r in rows], 400, 50)
 		assert 0 not in errors
 		assert 1 not in errors
 
 	def test_returns_scores(self):
 		rows = [[i * 0.1, 0.0, 100.0, Flag.RAW] for i in range(10)]
-		errors, scores = _detect_errors(rows, set(), [r[0] for r in rows], 400, 50)
-		assert len(scores) == 10
-		assert all(0 <= s <= 1.0 for s in scores)
+		errors, sl, sr = _detect_errors(rows, set(), [r[0] for r in rows], 400, 50)
+		assert len(sl) == 10
+		assert len(sr) == 10
+		assert all(0 <= s <= 1.0 for s in sl)
+		assert all(0 <= s <= 1.0 for s in sr)
 
 
 class TestLcsPickBest:

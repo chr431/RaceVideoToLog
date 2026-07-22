@@ -14,7 +14,9 @@ import cv2
 import numpy as np
 
 import config
-from config import MPS_TO_KMH, SOURCE_TO_KMH
+from config import (MPS_TO_KMH, SOURCE_TO_KMH,
+	LCS_TIME_WINDOW, LCS_TAU, LCS_HIGH_WEIGHT,
+	LCS_ERROR_LOW, LCS_TRUST_HIGH)
 
 # Lazy matplotlib font config (no import-time side effects)
 _matplotlib_configured = False
@@ -45,7 +47,8 @@ __all__ = [
 	"normalize_ocr_text", "format_duration", "codec_from_fourcc",
 	"safe_int", "safe_float", "SOURCE_TO_KMH", "OCR_NUMBER_RE",
 	"compute_video_hash",
-	"compute_lcs_scores", "lcs_detect_errors", "_lcs_score_for_value",
+	"compute_lcs_scores", "compute_lcs_scores_lr", "lcs_detect_errors",
+	"_lcs_score_for_value", "_lcs_score_lr",
 	"_reset_backend", "_select_backend", "_get_model_params",
 	"_CancelExport",
 	"_parse_int_or_none", "parse_csv_header", "_savgol_filter_np",
@@ -464,15 +467,15 @@ def build_speed_candidates(raw_text: str, max_speed_kmh: float) -> list[float]:
 	# 策略3: 常见 OCR 字符混淆替换（对称映射）
 	_CONFUSION_MAP = {
 		"0": ["8", "6", "9"],
-		"1": ["7", "2"],
-		"2": ["7", "1", "3"],
+		"1": ["7", "2", "4", "9"],
+		"2": ["7", "1", "3", "9"],
 		"3": ["8", "9", "2", "5"],
-		"4": ["7", "9"],
+		"4": ["7", "9", "1"],
 		"5": ["6", "3", "8", "9"],
 		"6": ["8", "5", "0", "2"],
 		"7": ["1", "2", "4"],
 		"8": ["0", "6", "3", "5", "9"],
-		"9": ["8", "3", "5", "0", "4"],
+		"9": ["8", "3", "5", "0", "4", "1", "2"],
 	}
 	for i, ch in enumerate(text):
 		for alt in _CONFUSION_MAP.get(ch, []):
@@ -537,63 +540,64 @@ def compute_video_hash(video_path: str | Path, chunk_size: int = 1_048_576) -> s
 
 
 
-def _lcs_score_for_value(i: int, v: float, rows: list, times: list[float],
-                         max_speed_kmh: float, max_accel_mps2: float,
-                         time_window: float = 0.5, tau: float = 0.06,
-                         high_weight: set[int] | None = None) -> float:
-	"""指数加权 LCS 单帧分数。权重 = exp(-dt/tau)，近邻权重高。
+def _lcs_score_lr(i: int, v: float, rows: list, times: list[float],
+                   max_speed_kmh: float, max_accel_mps2: float,
+                   time_window: float = LCS_TIME_WINDOW, tau: float = LCS_TAU,
+                   high_weight: set[int] | None = None) -> tuple[float, float]:
+	"""LCS 左右分侧评分。权重 = exp(-dt/tau)。
 
-	tau=0.06s 时: dt=0.02s→0.72, dt=0.1s→0.19, dt=0.3s→0.007。
-	high_weight 中的帧额外 ×3 权重。
+	Returns: (left_score, right_score)
+	- 单侧无邻居时默认 1.0（不惩罚边界帧）
+	- high_weight 中的帧额外 ×LCS_HIGH_WEIGHT 权重
 	"""
 	import math
 	n = len(rows)
 	if v < 0 or v > max_speed_kmh:
-		return 0.0
-	votes = 0.0
-	total = 0.0
+		return 0.0, 0.0
 	t_i = times[i]
 	hw = high_weight or set()
-	for j in range(max(0, i - 1), -1, -1):
-		dt = t_i - times[j]
-		if dt > time_window:
-			break
-		v_j = rows[j][2]
-		if v_j < 0 or v_j > max_speed_kmh:
-			continue
-		max_dv = max_accel_mps2 * dt * MPS_TO_KMH
-		exp_w = math.exp(-dt / tau)
-		pin_w = 3.0 if j in hw else 1.0
-		total += exp_w * pin_w
-		if abs(v - v_j) <= max_dv:
-			votes += exp_w * pin_w
-	for j in range(i + 1, n):
-		dt = times[j] - t_i
-		if dt > time_window:
-			break
-		v_j = rows[j][2]
-		if v_j < 0 or v_j > max_speed_kmh:
-			continue
-		max_dv = max_accel_mps2 * dt * MPS_TO_KMH
-		exp_w = math.exp(-dt / tau)
-		pin_w = 3.0 if j in hw else 1.0
-		total += exp_w * pin_w
-		if abs(v - v_j) <= max_dv:
-			votes += exp_w * pin_w
-	return votes / total if total > 0 else 0.0
+
+	def _scan(start: int, stop: int, step: int) -> tuple[float, float]:
+		votes = 0.0
+		total = 0.0
+		for j in range(start, stop, step):
+			dt = abs(times[j] - t_i)
+			if dt > time_window:
+				break
+			v_j = rows[j][2]
+			if v_j < 0 or v_j > max_speed_kmh:
+				continue
+			max_dv = max_accel_mps2 * dt * MPS_TO_KMH
+			exp_w = math.exp(-dt / tau)
+			pin_w = LCS_HIGH_WEIGHT if j in hw else 1.0
+			total += exp_w * pin_w
+			if abs(v - v_j) <= max_dv:
+				votes += exp_w * pin_w
+		return votes / total if total > 0 else 1.0
+
+	left = _scan(i - 1, -1, -1)
+	right = _scan(i + 1, n, 1)
+	return left, right
+
+
+def _lcs_score_for_value(i: int, v: float, rows: list, times: list[float],
+                         max_speed_kmh: float, max_accel_mps2: float,
+                         time_window: float = LCS_TIME_WINDOW, tau: float = LCS_TAU,
+                         high_weight: set[int] | None = None) -> float:
+	"""LCS 合并分数（向后兼容）。左右侧权重合并后的单值分数。"""
+	left, right = _lcs_score_lr(i, v, rows, times, max_speed_kmh, max_accel_mps2,
+	                             time_window, tau, high_weight)
+	return (left + right) / 2.0
 
 
 def compute_lcs_scores(rows: list, max_speed_kmh: float,
-                       max_accel_mps2: float, time_window: float = 0.5,
-                       pinned: set[int] | None = None) -> list[float]:
-	"""局部一致性评分 — 指数加权时间窗投票。
-
-	对每帧 i，在 ±time_window 秒内统计有多少邻居能在物理加速度
-	约束下合法到达 v_i。指数衰减权重 exp(-dt/0.06s)。
-	"""
+                       max_accel_mps2: float, time_window: float = LCS_TIME_WINDOW,
+                       pinned: set[int] | None = None,
+                       fps: float = 1.0) -> list[float]:
+	"""局部一致性评分（合并分数）— 向后兼容。"""
 	n = len(rows)
 	scores = [0.0] * n
-	times = [r[0] for r in rows]
+	times = [r[0] / fps for r in rows]
 	for i in range(n):
 		scores[i] = _lcs_score_for_value(i, rows[i][2], rows, times,
 		                                 max_speed_kmh, max_accel_mps2,
@@ -602,15 +606,42 @@ def compute_lcs_scores(rows: list, max_speed_kmh: float,
 	return scores
 
 
-def lcs_detect_errors(scores: list[float], low: float = 0.3,
-                      borderline: float = 0.7) -> tuple[set[int], set[int]]:
-	"""根据 LCS 分数将帧分为错误集和存疑集。"""
+def compute_lcs_scores_lr(rows: list, max_speed_kmh: float,
+                          max_accel_mps2: float, time_window: float = LCS_TIME_WINDOW,
+                          pinned: set[int] | None = None,
+                          fps: float = 1.0) -> tuple[list[float], list[float]]:
+	"""局部一致性评分（左右分侧）。
+
+	Returns: (left_scores, right_scores)
+	- 单侧无邻居时默认 1.0
+	"""
+	n = len(rows)
+	left_scores = [0.0] * n
+	right_scores = [0.0] * n
+	times = [r[0] / fps for r in rows]
+	for i in range(n):
+		left_scores[i], right_scores[i] = _lcs_score_lr(
+			i, rows[i][2], rows, times, max_speed_kmh, max_accel_mps2,
+			time_window=time_window, high_weight=pinned)
+	return left_scores, right_scores
+
+
+def lcs_detect_errors(scores_l: list[float], scores_r: list[float],
+                      low: float = LCS_ERROR_LOW,
+                      borderline: float = LCS_TRUST_HIGH) -> tuple[set[int], set[int]]:
+	"""根据 LCS 左右分侧分数将帧分为错误集和存疑集。
+
+	- error:  左或右任一侧 < low（单侧不一致即触发）
+	- borderline: 非 error 但左或右任一侧 < borderline
+	- 仅两侧均 >= borderline 才被视为可信
+	"""
 	error_set: set[int] = set()
 	borderline_set: set[int] = set()
-	for i, s in enumerate(scores):
-		if s < low:
+	for i in range(len(scores_l)):
+		sl, sr = scores_l[i], scores_r[i]
+		if sl < low or sr < low:
 			error_set.add(i)
-		elif s < borderline:
+		elif sl < borderline or sr < borderline:
 			borderline_set.add(i)
 	return error_set, borderline_set
 

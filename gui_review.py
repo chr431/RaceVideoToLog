@@ -15,7 +15,8 @@ from qfluentwidgets import (BodyLabel, StrongBodyLabel, CaptionLabel,
 from theme_manager import ThemeManager
 from widget_utils import make_static_card, setup_chart_zoom_pan
 from config import (COLOR_RED, COLOR_ORANGE, COLOR_GREEN, COLOR_BLUE,
-                     COLOR_LIGHT_GRAY, COLOR_LIGHTER_GRAY, chart_colors)
+                     COLOR_LIGHT_GRAY, COLOR_LIGHTER_GRAY, chart_colors,
+                     LCS_WARNING_THRESHOLD)
 
 import cv2
 import numpy as np
@@ -27,7 +28,8 @@ class ReviewDialog(QDialog):
 				 raw_frames: list, confidences: list[dict],
 				 segments: list[dict], max_speed: float,
 				 max_accel: float = 50.0,
-				 final_check: bool = False) -> None:
+				 final_check: bool = False,
+					 fps: float = 1.0) -> None:
 		super().__init__(parent)
 		self._final_check = final_check
 		if final_check:
@@ -45,6 +47,7 @@ class ReviewDialog(QDialog):
 		self._segments = segments
 		self._max_speed = max_speed
 		self._max_accel = max_accel
+		self._fps = fps
 		self._corrections: dict[int, float] = {}
 		self._partial_corrections: dict[int, str] = {}
 		self._current_frame: int = 0
@@ -302,7 +305,7 @@ class ReviewDialog(QDialog):
 
 		# ── times/speeds（最终检查模式每次从 rows 实时读取）──
 		if self._final_check or not hasattr(self, '_chart_cache'):
-			times = [r[0] for r in self._rows]
+			times = [r[0] / self._fps for r in self._rows]
 			speeds = [r[2] for r in self._rows]
 			self._chart_cache = {'times': times, 'speeds': speeds}
 		else:
@@ -626,10 +629,10 @@ class ReviewDialog(QDialog):
 		Returns: (is_ok, warning_message)
 		"""
 		from ocr_engine import _lcs_score_for_value
-		times = [r[0] for r in self._rows]
+		times = [r[0] / self._fps for r in self._rows]
 		score = _lcs_score_for_value(fi, v, self._rows, times,
 		                              self._max_speed, self._max_accel)
-		if score < 0.5:
+		if score < LCS_WARNING_THRESHOLD:
 			msg = (f"帧 #{fi} 输入值 {v:.0f} km/h 与周围邻居物理不一致\n\n"
 			       f"LCS 一致性分数: {score:.2f} / 1.00\n"
 			       f"该值在 {self._max_accel:.0f} m/s² 约束下与邻近帧矛盾。\n\n"
