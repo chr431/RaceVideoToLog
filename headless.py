@@ -1,15 +1,16 @@
 """CLI / headless mode for RaceVideoToLog."""
 from __future__ import annotations
-import argparse, logging, sys, time
+import argparse
+import logging
+import sys
+import time
 from pathlib import Path
 
 from pipeline import ProcessingPipeline
 
-# 配置 CLI 日志：INFO 级别输出
-logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
-
 
 def run_headless(args: argparse.Namespace) -> None:
+	logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
 	"""命令行无头模式：不启动 GUI，直接分析并输出 CSV。"""
 	if not args.roi:
 		print("错误: 命令行模式需要 --roi X1 Y1 X2 Y2")

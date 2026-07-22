@@ -239,7 +239,7 @@ def select_backend(preferred: str = "auto") -> str:
 		_gpu_params = {"EngineConfig.onnxruntime.use_cuda": False}
 
 	_gpu_backend = chosen
-	config._gpu_backend = chosen
+	config.set_gpu_backend(chosen)
 	logger.info("OCR 后端已选择: %s", chosen)
 	return _gpu_backend
 
@@ -249,4 +249,4 @@ def reset_backend() -> None:
 	global _gpu_backend, _gpu_params
 	_gpu_backend = "CPU"
 	_gpu_params = {}
-	config._gpu_backend = "CPU"
+	config.set_gpu_backend("CPU")

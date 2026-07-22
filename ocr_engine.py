@@ -10,7 +10,6 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-import cv2
 import numpy as np
 
 import config
@@ -372,7 +371,7 @@ def extract_speed_value(ocr_result) -> tuple[float | None, str | None, float]:
 		except ValueError:
 			return None, None, 0.0
 
-	return None, None
+	return None, None, 0.0
 
 
 def convert_speed_to_kmh(speed_value: float, source_unit: str) -> float:

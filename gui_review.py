@@ -703,7 +703,7 @@ class ReviewDialog(QDialog):
 			except Exception:
 				continue
 			if f == fi:
-				btn.setText(f"#{fi} ({self._speed_label(orig)})")
+				btn.setText(f"#{fi} ({self._speed_label(self._rows[fi][2])})")
 				break
 		self._redraw_chart()
 		self._btn_delete.setEnabled(False)

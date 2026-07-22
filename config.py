@@ -51,6 +51,11 @@ def get_gpu_backend() -> str:
 	"""返回当前实际使用的 GPU 后端名称（CUDA 或 CPU）。"""
 	return _gpu_backend
 
+def set_gpu_backend(backend: str) -> None:
+	"""由 gpu_setup 调用，设置实际使用的 GPU 后端。"""
+	global _gpu_backend
+	_gpu_backend = backend
+
 # ═══════════════════ LCS 局部一致性评分 ═══════════════════
 LCS_TIME_WINDOW: float = 0.5         # 时间窗 (秒)
 LCS_TAU: float = 0.06                 # 指数衰减常数 exp(-dt/tau)

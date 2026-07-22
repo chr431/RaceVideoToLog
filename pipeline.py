@@ -12,7 +12,7 @@ import cv2
 import numpy as np
 
 from ocr_engine import (
-	compute_lcs_scores, clamp_region, compute_video_hash,
+	clamp_region, compute_video_hash,
 	extract_speed_value, SpeedObservation, Flag,
 	SOURCE_TO_KMH, _parse_int_or_none,
 	_reset_backend, _select_backend, _get_model_params,
@@ -140,9 +140,7 @@ class ProcessingPipeline:
 			raise RuntimeError("未识别到任何速度数据。")
 
 		# 构建初始 rows（全部 RAW，无预选锚点）
-		self._rows = []
-		for obs in self._observations:
-			self._rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh, Flag.RAW])
+		self._rows = self._build_initial_rows()
 
 		# ── 轻量纠错：仅重 OCR，不混淆/推断/填充 ──
 		self._emit("轻量纠错 (仅重OCR)...", 88.0)
@@ -215,6 +213,13 @@ class ProcessingPipeline:
 		if self._progress:
 			self._progress(msg, pct)
 
+	def _build_initial_rows(self) -> list:
+		"""从 observations 构建初始 RAW 行列表。"""
+		rows = []
+		for obs in self._observations:
+			rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh, Flag.RAW])
+		return rows
+
 	def _ensure_ocr(self) -> "RapidOCR":
 		from rapidocr import RapidOCR
 		if self._ocr is None:
@@ -249,9 +254,7 @@ class ProcessingPipeline:
 		corrections 和 confirmed 仅由 pass2 传入。
 		"""
 		# 构建初始 rows（全部 RAW）
-		self._rows = []
-		for obs in self._observations:
-			self._rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh, Flag.RAW])
+		self._rows = self._build_initial_rows()
 
 		# 应用用户修正（在 rows 重建之后，避免被覆盖）
 		if corrections:
@@ -284,7 +287,7 @@ class ProcessingPipeline:
 			reocr_cache=self._reocr_cache,
 			notes=self._diag_notes if self._diag else None,
 			pinned=self._pinned if self._pinned else None,
-							fps=self._fps)
+			fps=self._fps)
 		self._populate_diag_final()
 		self._timing["correction"] = _time.perf_counter() - t0
 		if corr_timing.get("re_ocr", 0) > 0:
@@ -380,11 +383,10 @@ class ProcessingPipeline:
 						ok, frame = _cap.retrieve()
 						if not ok or frame is None:
 							break
-						ts = fi / fps if fps > 0 else 0.0
 						crop = frame[y1:y2 + 1, x1:x2 + 1].copy()
-						self._raw_frames.append((ts, crop))
+						self._raw_frames.append((fi, crop))
 						proc = _preprocess_standard(crop, target_h, pad)
-						q.put((ts, proc))
+						q.put((fi, proc))
 						fi += 1
 				q.put(None)
 			except Exception as e:

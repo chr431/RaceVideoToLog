@@ -11,7 +11,7 @@ import cv2
 import numpy as np
 from ocr_engine import (
 	extract_speed_value, build_speed_candidates, Flag,
-	compute_lcs_scores, compute_lcs_scores_lr, lcs_detect_errors,
+	compute_lcs_scores_lr, lcs_detect_errors,
 	_lcs_score_for_value,
 )
 from config import (MPS_TO_KMH, LCS_TRUST_HIGH,
@@ -111,7 +111,7 @@ def _auto_expand_digits(raw_text: str, max_speed_kmh: float) -> list[float]:
 
 
 def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR",
-						 max_speed_kmh: float, max_accel_mps2: float, anchor_indices: set | None = None,  # deprecated, use pinned
+						 max_speed_kmh: float, max_accel_mps2: float,
 						 log_fn: "Callable | None" = None,
 						 progress_fn: "Callable | None" = None,
 						 skip_fill: bool = False,
@@ -134,11 +134,11 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
 	"""
 	pinned = pinned or set()
 	n = len(rows)
-	for pi in (pinned or set()):
+	for pi in pinned:
 		if rows[pi][3] < Flag.HIGH_TRUST:
 			rows[pi][3] = Flag.PINNED
 	pinned_set = pinned  # user-verified frames treated as ground truth
-	anchors = pinned_set  # kept as internal var name for backward compat
+	
 	times = [r[0] / fps for r in rows]
 	cache: dict = reocr_cache if reocr_cache is not None else {}
 
@@ -182,10 +182,10 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
 
 	if log_fn:
 		mode_str = " (light)" if light_mode else ""
-		log_fn(f"Correction{mode_str}: {n} rows, {len(anchors)} trusted/pinned")
+		log_fn(f"Correction{mode_str}: {n} rows, {len(pinned_set)} trusted/pinned")
 
 	# ── 阶段 1：错误检测 ──
-	error_set, _scores_l, _scores_r = _detect_errors(rows, anchors, times, max_speed_kmh, max_accel_mps2, fps=fps)
+	error_set, _scores_l, _scores_r = _detect_errors(rows, pinned_set, times, max_speed_kmh, max_accel_mps2, fps=fps)
 	if log_fn:
 		log_fn(f"  Stage 1: detected {len(error_set)} errors")
 	# 标记高信帧（两侧均 >= TRUST_HIGH + 中值参考剖面一致性）
@@ -199,7 +199,7 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
 
 	# ── 阶段 2+3：重 OCR + 最优选择（首轮）──
 	fixed = _fix_errors(rows, observations, raw_frames, ocr, error_set,
-	                    anchors, times, max_speed_kmh, max_accel_mps2,
+	                    pinned_set, times, max_speed_kmh, max_accel_mps2,
 	                    progress_fn=progress_fn, timing=timing,
 	                    partial_corrections=partial_corrections, reocr_cache=cache,
 	                    light_mode=light_mode, notes=notes, fps=fps)
@@ -208,9 +208,9 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
 
 	# ── Light mode: 一轮即止，剩余错误标记为待审核 ──
 	if light_mode:
-		error_set, _scores_l, _scores_r = _detect_errors(rows, anchors, times, max_speed_kmh, max_accel_mps2, fps=fps)
+		error_set, _scores_l, _scores_r = _detect_errors(rows, pinned_set, times, max_speed_kmh, max_accel_mps2, fps=fps)
 		for i in error_set:
-			if i not in anchors and rows[i][3] < 2:
+			if i not in pinned_set and rows[i][3] == Flag.RAW:
 				rows[i][3] = Flag.FLAGGED_REVIEW
 		if log_fn:
 			log_fn(f"  Light: {len(error_set)} frames flagged for manual review")
@@ -218,11 +218,11 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
 
 	# ── 阶段 4：多轮迭代 ──
 	for rnd in range(2, CORRECTION_MAX_ROUNDS + 1):
-		error_set, _scores_l, _scores_r = _detect_errors(rows, anchors, times, max_speed_kmh, max_accel_mps2, fps=fps)
+		error_set, _scores_l, _scores_r = _detect_errors(rows, pinned_set, times, max_speed_kmh, max_accel_mps2, fps=fps)
 		if not error_set:
 			break
 		fixed = _fix_errors(rows, observations, raw_frames, ocr, error_set,
-		                    anchors, times, max_speed_kmh, max_accel_mps2,
+		                    pinned_set, times, max_speed_kmh, max_accel_mps2,
 		                    progress_fn=progress_fn, timing=timing,
 		                    partial_corrections=partial_corrections, reocr_cache=cache,
 		                    notes=notes, fps=fps)
@@ -231,19 +231,19 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
 
 	# ── 阶段 5：迭代填充直到收敛（处理级联效应）──
 	if skip_fill:
-		error_set, _scores_l, _scores_r = _detect_errors(rows, anchors, times, max_speed_kmh, max_accel_mps2, fps=fps)
+		error_set, _scores_l, _scores_r = _detect_errors(rows, pinned_set, times, max_speed_kmh, max_accel_mps2, fps=fps)
 		for i in error_set:
-			if i not in anchors and rows[i][3] < 2:
+			if i not in pinned_set and rows[i][3] == Flag.RAW:
 				rows[i][3] = Flag.FLAGGED_REVIEW
 		if log_fn:
 			log_fn(f"  Stage 5: {len(error_set)} frames flagged for manual review")
 	else:
 		fill_pass = 0
 		while fill_pass < FILL_MAX_PASSES:
-			error_set, _scores_l, _scores_r = _detect_errors(rows, anchors, times, max_speed_kmh, max_accel_mps2, fps=fps)
+			error_set, _scores_l, _scores_r = _detect_errors(rows, pinned_set, times, max_speed_kmh, max_accel_mps2, fps=fps)
 			if not error_set:
 				break
-			_fill_unrecoverable(rows, anchors, error_set, times, max_speed_kmh, max_accel_mps2, fps,
+			_fill_unrecoverable(rows, pinned_set, error_set, times, max_speed_kmh, max_accel_mps2, fps,
 			                    progress_fn=progress_fn, notes=notes)
 			if log_fn:
 				log_fn(f"  Stage 5 pass {fill_pass+1}: filled {len(error_set)} unrecoverable frames")
@@ -253,7 +253,7 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
 	# 在修正后重新计算 中值参考剖面，避免被原始 OCR 离群值污染
 	_corrected_vals = np.array([r[2] for r in rows], dtype=float)
 	_ref_profile = _median_filter_np(_corrected_vals, _med_win)
-	scores_l, scores_r = compute_lcs_scores_lr(rows, max_speed_kmh, max_accel_mps2, pinned=anchors, fps=fps)
+	scores_l, scores_r = compute_lcs_scores_lr(rows, max_speed_kmh, max_accel_mps2, pinned=pinned_set, fps=fps)
 	for i in range(len(scores_l)):
 		if (scores_l[i] >= LCS_TRUST_HIGH and scores_r[i] >= LCS_TRUST_HIGH
 				and rows[i][3] == Flag.RAW
@@ -264,7 +264,7 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
 
 # ── LCS 错误检测 ──
 
-def _detect_errors(rows: list, anchors: set, times: list,
+def _detect_errors(rows: list, pinned_set: set, times: list,
                    max_speed_kmh: float, max_accel_mps2: float,
                    fps: float = 1.0) -> tuple[set[int], list[float], list[float]]:
 	"""阶段 1：LCS 左右分侧错误检测。
@@ -275,23 +275,23 @@ def _detect_errors(rows: list, anchors: set, times: list,
 	error_set: set[int] = set()
 
 	for i in range(n):
-		if i in anchors:
+		if i in pinned_set:
 			continue
 		v = rows[i][2]
 		if v < 0 or v > max_speed_kmh:
 			error_set.add(i)
 
-	scores_l, scores_r = compute_lcs_scores_lr(rows, max_speed_kmh, max_accel_mps2, pinned=anchors, fps=fps)
+	scores_l, scores_r = compute_lcs_scores_lr(rows, max_speed_kmh, max_accel_mps2, pinned=pinned_set, fps=fps)
 	lcs_errors, borderline = lcs_detect_errors(scores_l, scores_r)
 	error_set.update(lcs_errors)
 	error_set.update(borderline)
-	error_set -= anchors
+	error_set -= pinned_set
 
 	return error_set, scores_l, scores_r
 
 
 def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR", error_set: set,
-				anchors: set, times: list, max_speed_kmh: float, max_accel_mps2: float,
+				pinned_set: set, times: list, max_speed_kmh: float, max_accel_mps2: float,
 				progress_fn: "Callable | None" = None,
 				timing: dict | None = None,
 				partial_corrections: dict[int, str] | None = None,
@@ -311,12 +311,12 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
 		if ra is not None: d = min(d, ra - fi)
 		return d
 	# 跳过已标记为高信/固定的帧（阻止级联错误传播）
-	error_list = sorted((i for i in error_set if i not in anchors and not Flag.is_trusted(rows[i][3])),
+	error_list = sorted((i for i in error_set if i not in pinned_set and not Flag.is_trusted(rows[i][3])),
 	                    key=_dist_to_trusted)
 	total = len(error_list)
 	for i in error_list:
 		has_partial = partial_corrections and i in partial_corrections
-		interp_cand = _interp_candidate(i, rows, anchors, times, max_speed_kmh, fps=fps)
+		interp_cand = _interp_candidate(i, rows, pinned_set, times, max_speed_kmh, fps=fps)
 		oid = min(i, len(observations) - 1)
 		reocr_set = _re_ocr_frame(raw_frames[i][1], ocr, max_speed_kmh,
 		                          timing=timing, cache=reocr_cache)
@@ -366,13 +366,13 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
 			for val, tag in options:
 				score = _lcs_score_for_value(i, val, rows, times,
 				                              max_speed_kmh, max_accel_mps2,
-				                              high_weight=anchors)
+				                              high_weight=pinned_set)
 				# 参考值接近度加成
 				if ref_value is not None and ref_value > 0:
 					ref_prox = max(0.0, 1.0 - abs(val - ref_value) / max(INTERP_PROX_ABS, ref_value * INTERP_PROX_PCT))
 					score += ref_prox * LCS_INTERP_WEIGHT
 				# 新颖性
-				if abs(val - raw_val) > 0.5:
+				if abs(val - raw_val) > CORRECTION_MIN_DIFF:
 					score += LCS_NOVELTY_WEIGHT
 				if score > best_score:
 					best_score = score; best_val = val; best_tag = tag
@@ -436,14 +436,14 @@ def _re_ocr_frame(crop_bgr: "np.ndarray", ocr: "RapidOCR", max_speed_kmh: float,
 	return candidates
 
 
-def _interp_candidate(i: int, rows: list, anchors: set, times: list, max_speed_kmh: float, fps: float = 1.0) -> float | None:
+def _interp_candidate(i: int, rows: list, pinned_set: set, times: list, max_speed_kmh: float, fps: float = 1.0) -> float | None:
 	"""计算帧 i 在左右高信帧间的线性插值估计。"""
 	n = len(rows)
 	la, ra = _find_neighbor_trusted(i, n, rows)
 	if la is not None and ra is not None:
 		lv = rows[la][2]; rv = rows[ra][2]
 		lt = rows[la][0] / fps; rt = rows[ra][0] / fps
-		total_dt = max(rt - lt, 0.001)
+		total_dt = max(rt - lt, 1e-3)
 		frac = (times[i] - lt) / total_dt
 		val = lv + (rv - lv) * frac
 		if 0 <= val <= max_speed_kmh:
@@ -451,7 +451,7 @@ def _interp_candidate(i: int, rows: list, anchors: set, times: list, max_speed_k
 	return None
 
 
-def _fill_unrecoverable(rows: list, anchors: set, error_set: set, times: list, max_speed_kmh: float, max_accel_mps2: float, fps: float = 1.0,
+def _fill_unrecoverable(rows: list, pinned_set: set, error_set: set, times: list, max_speed_kmh: float, max_accel_mps2: float, fps: float = 1.0,
 						progress_fn: "Callable | None" = None,
 						notes: dict[int, str] | None = None) -> None:
 	"""阶段 5：对无法通过重 OCR 修复的帧，以最近高信帧为基准插值。
@@ -460,7 +460,7 @@ def _fill_unrecoverable(rows: list, anchors: set, error_set: set, times: list, m
 	"""
 	n = len(rows)
 	# 跳过已标记为高信/固定的帧（阻止级联错误传播）
-	sorted_errors = sorted(i for i in error_set if i not in anchors and not Flag.is_trusted(rows[i][3]))
+	sorted_errors = sorted(i for i in error_set if i not in pinned_set and not Flag.is_trusted(rows[i][3]))
 	total = len(sorted_errors)
 	progress_done = 0
 	for i in sorted_errors:
@@ -479,17 +479,17 @@ def _fill_unrecoverable(rows: list, anchors: set, error_set: set, times: list, m
 			if Flag.is_trusted(rows[j][3]) and 0 <= rows[j][2] <= max_speed_kmh:
 				ra = j; break
 
-		left_dt = max(times[i] - lt, 0.001)
+		left_dt = max(times[i] - lt, 1e-3)
 		left_max_dv = max_accel_mps2 * left_dt * MPS_TO_KMH
 		if ra is not None:
 			rv = rows[ra][2]; rt = rows[ra][0] / fps
-			right_dt = max(rt - times[i], 0.001)
+			right_dt = max(rt - times[i], 1e-3)
 			right_max_dv = max_accel_mps2 * right_dt * MPS_TO_KMH
 			lo = max(0.0, lv - left_max_dv)
 			hi = min(max_speed_kmh, lv + left_max_dv)
 			lo = max(lo, rv - right_max_dv)
 			hi = min(hi, rv + right_max_dv)
-			interp = lv + (rv - lv) * (left_dt / max(left_dt + right_dt, 0.001))
+			interp = lv + (rv - lv) * (left_dt / max(left_dt + right_dt, 1e-3))
 			val = round(max(lo, min(hi, interp)))
 		else:
 			# 无右侧高信帧 → 跳过（无法可靠约束）
@@ -514,7 +514,7 @@ def compute_confidence(rows: list, observations: list, max_speed: float,
 					   fps: float = 1.0) -> list[dict]:
 	"""LCS 置信度评分 (0-100)。
 
-	直接用 compute_lcs_scores 的局部一致性分数，
+	用 compute_lcs_scores_lr 的左右分侧 LCS 分数，取均值，
 	mapping: confidence = lcs_score × 100。
 
 	- 100 分: 当前值与 0.5s 时间窗内所有邻居物理自洽
@@ -585,10 +585,6 @@ def find_problem_segments(confidences: list[dict], min_score: float = LCS_CONFID
 					'avg_score': round(sum(scores) / len(scores), 1),
 					'min_score': min(scores),
 					'reason': ', '.join(sorted(reasons)[:3]) if reasons else '低置信度',
-					'suggested': sorted(set(
-						[seg_frames[0]['index'], seg_frames[-1]['index']] +
-						[min(seg_frames, key=lambda f: f['score'])['index']]
-					)),
 				})
 		i += 1
 

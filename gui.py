@@ -189,8 +189,6 @@ class RaceVideoToLogApp(QMainWindow):
 		self._review_rows: list = []
 		self._review_observations: list = []
 		self._review_raw_frames: list = []
-		self._review_ocr: "RapidOCR | None" = None
-		self._review_pinned: set = set()
 		self._review_output_path: Path | None = None
 		self._review_confidences: list[dict] = []
 		self._review_segments: list[dict] = []
@@ -945,8 +943,8 @@ class RaceVideoToLogApp(QMainWindow):
 			ms = float(self.max_speed_edit.text())
 			ma = float(self.max_accel_edit.text())
 		except ValueError:
-			ms = 400.0
-			ma = 50.0
+			ms = config.DEFAULT_MAX_SPEED
+			ma = config.DEFAULT_MAX_ACCEL
 		dlg = ReviewDialog(self, self._review_rows, self._review_observations,
 			self._review_raw_frames, self._review_confidences,
 			self._review_segments, ms, max_accel=ma)
