@@ -4,6 +4,8 @@
 """
 from __future__ import annotations
 
+import config
+
 from PySide6.QtWidgets import (
 	QDialog, QVBoxLayout, QHBoxLayout, QWidget, QLabel,
 	QListWidget, QListWidgetItem, QMessageBox, QSplitter, QLineEdit,
@@ -27,7 +29,7 @@ class ReviewDialog(QDialog):
 	def __init__(self, parent: QWidget, rows: list, observations: list,
 				 raw_frames: list, confidences: list[dict],
 				 segments: list[dict], max_speed: float,
-				 max_accel: float = 50.0,
+				 max_accel: float = config.DEFAULT_MAX_ACCEL,
 				 final_check: bool = False,
 					 fps: float = 1.0) -> None:
 		super().__init__(parent)

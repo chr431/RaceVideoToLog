@@ -14,20 +14,21 @@ import sys
 
 
 def main() -> None:
+	import config
 	parser = argparse.ArgumentParser(description="RaceVideoToLog - 视频速度提取工具")
 	parser.add_argument("video", nargs="?", help="视频文件路径")
 	parser.add_argument("--roi", nargs=4, type=int, metavar=("X1","Y1","X2","Y2"), help="识别范围")
-	parser.add_argument("--format", choices=["m/s","km/h","mile/h"], default="km/h")
-	parser.add_argument("--div", type=int, default=2, choices=list(range(1, 11)))
-	parser.add_argument("--max-speed", type=float, default=400)
-	parser.add_argument("--max-accel", type=float, default=50)
-	parser.add_argument("--target-h", type=int, default=48)
-	parser.add_argument("--pad", type=int, default=0)
-	parser.add_argument("--buffer", type=int, default=16)
-	parser.add_argument("--backend", choices=["auto","tensorrt","cpu"], default="auto")
-	parser.add_argument("--ocr-model", choices=["v6_tiny", "v6_small"], default="v6_tiny",
+	parser.add_argument("--format", choices=["m/s","km/h","mile/h"], default=config.DEFAULT_SPEED_FORMAT)
+	parser.add_argument("--div", type=int, default=config.DEFAULT_FRAME_DIV, choices=list(range(1, 11)))
+	parser.add_argument("--max-speed", type=float, default=config.DEFAULT_MAX_SPEED)
+	parser.add_argument("--max-accel", type=float, default=config.DEFAULT_MAX_ACCEL)
+	parser.add_argument("--target-h", type=int, default=config.DEFAULT_TARGET_H)
+	parser.add_argument("--pad", type=int, default=config.DEFAULT_PAD)
+	parser.add_argument("--buffer", type=int, default=config.DEFAULT_BUFFER_SIZE)
+	parser.add_argument("--backend", choices=["auto","tensorrt","cpu"], default=config.DEFAULT_BACKEND)
+	parser.add_argument("--ocr-model", choices=["v6_tiny", "v6_small"], default=config.DEFAULT_OCR_MODEL,
 		help="主 OCR 模型 (默认 tiny)")
-	parser.add_argument("--reocr-model", choices=["v6_tiny", "v6_small"], default="v6_small",
+	parser.add_argument("--reocr-model", choices=["v6_tiny", "v6_small"], default=config.DEFAULT_REOCR_MODEL,
 		help="重 OCR 模型 (默认 small，推荐 tiny+small 组合)")
 	parser.add_argument("-o", "--output", type=str)
 	parser.add_argument("--analysis", nargs=2, metavar=("CSV1","CSV2"))
@@ -35,7 +36,7 @@ def main() -> None:
 	parser.add_argument("--frame-start", type=int, metavar="N")
 	parser.add_argument("--frame-end", type=int, metavar="N")
 	parser.add_argument("--log-level", choices=["normal","detailed","debug"],
-		default="normal", help="日志级别 (默认 normal)")
+		default=config.DEFAULT_LOG_LEVEL, help="日志级别 (默认 normal)")
 	parser.add_argument("--from-csv", type=str, metavar="PATH",
 		help="从已有 CSV 文件头导入设置（可被显式参数覆盖）")
 	args = parser.parse_args()

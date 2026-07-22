@@ -9,6 +9,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+import config
+
 from PySide6.QtWidgets import (
 	QMainWindow, QWidget, QStackedWidget,
 	QDialog, QFileDialog, QMessageBox, QHBoxLayout, QVBoxLayout, QGridLayout,
@@ -180,8 +182,8 @@ class RaceVideoToLogApp(QMainWindow):
 		self.ocr_engines: list = []
 
 		self._export_thread: _ExportThread | None = None
-		self.correction_mode: str = "auto"
-		self.speed_format: str = "km/h"
+		self.correction_mode: str = config.DEFAULT_CORRECTION_MODE
+		self.speed_format: str = config.DEFAULT_SPEED_FORMAT
 
 		# 人工审核暂存
 		self._review_rows: list = []
@@ -324,10 +326,10 @@ class RaceVideoToLogApp(QMainWindow):
 		cg = make_static_card()
 		cl = QGridLayout(cg)
 		cl.addWidget(BodyLabel("最大速度 (km/h)"), 0, 0)
-		self.max_speed_edit = LineEdit(); self.max_speed_edit.setText("400"); self.max_speed_edit.setFixedWidth(50)
+		self.max_speed_edit = LineEdit(); self.max_speed_edit.setText(str(int(config.DEFAULT_MAX_SPEED))); self.max_speed_edit.setFixedWidth(50)
 		cl.addWidget(self.max_speed_edit, 0, 1)
 		cl.addWidget(BodyLabel("最大加速度 (m/s²)"), 0, 2)
-		self.max_accel_edit = LineEdit(); self.max_accel_edit.setText("50"); self.max_accel_edit.setFixedWidth(50)
+		self.max_accel_edit = LineEdit(); self.max_accel_edit.setText(str(int(config.DEFAULT_MAX_ACCEL))); self.max_accel_edit.setFixedWidth(50)
 		cl.addWidget(self.max_accel_edit, 0, 3)
 		gl.addWidget(cg)
 		ll.addWidget(fmt_card)
