@@ -8,6 +8,7 @@ KMH_TO_MPS: float = 1.0 / 3.6    # km/h → m/s 转换因子
 # ═══════════════════ 模型默认值 ═══════════════════
 DEFAULT_OCR_MODEL: str = "v6_tiny"     # 主 OCR 模型
 DEFAULT_REOCR_MODEL: str = "v6_small"  # 重 OCR 模型
+OCR_REC_BATCH_NUM: int = 12            # OCR 识别批处理大小
 
 # ═══════════════════ 图表颜色 ═══════════════════
 COLOR_BLUE: str = "#2196F3"
@@ -63,3 +64,17 @@ PROFILE_PCT_TOLERANCE: float = 0.02    # 相对偏差容许 (比例, 0.02=2%)
 CORRECTION_MAX_ROUNDS: int = 4         # Stage 4 最大迭代轮数
 FILL_MAX_PASSES: int = 10              # Stage 5 最大填充轮数
 CORRECTION_ACCEPT_MIN_SCORE: float = 0.35  # 接受修正的最低 LCS 分数
+CORRECTION_MIN_DIFF: float = 0.5       # 接受修正的最小速度差 (km/h)
+
+# ═══════════════════ 候选评分参数 ═══════════════════
+INTERP_PROX_ABS: float = 15.0          # 插值接近度绝对带宽 (km/h)
+INTERP_PROX_PCT: float = 0.07          # 插值接近度相对带宽 (比例)
+REOCR_HEIGHTS: tuple = (24, 32, 48)    # 重 OCR 尝试的预处理高度 (px)
+
+# ═══════════════════ 问题段检测参数 ═══════════════════
+ACCEL_ANOMALY_THRESHOLD: float = 10.0  # 邻帧加速度异常阈值 (km/h)
+MAX_SUGGESTED_FRAMES: int = 8          # 每个问题段最多建议帧数
+PROBLEM_MIN_SEGMENT_LEN: int = 3       # 问题段最小连续帧数
+
+# ═══════════════════ 部分数字扩展参数 ═══════════════════
+MAX_PARTIAL_WILDCARDS: int = 2         # expand_partial 最大通配符数

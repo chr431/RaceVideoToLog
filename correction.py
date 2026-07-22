@@ -20,7 +20,10 @@ from config import (MPS_TO_KMH, LCS_TRUST_HIGH,
 	PROFILE_TIME_WINDOW, PROFILE_MIN_WINDOW,
 	PROFILE_ABS_TOLERANCE, PROFILE_PCT_TOLERANCE,
 	CORRECTION_MAX_ROUNDS, FILL_MAX_PASSES,
-	CORRECTION_ACCEPT_MIN_SCORE)
+	CORRECTION_ACCEPT_MIN_SCORE, CORRECTION_MIN_DIFF,
+	INTERP_PROX_ABS, INTERP_PROX_PCT, REOCR_HEIGHTS,
+	ACCEL_ANOMALY_THRESHOLD, MAX_SUGGESTED_FRAMES,
+	PROBLEM_MIN_SEGMENT_LEN, MAX_PARTIAL_WILDCARDS)
 
 if TYPE_CHECKING:
 	from rapidocr import RapidOCR
@@ -56,7 +59,7 @@ def expand_partial(pattern: str, max_speed: float) -> list[float]:
 		val = float(pattern)
 		return [val] if val <= max_speed else []
 	# No constraint = skip (all-x or too many x's)
-	if x_count == len(pattern) or x_count > 2:
+	if x_count == len(pattern) or x_count > MAX_PARTIAL_WILDCARDS:
 		return []
 	results = []
 	pattern_lower = pattern.lower()
@@ -366,7 +369,7 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
 				                              high_weight=anchors)
 				# 参考值接近度加成
 				if ref_value is not None and ref_value > 0:
-					ref_prox = max(0.0, 1.0 - abs(val - ref_value) / max(15.0, ref_value * 0.07))
+					ref_prox = max(0.0, 1.0 - abs(val - ref_value) / max(INTERP_PROX_ABS, ref_value * INTERP_PROX_PCT))
 					score += ref_prox * LCS_INTERP_WEIGHT
 				# 新颖性
 				if abs(val - raw_val) > 0.5:
@@ -375,7 +378,7 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
 					best_score = score; best_val = val; best_tag = tag
 
 			if (best_tag != "current" and best_val is not None
-					and abs(raw_val - best_val) > 0.5 and best_score > CORRECTION_ACCEPT_MIN_SCORE):
+					and abs(raw_val - best_val) > CORRECTION_MIN_DIFF and best_score > CORRECTION_ACCEPT_MIN_SCORE):
 				if notes is not None:
 					notes[i] = f"{best_tag}: {raw_val:.0f}→{best_val:.0f}"
 				rows[i][2] = best_val
@@ -420,7 +423,7 @@ def _re_ocr_frame(crop_bgr: "np.ndarray", ocr: "RapidOCR", max_speed_kmh: float,
 	if h <= 0 or w <= 0:
 		return candidates
 
-	for target_h in (24, 32, 48):
+	for target_h in REOCR_HEIGHTS:
 		scale = target_h / h if h > 0 else 1.0
 		proc = cv2.resize(crop_bgr, (max(1, int(w * scale)), target_h))
 		res = ocr(proc)
@@ -554,7 +557,7 @@ def compute_confidence(rows: list, observations: list, max_speed: float,
 
 
 def find_problem_segments(confidences: list[dict], min_score: float = LCS_CONFIDENCE_MIN_SCORE,
-						  min_gap: int = 3, min_segment_len: int = 3) -> list[dict]:
+						  min_segment_len: int = PROBLEM_MIN_SEGMENT_LEN) -> list[dict]:
 	"""将低置信度连续帧聚合成问题段。
 
 	min_score 默认 30（对应 LCS 0.3，即 correction 阶段的 error 阈值）。
@@ -602,11 +605,11 @@ def find_problem_segments(confidences: list[dict], min_score: float = LCS_CONFID
 				v = confidences[fi].get('speed', 0)
 				v_prev = confidences[fi - 1].get('speed', 0)
 				v_next = confidences[fi + 1].get('speed', 0)
-				if v > 0 and v_prev > 0 and abs(v - v_prev) > 10:
+				if v > 0 and v_prev > 0 and abs(v - v_prev) > ACCEL_ANOMALY_THRESHOLD:
 					suggested.add(fi)
-				if v > 0 and v_next > 0 and abs(v_next - v) > 10:
+				if v > 0 and v_next > 0 and abs(v_next - v) > ACCEL_ANOMALY_THRESHOLD:
 					suggested.add(fi + 1)
-			if len(suggested) >= 8:  # 最多 8 个建议帧
+			if len(suggested) >= MAX_SUGGESTED_FRAMES:  # 最多 8 个建议帧
 				break
 		seg['suggested'] = sorted(suggested)
 

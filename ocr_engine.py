@@ -512,7 +512,7 @@ def _get_model_params(variant: str, engine_type: str = "onnxruntime") -> dict | 
 		"Rec.ocr_version": _OCRVersion.PPOCRV6,
 		"Det.engine_type": _et,
 		"Rec.engine_type": _et,
-		"Rec.rec_batch_num": 12,
+		"Rec.rec_batch_num": config.OCR_REC_BATCH_NUM,
 	}
 
 
