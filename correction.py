@@ -231,7 +231,8 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
             log_fn(f"  Stage 4 round {rnd}: {len(error_set)} errors, fixed {fixed}")
 
     # ── 阶段 5：迭代填充直到收敛（处理级联效应）──
-    if skip_fill:
+    # reocr_only 模式下跳过填充（纯物理插值，不看图像）
+    if skip_fill or reocr_only:
         error_set, _scores_l, _scores_r = _detect_errors(rows, pinned_set, times, max_speed_kmh, max_accel_mps2, fps=fps)
         for i in error_set:
             if i not in pinned_set and rows[i][3] == Flag.RAW:
@@ -341,10 +342,10 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
         if not only_reocr and interp_cand is not None:
             candidates.append(interp_cand)
 
-        # ── 选择最佳候选：候选 + 当前值 + 参考值 统一评分 ──
+        # ── 选择最佳候选：候选 + 当前值统一评分 ──
         if candidates:
             raw_val = rows[i][2]
-            ref_value = interp_cand
+            ref_value = interp_cand if not only_reocr else None
             options: list[tuple[float, str]] = []
             for c in candidates:
                 if 0 <= c <= max_speed_kmh:
