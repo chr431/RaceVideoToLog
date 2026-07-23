@@ -220,7 +220,11 @@ class ReviewDialog(QDialog):
         dark = isDarkTheme()
         bg, fg = chart_colors(dark)
         prev_dark = getattr(self, '_chart_params', {}).get('dark')
-        needs_rebuild = (prev_dark != dark or not hasattr(self, '_chart_cache'))
+        prev_corr = getattr(self, '_chart_corrections_fs', None)
+        cur_corr = frozenset(self._corrections.keys())
+        self._chart_corrections_fs = cur_corr
+        needs_rebuild = (prev_dark != dark or not hasattr(self, '_chart_cache')
+                         or prev_corr != cur_corr)
 
         times = [r[0] / self._fps for r in self._rows]
         speeds = [r[2] for r in self._rows]
@@ -250,8 +254,9 @@ class ReviewDialog(QDialog):
             sizes = []
             pick_idx = []
             for i in range(len(times)):
-                if i in self._corrections:
-                    continue  # 已修正帧不参与散点（由蓝点叠加）
+                # 隐藏用户手动修正 + 管线自动修正帧（仅显示为蓝点）
+                if i in self._corrections or (10 <= self._rows[i][3] <= 19):
+                    continue
                 pick_idx.append(i)
                 if i in low_set:
                     colors.append(COLOR_ORANGE)

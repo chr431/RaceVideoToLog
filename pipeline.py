@@ -119,6 +119,9 @@ class ProcessingPipeline:
             self._write_diagnostics(Path(output_path))
         else:
             self._run_correction(Path(output_path), skip_fill=False, reocr_only=reocr_only)
+            for row in self._rows:
+                if row[2] > self._max_speed:
+                    row[2] = -1.0
         self._timing["total"] = _time.perf_counter() - t_total
         logger.info("流水线完成: 总计 %.1fs (%s)",
                         self._timing["total"],
