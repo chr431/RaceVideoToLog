@@ -223,12 +223,16 @@ class ReviewDialog(QDialog):
         prev_corr = getattr(self, '_chart_corrections_fs', None)
         cur_corr = frozenset(self._corrections.keys())
         self._chart_corrections_fs = cur_corr
-        needs_rebuild = (prev_dark != dark or not hasattr(self, '_chart_cache')
-                         or prev_corr != cur_corr)
 
         times = [r[0] / self._fps for r in self._rows]
         speeds = [r[2] for r in self._rows]
-        self._chart_cache = {'times': times, 'speeds': speeds}
+        # 检测数据是否变化（预览/修正改变 speed 时强制重建）
+        prev_data = self._chart_cache.get('data_hash', 0) if hasattr(self, '_chart_cache') else 0
+        data_hash = hash((len(times), times[0], times[-1],
+                          sum(speeds), len(self._corrections)))
+        self._chart_cache = {'times': times, 'speeds': speeds, 'data_hash': data_hash}
+        needs_rebuild = (prev_dark != dark or not hasattr(self, '_chart_cache')
+                         or prev_corr != cur_corr or prev_data != data_hash)
 
         # 低置信度区间（一次计算，复用）
         low_set = set()
@@ -254,9 +258,8 @@ class ReviewDialog(QDialog):
             sizes = []
             pick_idx = []
             for i in range(len(times)):
-                # 隐藏用户手动修正 + 管线自动修正帧（仅显示为蓝点）
-                if i in self._corrections or (10 <= self._rows[i][3] <= 19):
-                    continue
+                if i in self._corrections:
+                    continue  # 用户手动修正帧不参与散点（由蓝点叠加）
                 pick_idx.append(i)
                 if i in low_set:
                     colors.append(COLOR_ORANGE)
