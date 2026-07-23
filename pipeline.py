@@ -391,7 +391,7 @@ class ProcessingPipeline:
                 fh.write(f"# timing: {timing_str}\n")
             w = csv.writer(fh)
             for row in rows:
-                w.writerow([f"{row[0]:.2f}", f"{row[1]:.2f}",
+                w.writerow([f"{int(row[0])}", f"{row[1]:.2f}",
                             f"{int(row[2])}", str(row[3])])
 
     def _populate_diag_final(self) -> None:
