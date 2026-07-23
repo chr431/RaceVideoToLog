@@ -131,18 +131,8 @@ class _ExportThread(QThread):
 			self._error.emit(str(error_container[0]))
 		elif result_container.get("cancelled"):
 			self._cancelled.emit()
-		elif result_container["mode"] == "review":
-			rows, obs, raw_frames, conf, segs = result_container["review_data"]
-			self._review_data.emit(rows, obs, conf, segs)
-			self.app._review_rows = rows
-			self.app._review_observations = obs
-			self.app._review_raw_frames = raw_frames
-			self.app._review_confidences = conf
-			self.app._review_segments = segs
-			self._finished.emit("review")
 		else:
-			self._finished.emit("auto")
-
+			self._finished.emit(result_container["mode"])
 	def _check_cancel(self) -> None:
 		if self._cancel_flag:
 			raise _CancelExport()
