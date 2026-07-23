@@ -490,7 +490,7 @@ class ProcessingPipeline:
             w = csv.writer(fh)
             for row in rows:
                 w.writerow([f"{row[0]:.2f}", f"{row[1]:.2f}",
-                            f"{row[2]:.2f}", str(row[3])])
+                            f"{row[2]}", str(row[3])])
 
     def _populate_diag_final(self) -> None:
         """Fill final_value, flag, and correction_note into diagnostics."""

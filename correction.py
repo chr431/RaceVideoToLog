@@ -45,7 +45,7 @@ def _find_neighbor_trusted(i: int, n: int, rows: list) -> tuple[int | None, int 
     return la, ra
 
 
-def expand_partial(pattern: str, max_speed: float) -> list[float]:
+def expand_partial(pattern: str, max_speed: float) -> list[int]:
     """Generate values matching a partial digit pattern. 'x' = any digit 0-9.
 
     Supports any number of x's. All-x patterns (e.g. 'xxx') return empty
@@ -77,7 +77,7 @@ def expand_partial(pattern: str, max_speed: float) -> list[float]:
     return results
 
 
-def _auto_expand_digits(raw_text: str, max_speed_kmh: float) -> list[float]:
+def _auto_expand_digits(raw_text: str, max_speed_kmh: float) -> list[int]:
     """根据 OCR 读数自动生成所有可能的数字候选。
 
     - 1-2 位数: 插入 x + 逐位替换为 x
@@ -89,9 +89,9 @@ def _auto_expand_digits(raw_text: str, max_speed_kmh: float) -> list[float]:
     digits = raw_text
     if len(digits) >= 4:
         return []
-    candidates: list[float] = []
+    candidates: list[int] = []
     try:
-        candidates.append(float(digits))
+        candidates.append(int(digits))
     except ValueError:
         pass
     # 插入 x（处理缺失位）：仅对 1-2 位数
@@ -427,7 +427,7 @@ def _re_ocr_frame(crop_bgr: "np.ndarray", ocr: "RapidOCR", max_speed_kmh: float,
         res = ocr(proc)
         sv, rt, _conf = extract_speed_value(res)
         if sv is not None and sv <= max_speed_kmh:
-            candidates.add(float(sv))
+            candidates.add(int(sv))
 
     if cache_key is not None:
         cache[cache_key] = candidates
@@ -492,7 +492,7 @@ def _fill_unrecoverable(rows: list, pinned_set: set, error_set: set, times: list
         else:
             # 无右侧高信帧 → 跳过（无法可靠约束）
             continue
-        rows[i][2] = float(val)
+        rows[i][2] = int(val)
         if rows[i][3] == Flag.RAW:
             rows[i][3] = Flag.FILL_INTERP
         if notes is not None:

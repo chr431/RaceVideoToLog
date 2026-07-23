@@ -195,7 +195,7 @@ class VideoMetadata:
 @dataclass
 class SpeedObservation:
     timestamp: float
-    raw_speed_kmh: float
+    raw_speed_kmh: int
     raw_text: str
 
 
@@ -324,7 +324,7 @@ def extract_speed_value(ocr_result) -> tuple[float | None, str | None, float]:
         if not raw_text:
             return None, None, conf
         try:
-            return float(raw_text), raw_text, conf
+            return int(float(raw_text)), raw_text, conf
         except ValueError:
             return None, None, conf
 
@@ -423,7 +423,7 @@ def _savgol_filter_np(y: "np.ndarray", window_length: int, polyorder: int) -> "n
     return result
 
 
-def build_speed_candidates(raw_text: str, max_speed_kmh: float) -> list[float]:
+def build_speed_candidates(raw_text: str, max_speed_kmh: float) -> list[int]:
     """根据 OCR 原始文本生成可能的速度候选值。
 
     策略:
@@ -441,13 +441,13 @@ def build_speed_candidates(raw_text: str, max_speed_kmh: float) -> list[float]:
     if max_speed_int < 0:
         return []
 
-    candidates: set[float] = set()
+    candidates: set[int] = set()
 
     # 策略1: 保留原始值
     try:
         val = int(text)
         if val <= max_speed_int:
-            candidates.add(float(val))
+            candidates.add(int(val))
     except ValueError:
         pass
 
@@ -461,7 +461,7 @@ def build_speed_candidates(raw_text: str, max_speed_kmh: float) -> list[float]:
             continue
         step = 10 ** suffix_len
         for candidate in range(suffix_value, max_speed_int + 1, step):
-            candidates.add(float(candidate))
+            candidates.add(int(candidate))
 
     # 策略3: 常见 OCR 字符混淆替换（对称映射）
     _CONFUSION_MAP = {
@@ -482,7 +482,7 @@ def build_speed_candidates(raw_text: str, max_speed_kmh: float) -> list[float]:
             try:
                 val = int(altered)
                 if val <= max_speed_int:
-                    candidates.add(float(val))
+                    candidates.add(int(val))
             except ValueError:
                 pass
 

@@ -315,6 +315,7 @@ class ReviewDialog(QDialog):
             ax.tick_params(colors=fg, labelsize=8)
             from matplotlib.ticker import MaxNLocator
             ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+            ax.yaxis.set_major_locator(MaxNLocator(integer=True))
             ax.spines["bottom"].set_color(fg if dark else "#888")
             ax.spines["left"].set_color(fg if dark else "#888")
             ax.spines["top"].set_visible(False)
@@ -503,7 +504,7 @@ class ReviewDialog(QDialog):
             self._preview_backup: dict[int, float] = {}
         if fi not in self._preview_backup and fi not in self._corrections:
             self._preview_backup[fi] = self._rows[fi][2]
-        self._rows[fi][2] = float(value)
+        self._rows[fi][2] = int(value)
         self._redraw_chart()
         self._speed_value_label.setText(f"速度: {value:.0f} km/h (预览)")
 
