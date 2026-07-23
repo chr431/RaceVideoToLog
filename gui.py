@@ -99,25 +99,15 @@ class _ExportThread(QThread):
 					progress_cb=self._emit_progress,
 					cancel_check=self._check_cancel,
 					log_level=self._log_level,
-					final_check=True,
 				)
 				if mode == "auto":
 					pipeline.run_auto(self._output_path)
 					result_container["mode"] = "auto"
-					self.app._pipeline = pipeline
-					self.app._review_output_path = self._output_path
 				else:
-					result = pipeline.run_review_pass1(self._output_path)
-					if result is None:
-						# No problem segments, CSV already written
-						result_container["mode"] = "auto"
-						self.app._pipeline = pipeline
-						self.app._review_output_path = self._output_path
-					else:
-						result_container["mode"] = "review"
-						result_container["review_data"] = result
-						self.app._pipeline = pipeline
-						self.app._review_output_path = self._output_path
+					pipeline.run_review_pass1(self._output_path)
+					result_container["mode"] = "review"
+				self.app._pipeline = pipeline
+				self.app._review_output_path = self._output_path
 			except _CancelExport:
 				result_container["cancelled"] = True
 			except Exception as exc:
@@ -892,41 +882,33 @@ class RaceVideoToLogApp(QMainWindow):
 
 	def _on_done(self, mode: str) -> None:
 		if self.sender() is not self._export_thread:
-			return  # 忽略旧线程的残留信号
-		if mode == "review":
-			self._export_btn.setEnabled(True); self._cancel_btn.setEnabled(False)
-			self._export_thread = None
-			self._show_review_dialog()
-		else:
-			self._show_final_check()
-			self._finish_export()
-			self._status_label.setText("自动纠错完成 — 结果已保存。")
+			return
+		self._export_btn.setEnabled(True); self._cancel_btn.setEnabled(False)
+		self._export_thread = None
+		self._show_final_check()
 
 	def _show_final_check(self) -> None:
-		"""主线程中显示最终检查对话框。"""
 		pipeline = getattr(self, "_pipeline", None)
 		out = getattr(self, "_review_output_path", None)
 		if pipeline is None or out is None:
 			return
-		if not getattr(pipeline, "_final_check", False):
-			pipeline.finalize(out)
-			return
 		from gui_review import ReviewDialog
 		rows = pipeline._rows
-		n = len(rows)
-		confidences = [{"index": i, "score": 100.0, "is_corrected": False,
-						"speed": rows[i][2], "reason": ""} for i in range(n)]
+		confidences = getattr(pipeline, '_confidences', None)
+		if confidences is None:
+			confidences = [{"index": i, "score": 100.0, "is_corrected": False,
+				"speed": rows[i][2], "reason": ""} for i in range(len(rows))]
 		dlg = ReviewDialog(self, rows, pipeline._observations,
-						   pipeline._raw_frames, confidences, [],
-						   pipeline._max_speed, pipeline._max_accel,
-						   final_check=True)
+			pipeline._raw_frames, confidences,
+			pipeline._max_speed, pipeline._max_accel)
 		if dlg.exec() == QDialog.DialogCode.Accepted:
-			corrections = dlg.get_corrections()
-			for fi, v in corrections.items():
+			for fi, v in dlg.get_corrections().items():
 				if 0 <= fi < len(rows):
 					rows[fi][2] = v
 					rows[fi][3] = Flag.PINNED
 		pipeline.finalize(out)
+		self._finish_export()
+		self._status_label.setText("最终检查完成 — 结果已保存。")
 
 	def _on_error(self, err: str) -> None:
 		if self.sender() is not self._export_thread:
@@ -938,71 +920,6 @@ class RaceVideoToLogApp(QMainWindow):
 			return
 		self._finish_export(); self._status_label.setText("已取消。")
 
-	def _show_review_dialog(self) -> None:
-		try:
-			ms = float(self.max_speed_edit.text())
-			ma = float(self.max_accel_edit.text())
-		except ValueError:
-			ms = config.DEFAULT_MAX_SPEED
-			ma = config.DEFAULT_MAX_ACCEL
-		dlg = ReviewDialog(self, self._review_rows, self._review_observations,
-			self._review_raw_frames, self._review_confidences,
-			self._review_segments, ms, max_accel=ma)
-		if dlg.exec() == QDialog.DialogCode.Accepted:
-			corrections = dlg.get_corrections()
-			partial_corrections = dlg.get_partial_corrections()
-			self._review_confirmed = dlg.get_confirmed()
-			try:
-				self._continue_with_manual(corrections, partial_corrections)
-			except Exception as e:
-				self._progress_bar.setValue(0)
-				self._status_label.setText(f"审核失败: {e}")
-				import traceback; traceback.print_exc()
-
-	def _continue_with_manual(self, corrections: dict[int, float],
-	                                   partial_corrections: dict[int, str] | None = None) -> None:
-		"""非阻塞执行 pass2：使用 QThread 避免 GUI 冻结。"""
-		pipeline = getattr(self, "_pipeline", None)
-		if pipeline is None:
-			self._status_label.setText("错误: 处理状态丢失"); return
-
-		self._export_btn.setEnabled(False)
-		self._status_label.setText("正在应用审核修正...")
-		self._progress_bar.setValue(0)
-
-		app = self  # 捕获 RaceVideoToLogApp 引用
-		_default_out = app.video_path.parent / f"{app.video_path.stem}_log.csv" \
-			if app.video_path else Path("output_log.csv")
-		out_path = getattr(app, "_review_output_path", _default_out)
-		confirmed = getattr(app, "_review_confirmed", set())
-
-		class _Pass2Thread(QThread):
-			_finished = Signal(bool, str)
-
-			def run(self):
-				try:
-					pipeline.run_review_pass2(
-						corrections=corrections,
-						confirmed_segments=confirmed,
-						output_path=out_path,
-						partial_corrections=partial_corrections or None,
-					)
-					self._finished.emit(True,
-						f"人工审核完成 — {len(corrections)} 帧已修正，结果已保存。")
-				except Exception as exc:
-					import traceback; traceback.print_exc()
-					self._finished.emit(False, f"审核失败: {exc}")
-		self._pass2_thread = _Pass2Thread(self)
-		self._pass2_thread._finished.connect(self._on_pass2_done)
-		self._pass2_thread.start()
-
-	def _on_pass2_done(self, success: bool, message: str) -> None:
-		if success:
-			self._show_final_check()
-		self._export_btn.setEnabled(True)
-		self._progress_bar.setValue(100 if success else 0)
-		self._status_label.setText(message)
-		self._pass2_thread = None
 
 	def _finish_export(self) -> None:
 		self._export_btn.setEnabled(True); self._cancel_btn.setEnabled(False)

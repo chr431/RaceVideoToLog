@@ -162,6 +162,7 @@ class ProcessingPipeline:
 		self._emit("计算置信度...", 95.0)
 		confidences = compute_confidence(self._rows, self._observations,
 										 self._max_speed, self._max_accel)
+		self._confidences = confidences
 		segments = find_problem_segments(confidences, min_segment_len=1)
 
 		if segments:
