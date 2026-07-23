@@ -371,7 +371,7 @@ class ReviewDialog(QDialog):
             hi = min(n, i + half + 1)
             median_profile[i] = float(np.median(speeds[lo:hi]))
 
-        use_all = (self._review_scope == "full")
+        use_all = (self._review_scope != "auto")
         regions = []
         i = 0
         while i < n:

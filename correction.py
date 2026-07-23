@@ -202,7 +202,7 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
     fixed = _fix_errors(rows, observations, raw_frames, ocr, error_set,
                         pinned_set, times, max_speed_kmh, max_accel_mps2,
                         progress_fn=progress_fn, timing=timing,
-                        partial_corrections=partial_corrections, reocr_cache=cache,
+                        reocr_cache=cache,
                         light_mode=light_mode, reocr_only=reocr_only, notes=notes, fps=fps)
     if log_fn:
         log_fn(f"  Stage 2+3: fixed {fixed} frames in round 1")
@@ -318,7 +318,6 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
                         key=_dist_to_trusted)
     total = len(error_list)
     for i in error_list:
-        has_partial = partial_corrections and i in partial_corrections
         interp_cand = _interp_candidate(i, rows, pinned_set, times, max_speed_kmh, fps=fps)
         oid = min(i, len(observations) - 1)
         reocr_set = _re_ocr_frame(raw_frames[i][1], ocr, max_speed_kmh,
@@ -326,18 +325,15 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
 
         # ── 收集候选值 ──
         only_reocr = light_mode or reocr_only
-        if has_partial:
-            candidates = expand_partial(partial_corrections[i], max_speed_kmh)
-        else:
-            candidates = list(reocr_set)
-            if not only_reocr:
-                confusion_cands = build_speed_candidates(observations[oid].raw_text, max_speed_kmh)
-                for c in confusion_cands:
-                    if c not in candidates:
-                        candidates.append(c)
-                for c in _auto_expand_digits(observations[oid].raw_text, max_speed_kmh):
-                    if c not in candidates:
-                        candidates.append(c)
+        candidates = list(reocr_set)
+        if not only_reocr:
+            confusion_cands = build_speed_candidates(observations[oid].raw_text, max_speed_kmh)
+            for c in confusion_cands:
+                if c not in candidates:
+                    candidates.append(c)
+            for c in _auto_expand_digits(observations[oid].raw_text, max_speed_kmh):
+                if c not in candidates:
+                    candidates.append(c)
 
         if not only_reocr and interp_cand is not None:
             candidates.append(interp_cand)

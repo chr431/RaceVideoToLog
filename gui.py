@@ -33,7 +33,7 @@ from gui_review import ReviewDialog
 from theme_manager import ThemeManager
 
 from qfluentwidgets import (setTheme, Theme, isDarkTheme,
-    PushButton, PrimaryPushButton, LineEdit, ComboBox, CheckBox, RadioButton,
+    PushButton, PrimaryPushButton, LineEdit, ComboBox, RadioButton,
     BodyLabel, StrongBodyLabel, CaptionLabel, CardWidget, Slider, ProgressBar, CompactSpinBox, Pivot)
 
 
@@ -45,7 +45,6 @@ class _ExportThread(QThread):
 
     _progress = Signal(str, float)
     _finished = Signal(str)
-    _review_data = Signal(list, list, list, list)
     _error = Signal(str)
     _cancelled = Signal()
 
@@ -165,14 +164,7 @@ class RaceVideoToLogApp(QMainWindow):
         self.correction_mode: str = config.DEFAULT_CORRECTION_MODE
         self.speed_format: str = config.DEFAULT_SPEED_FORMAT
 
-        # 人工审核暂存
-        self._review_rows: list = []
-        self._review_observations: list = []
-        self._review_raw_frames: list = []
         self._review_output_path: Path | None = None
-        self._review_confidences: list[dict] = []
-        self._review_segments: list[dict] = []
-        self._review_confirmed: set = set()
 
         # 预览
         self._preview_pm: QPixmap | None = None
@@ -840,7 +832,6 @@ class RaceVideoToLogApp(QMainWindow):
         if self._export_thread is not None:
             self._export_thread._progress.disconnect()
             self._export_thread._finished.disconnect()
-            self._export_thread._review_data.disconnect()
             self._export_thread._error.disconnect()
             self._export_thread._cancelled.disconnect()
             self._export_thread = None
@@ -849,7 +840,6 @@ class RaceVideoToLogApp(QMainWindow):
         self._export_thread = _ExportThread(self, Path(out), roi, ms, ma, fd, th, pp, nw, be, log_level)
         self._export_thread._progress.connect(self._on_progress)
         self._export_thread._finished.connect(self._on_done)
-        self._export_thread._review_data.connect(self._on_review_needed)
         self._export_thread._error.connect(self._on_error)
         self._export_thread._cancelled.connect(self._on_cancel)
         self._export_thread.start()
@@ -861,14 +851,6 @@ class RaceVideoToLogApp(QMainWindow):
     def _on_progress(self, msg: str, pct: float) -> None:
         self._status_label.setText(msg); self._progress_bar.setValue(int(pct))
 
-    def _on_review_needed(self, rows: list, observations: list,
-            confidences: list[dict], segments: list[dict]) -> None:
-        if self.sender() is not self._export_thread:
-            return
-        self._review_rows = rows
-        self._review_observations = observations
-        self._review_confidences = confidences
-        self._review_segments = segments
 
     def _on_done(self, mode: str) -> None:
         if self.sender() is not self._export_thread:
@@ -919,7 +901,6 @@ class RaceVideoToLogApp(QMainWindow):
             try:
                 self._export_thread._progress.disconnect()
                 self._export_thread._finished.disconnect()
-                self._export_thread._review_data.disconnect()
                 self._export_thread._error.disconnect()
                 self._export_thread._cancelled.disconnect()
             except (TypeError, RuntimeError):

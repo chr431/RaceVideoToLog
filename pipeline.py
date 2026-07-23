@@ -128,86 +128,6 @@ class ProcessingPipeline:
                         ", ".join(f"{k}={v:.1f}s" for k, v in self._timing.items()))
         self._emit("完成", 100.0)
 
-    def run_review_pass1(self, output_path: str | Path | None = None) -> tuple | None:
-        """人工辅助第 1 轮：OCR → 轻量纠错（仅重OCR）→ 置信度 → 问题段。
-
-        轻量纠错：仅对错误帧重 OCR，在原始值和重 OCR 值之间选择更优者。
-        不进行混淆候选、部分数字推断、插值填充，避免产生"物理合理但实际错误"的数据。
-        这样问题段反映的是真正需要人工介入的帧。
-        """
-        self._emit("加载 OCR 引擎...", 1.0)
-        self._ensure_ocr()
-        self._run_ocr()
-
-        if not self._observations:
-            raise RuntimeError("未识别到任何速度数据。")
-
-        # 构建初始 rows（全部 RAW，无预选锚点）
-        self._rows = self._build_initial_rows()
-
-        # ── 轻量纠错：仅重 OCR，不混淆/推断/填充 ──
-        self._emit("轻量纠错 (仅重OCR)...", 88.0)
-        def _prog(done, total):
-            if done % max(1, total // 3) != 0 and done != total:
-                return
-            self._emit(f"轻量纠错: {done}/{total} 帧", 88.0 + (done / max(total, 1)) * 4.0)
-        self._rows = correct_with_trust(
-            self._rows, self._observations, self._raw_frames, self._reocr,
-            self._max_speed, self._max_accel,
-            progress_fn=_prog, skip_fill=True, light_mode=True,
-            reocr_cache=self._reocr_cache)
-
-        # 验证：两次 OCR 的最佳值若超过最大速度则输出 -1
-        for row in self._rows:
-            if row[2] > self._max_speed:
-                row[2] = -1.0
-
-        self._emit("计算置信度...", 95.0)
-        confidences = compute_confidence(self._rows, self._observations,
-                                            self._max_speed, self._max_accel)
-        self._confidences = confidences
-        segments = find_problem_segments(confidences, min_segment_len=1)
-
-        if segments:
-            self._emit(f"发现 {len(segments)} 个问题段，等待人工审核...", 98.5)
-            self._segments = segments
-            return (list(self._rows), list(self._observations),
-                    list(self._raw_frames), confidences, segments)
-        else:
-            self._emit("未发现问题段，无需人工审核。", 98.5)
-            self._integrate_distance()
-            if output_path is not None:
-                self._write_csv(self._rows, Path(output_path))
-                self._write_diagnostics(Path(output_path))
-            self._emit("完成", 100.0)
-            return None
-
-    def run_review_pass2(self, corrections: dict[int, float],
-                            confirmed_segments: set[int],
-                            output_path: str | Path,
-                            partial_corrections: dict[int, str] | None = None) -> None:
-        """人工辅助第 2 轮：合并手动修正 → 再纠错 → 写 CSV。
-
-        修正值在 _correct 内部 rows 重建后才应用，避免被覆盖。
-        """
-        # 构建 pinned 集（用户修正帧 + 确认段首尾）
-        self._pinned = set(corrections.keys())
-        for seg_start in confirmed_segments:
-            for seg in self._segments:
-                if seg["start"] == seg_start:
-                    self._pinned.add(seg["start"])
-                    self._pinned.add(seg["end"])
-                    break
-
-        self._correct(91.0, 7.0, skip_fill=False,
-                        corrections=corrections,
-                        partial_corrections=partial_corrections,
-                        confirmed=confirmed_segments)
-
-        self._integrate_distance()
-        self._write_csv(self._rows, Path(output_path))
-        self._write_diagnostics(Path(output_path))
-        self._emit(f"人工审核完成 — {len(corrections)} 帧已修正，结果已保存。", 100.0)
 
     # ═══════════════ 内部 ═══════════════
 
@@ -248,33 +168,16 @@ class ProcessingPipeline:
 
     def _correct(self, progress_base: float, progress_span: float,
                     skip_fill: bool,
-                    partial_corrections: dict[int, str] | None = None,
                     corrections: dict[int, float] | None = None,
-                    confirmed: set[int] | None = None,
                     reocr_only: bool = False) -> None:
-        """共享纠错逻辑：构建 rows → 应用修正 → LCS 评分 → correct_with_trust。
-
-        先重建全部 RAW rows，再覆盖用户修正（PINNED）和确认段（CONFIRMED_SEG），
-        最后交给 correct_with_trust 进行 LCS 错误检测和 5 阶段纠错。
-        corrections 和 confirmed 仅由 pass2 传入。
-        """
-        # 构建初始 rows（全部 RAW）
+        """构建 rows → 应用用户修正 → LCS 纠错。"""
         self._rows = self._build_initial_rows()
 
-        # 应用用户修正（在 rows 重建之后，避免被覆盖）
         if corrections:
             for fi, v in corrections.items():
                 if 0 <= fi < len(self._rows):
                     self._rows[fi][2] = v
                     self._rows[fi][3] = Flag.PINNED
-        if confirmed:
-            for seg_start in confirmed:
-                for seg in (self._segments if hasattr(self, '_segments') else []):
-                    if seg["start"] == seg_start:
-                        for fi in range(seg["start"], seg["end"] + 1):
-                            if fi not in (corrections or {}) and 0 <= fi < len(self._rows):
-                                self._rows[fi][3] = Flag.CONFIRMED_SEG
-                        break
 
         t0 = _time.perf_counter()
         self._emit("纠错: LCS 评分 + 检测误差...", progress_base + 1.0)
@@ -288,7 +191,6 @@ class ProcessingPipeline:
             self._rows, self._observations, self._raw_frames, self._reocr,
             self._max_speed, self._max_accel,
             progress_fn=_prog, timing=corr_timing, skip_fill=skip_fill,
-            partial_corrections=partial_corrections,
             reocr_cache=self._reocr_cache,
             notes=self._diag_notes if self._diag else None,
             pinned=self._pinned if self._pinned else None,
