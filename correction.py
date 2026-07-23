@@ -380,7 +380,7 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
                     if best_tag == "interp":
                         rows[i][3] = Flag.FILL_INTERP
                     else:
-                        rows[i][3] = Flag.PARTIAL_AUTO if has_partial else Flag.REOCR_AUTO
+                        rows[i][3] = Flag.REOCR_AUTO
                 fixed += 1
 
         progress_done += 1

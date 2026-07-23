@@ -3,7 +3,7 @@ import pytest
 from correction import (
     expand_partial, _find_neighbor_trusted, _interp_candidate,
     compute_confidence, _auto_expand_digits,
-    _detect_errors,
+    _detect_errors, correct_with_trust,
 )
 from ocr_engine import (
     _savgol_filter_np, normalize_ocr_text, safe_int, safe_float, Flag,
@@ -364,3 +364,101 @@ class TestInterpCandidate:
                 [0.1, 0.0, 0.0, Flag.RAW]]
         val = _interp_candidate(0, rows, set(), [r[0] for r in rows], 400)
         assert val is None
+
+
+class MockOCR:
+    """模拟 RapidOCR：根据帧数据中的 frame_id 返回预设读数。"""
+    def __init__(self, readings: dict[int, float] | None = None):
+        self._readings = readings or {}
+
+    def __call__(self, proc):
+        # proc is a numpy array; we encoded frame_id in first byte
+        fi = int(proc.flat[0]) if proc.size > 0 else -1
+        if fi in self._readings:
+            val = self._readings[fi]
+            class FakeResult:
+                txts = [str(int(val))]
+                scores = [1.0]
+            return FakeResult()
+        class FakeEmpty:
+            txts = []
+            scores = []
+        return FakeEmpty()
+
+
+def _make_frame(frame_id: int) -> "np.ndarray":
+    """创建一个携带 frame_id 的假帧图像。"""
+    import numpy as np
+    arr = np.zeros((24, 48, 3), dtype=np.uint8)
+    arr.flat[0] = frame_id % 256
+    return arr
+
+
+class TestCorrectWithTrust:
+    """集成测试：用 mock OCR 数据运行完整 5 阶段管线。"""
+
+    def _make_rows(self, speeds, flags=None):
+        n = len(speeds)
+        if flags is None:
+            flags = [Flag.RAW] * n
+        return [[float(i), 0.0, float(speeds[i]), flags[i]] for i in range(n)]
+
+    def _make_obs(self, raw_texts):
+        from ocr_engine import SpeedObservation
+        return [SpeedObservation(float(i), float(t), t) for i, t in enumerate(raw_texts)]
+
+    def test_basic_no_errors(self):
+        """全是正确的值 → 无修改，全标记 HIGH_TRUST。"""
+        rows = self._make_rows([100, 100, 100, 100, 100])
+        obs = self._make_obs(["100"] * 5)
+        raw_frames = [(i, _make_frame(i)) for i in range(5)]
+        result = correct_with_trust(rows, obs, raw_frames, MockOCR(),
+                                     400, 50, fps=30.0)
+        flags = [r[3] for r in result]
+        speeds = [r[2] for r in result]
+        assert speeds == [100, 100, 100, 100, 100]
+        assert all(f == Flag.HIGH_TRUST for f in flags)
+
+    def test_outlier_fixed_by_reocr(self):
+        """中间帧异常，re-OCR 提供正确值 → 应被修正。"""
+        rows = self._make_rows([100, 100, 200, 100, 100])
+        obs = self._make_obs(["100", "100", "200", "100", "100"])
+        raw_frames = [(i, _make_frame(i)) for i in range(5)]
+        mock = MockOCR({2: 100.0})  # re-OCR returns 100 for frame 2
+        result = correct_with_trust(rows, obs, raw_frames, mock,
+                                     400, 50, fps=30.0)
+        assert result[2][2] == 100  # corrected
+        assert result[2][3] == Flag.REOCR_AUTO
+
+    def test_reocr_only_flag(self):
+        """reocr_only=True 时管线不崩溃（回归测试：之前 has_partial bug）。"""
+        rows = self._make_rows([100, 100, 200, 100, 100])
+        obs = self._make_obs(["100"] * 5)
+        raw_frames = [(i, _make_frame(i)) for i in range(5)]
+        mock = MockOCR({2: 100.0})
+        result = correct_with_trust(rows, obs, raw_frames, mock,
+                                     400, 50, reocr_only=True, fps=30.0)
+        assert result[2][2] == 100  # still corrected
+
+    def test_light_mode_no_iteration(self):
+        """light_mode=True 时只做一轮且不填充。"""
+        rows = self._make_rows([100, 100, 0, 100, 100])
+        obs = self._make_obs(["100"] * 5)
+        raw_frames = [(i, _make_frame(i)) for i in range(5)]
+        mock = MockOCR({2: 100.0})
+        result = correct_with_trust(rows, obs, raw_frames, mock,
+                                     400, 50, light_mode=True, fps=30.0)
+        assert result[2][2] == 100
+        assert result[2][3] == Flag.REOCR_AUTO
+
+    def test_skip_fill_and_reocr_only(self):
+        """skip_fill + reocr_only + re-OCR 无候选 → FLAGGED_REVIEW。"""
+        rows = self._make_rows([100, 100, 0, 100, 100])
+        obs = self._make_obs(["100"] * 5)
+        raw_frames = [(i, _make_frame(i)) for i in range(5)]
+        mock = MockOCR({})  # re-OCR returns nothing
+        result = correct_with_trust(rows, obs, raw_frames, mock,
+                                     400, 50, skip_fill=True, reocr_only=True,
+                                     fps=30.0)
+        # frame 2 was error, couldn't fix via re-OCR → flagged for review
+        assert result[2][3] == Flag.FLAGGED_REVIEW
