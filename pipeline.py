@@ -113,7 +113,7 @@ class ProcessingPipeline:
             self._emit("跳过纠错（原始OCR输出）...", 95.0)
             self._rows = []
             for obs in self._observations:
-                self._rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh, Flag.RAW])
+                self._rows.append([obs.timestamp, 0.0, int(obs.raw_speed_kmh), Flag.RAW])
             self._integrate_distance()
             self._write_csv(self._rows, Path(output_path))
             self._write_diagnostics(Path(output_path))
@@ -121,7 +121,7 @@ class ProcessingPipeline:
             self._run_correction(Path(output_path), skip_fill=False, reocr_only=reocr_only)
             for row in self._rows:
                 if row[2] > self._max_speed:
-                    row[2] = -1.0
+                    row[2] = -1
         self._timing["total"] = _time.perf_counter() - t_total
         logger.info("流水线完成: 总计 %.1fs (%s)",
                         self._timing["total"],
@@ -141,7 +141,7 @@ class ProcessingPipeline:
         """从 observations 构建初始 RAW 行列表。"""
         rows = []
         for obs in self._observations:
-            rows.append([obs.timestamp, 0.0, obs.raw_speed_kmh, Flag.RAW])
+            rows.append([obs.timestamp, 0.0, int(obs.raw_speed_kmh), Flag.RAW])
         return rows
 
     def _ensure_ocr(self) -> "RapidOCR":
@@ -324,10 +324,10 @@ class ProcessingPipeline:
             if sv is not None and rt is not None:
                 observations.append(SpeedObservation(
                     timestamp=fi,
-                    raw_speed_kmh=sv * SOURCE_TO_KMH[speed_format],
+                    raw_speed_kmh=int(sv * SOURCE_TO_KMH[speed_format]),
                     raw_text=rt))
             else:
-                observations.append(SpeedObservation(fi, -1.0, ""))
+                observations.append(SpeedObservation(fi, -1, ""))
             if _collect_diag:
                 diag.append({
                     "raw_text": rt or "",
@@ -392,7 +392,7 @@ class ProcessingPipeline:
             w = csv.writer(fh)
             for row in rows:
                 w.writerow([f"{row[0]:.2f}", f"{row[1]:.2f}",
-                            f"{row[2]}", str(row[3])])
+                            f"{int(row[2])}", str(row[3])])
 
     def _populate_diag_final(self) -> None:
         """Fill final_value, flag, and correction_note into diagnostics."""
