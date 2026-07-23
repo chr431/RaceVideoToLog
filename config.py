@@ -34,27 +34,27 @@ COLOR_FG_DARK: str = "#e0e0e0"
 COLOR_FG_LIGHT: str = "#333333"
 
 def chart_colors(dark: bool) -> tuple[str, str]:
-	"""返回当前主题的 (background, foreground) 颜色对。"""
-	return (COLOR_BG_DARK, COLOR_FG_DARK) if dark else (COLOR_BG_LIGHT, COLOR_FG_LIGHT)
+    """返回当前主题的 (background, foreground) 颜色对。"""
+    return (COLOR_BG_DARK, COLOR_FG_DARK) if dark else (COLOR_BG_LIGHT, COLOR_FG_LIGHT)
 
 # ═══════════════════ 速度单位转换 ═══════════════════
 SOURCE_TO_KMH: dict[str, float] = {
-	"m/s": MPS_TO_KMH,
-	"km/h": 1.0,
-	"mile/h": 1.609344,
+    "m/s": MPS_TO_KMH,
+    "km/h": 1.0,
+    "mile/h": 1.609344,
 }
 
 # ═══════════════════ GPU 后端公共 API ═══════════════════
 _gpu_backend: str = "CPU"
 
 def get_gpu_backend() -> str:
-	"""返回当前实际使用的 GPU 后端名称（CUDA 或 CPU）。"""
-	return _gpu_backend
+    """返回当前实际使用的 GPU 后端名称（CUDA 或 CPU）。"""
+    return _gpu_backend
 
 def set_gpu_backend(backend: str) -> None:
-	"""由 gpu_setup 调用，设置实际使用的 GPU 后端。"""
-	global _gpu_backend
-	_gpu_backend = backend
+    """由 gpu_setup 调用，设置实际使用的 GPU 后端。"""
+    global _gpu_backend
+    _gpu_backend = backend
 
 # ═══════════════════ LCS 局部一致性评分 ═══════════════════
 LCS_TIME_WINDOW: float = 0.5         # 时间窗 (秒)

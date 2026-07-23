@@ -8,19 +8,19 @@ from collections.abc import Callable
 
 
 class ThemeManager:
-	"""单例式主题回调管理器。"""
-	_callbacks: list[Callable[[bool], None]] = []
+    """单例式主题回调管理器。"""
+    _callbacks: list[Callable[[bool], None]] = []
 
-	@classmethod
-	def register(cls, fn: Callable[[bool], None]) -> None:
-		cls._callbacks.append(fn)
+    @classmethod
+    def register(cls, fn: Callable[[bool], None]) -> None:
+        cls._callbacks.append(fn)
 
-	@classmethod
-	def refresh(cls) -> None:
-		from qfluentwidgets import isDarkTheme
-		dark = isDarkTheme()
-		for fn in cls._callbacks:
-			try:
-				fn(dark)
-			except Exception:
-				pass
+    @classmethod
+    def refresh(cls) -> None:
+        from qfluentwidgets import isDarkTheme
+        dark = isDarkTheme()
+        for fn in cls._callbacks:
+            try:
+                fn(dark)
+            except Exception:
+                pass
