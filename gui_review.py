@@ -171,6 +171,10 @@ class ReviewDialog(QDialog):
         self._shortcut_left.activated.connect(self._on_left_key)
         self._shortcut_right = QShortcut(QKeySequence(Qt.Key.Key_Right), self)
         self._shortcut_right.activated.connect(self._on_right_key)
+        self._shortcut_up = QShortcut(QKeySequence(Qt.Key.Key_Up), self)
+        self._shortcut_up.activated.connect(self._on_up_key)
+        self._shortcut_down = QShortcut(QKeySequence(Qt.Key.Key_Down), self)
+        self._shortcut_down.activated.connect(self._on_down_key)
         self.setFocus()
 
     # ═══════════════ 图表 ═══════════════
@@ -224,7 +228,7 @@ class ReviewDialog(QDialog):
         cur_corr = frozenset(self._corrections.keys())
         self._chart_corrections_fs = cur_corr
 
-        times = [r[0] / self._fps for r in self._rows]
+        times = [r[0] for r in self._rows]  # 帧号
         speeds = [r[2] for r in self._rows]
         # 检测数据是否变化（预览/修正改变 speed 时强制重建）
         prev_data = self._chart_cache.get('data_hash', 0) if hasattr(self, '_chart_cache') else 0
@@ -303,9 +307,11 @@ class ReviewDialog(QDialog):
 
             ax.set_facecolor(bg)
             fig.set_facecolor(bg)
-            ax.set_xlabel("时间 (s)", color=fg)
+            ax.set_xlabel("帧", color=fg)
             ax.set_ylabel("速度 (km/h)", color=fg)
             ax.tick_params(colors=fg, labelsize=8)
+            from matplotlib.ticker import MaxNLocator
+            ax.xaxis.set_major_locator(MaxNLocator(integer=True))
             ax.spines["bottom"].set_color(fg if dark else "#888")
             ax.spines["left"].set_color(fg if dark else "#888")
             ax.spines["top"].set_visible(False)
@@ -413,13 +419,13 @@ class ReviewDialog(QDialog):
     def eventFilter(self, obj, event) -> bool:
         from PySide6.QtCore import QEvent
         if event.type() == QEvent.Type.KeyPress:
-            if event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right):
+            if event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down):
                 self.keyPressEvent(event)
                 return True
         return super().eventFilter(obj, event)
 
     def keyPressEvent(self, event) -> None:
-        if event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right):
+        if event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down):
             return
         super().keyPressEvent(event)
 
