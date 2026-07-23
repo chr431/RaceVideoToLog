@@ -9,8 +9,16 @@
 """
 from __future__ import annotations
 
-import argparse
 import sys
+import io
+
+# ── 强制 UTF-8 输出，解决 Windows 终端中文乱码 ──
+if sys.stdout.encoding != 'utf-8':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+if sys.stderr.encoding != 'utf-8':
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
+import argparse
 
 
 def main() -> None:
