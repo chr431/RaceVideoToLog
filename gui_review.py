@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 	QListWidget, QListWidgetItem, QMessageBox, QSplitter, QLineEdit,
 )
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QShortcut, QKeySequence
 from PySide6.QtGui import QPixmap, QImage, QPalette, QColor
 from qfluentwidgets import (BodyLabel, StrongBodyLabel, CaptionLabel,
 	PrimaryPushButton, PushButton, isDarkTheme)
@@ -83,6 +84,7 @@ class ReviewDialog(QDialog):
 
 		# Header
 		header = QHBoxLayout()
+		header.setAlignment(Qt.AlignmentFlag.AlignCenter)
 		if self._final_check:
 			header.addWidget(StrongBodyLabel("最终检查"))
 			header.addWidget(CaptionLabel("  — 点击散点图中任意帧查看图像并修正，完成后点击「确认保存」"))
@@ -236,6 +238,13 @@ class ReviewDialog(QDialog):
 
 		if self._segments:
 			QTimer.singleShot(200, lambda: self._list.setCurrentRow(0))
+
+		# ── 方向键快捷键：不受子控件焦点影响，始终可用 ──
+		self._shortcut_left = QShortcut(QKeySequence(Qt.Key.Key_Left), self)
+		self._shortcut_left.activated.connect(self._on_left_key)
+		self._shortcut_right = QShortcut(QKeySequence(Qt.Key.Key_Right), self)
+		self._shortcut_right.activated.connect(self._on_right_key)
+		self.setFocus()  # 初始聚焦 dialog，确保首次按键即生效
 
 	def _create_chart(self):
 		"""创建 matplotlib 图表并附加缩放/平移交互。"""
@@ -475,35 +484,50 @@ class ReviewDialog(QDialog):
 				return True  # 事件已处理，不再传递给 spinbox
 		return super().eventFilter(obj, event)
 
-	def keyPressEvent(self, event) -> None:
-		"""← → 键在当前段内逐帧导航。最终检查模式：全范围导航。"""
+	def _on_left_key(self) -> None:
+		"""QShortcut handler：← 键导航（不受焦点影响）。"""
+		if self._final_check:
+			cur = self._current_frame
+			if cur > 0:
+				self._navigate_to(cur - 1)
+		else:
+			row = self._list.currentRow()
+			if row < 0:
+				return
+			seg = self._list.item(row).data(Qt.ItemDataRole.UserRole)
+			cur = self._current_frame
+			if cur > seg['start']:
+				self._navigate_to(cur - 1)
+
+	def _on_right_key(self) -> None:
+		"""QShortcut handler：→ 键导航（不受焦点影响）。"""
 		if self._final_check:
 			n = len(self._rows)
 			cur = self._current_frame
-			if event.key() == Qt.Key.Key_Left and cur > 0:
-				self._navigate_to(cur - 1)
-			elif event.key() == Qt.Key.Key_Right and cur < n - 1:
-				self._navigate_to(cur + 1)
-			else:
-				super().keyPressEvent(event)
-			return
-
-		row = self._list.currentRow()
-		if row < 0:
-			return super().keyPressEvent(event)
-		seg = self._list.item(row).data(Qt.ItemDataRole.UserRole)
-		cur = self._current_frame
-		if event.key() == Qt.Key.Key_Left:
-			if cur > seg['start']:
-				self._navigate_to(cur - 1)
-		elif event.key() == Qt.Key.Key_Right:
-			if cur < seg['end']:
+			if cur < n - 1:
 				self._navigate_to(cur + 1)
 		else:
-			super().keyPressEvent(event)
+			row = self._list.currentRow()
+			if row < 0:
+				return
+			seg = self._list.item(row).data(Qt.ItemDataRole.UserRole)
+			cur = self._current_frame
+			if cur < seg['end']:
+				self._navigate_to(cur + 1)
+
+	def keyPressEvent(self, event) -> None:
+		"""← → 键在当前段内逐帧导航（dialog 直接获得焦点时使用）。"""
+		if event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right):
+			# 已通过 QShortcut 处理，避免重复触发
+			return
+		super().keyPressEvent(event)
 
 	def _on_pick(self, event) -> None:
-		"""matplotlib pick_event：点击数据点 → 导航到该帧。"""
+		"""matplotlib pick_event：左键点击数据点 → 导航到该帧。"""
+		# 仅响应左键点击，忽略滚轮中键等
+		mouse_btn = getattr(getattr(event, 'mouseevent', None), 'button', None)
+		if mouse_btn is not None and mouse_btn != 1:
+			return
 		ind = event.ind
 		if ind is None or len(ind) == 0:
 			return
