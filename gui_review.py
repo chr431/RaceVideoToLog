@@ -257,27 +257,30 @@ class ReviewDialog(QDialog):
                     ax.axvspan(times[s], times[min(e, len(times) - 1)],
                                 facecolor=COLOR_ORANGE, alpha=0.08, zorder=0)
 
-            # 单 scatter + 颜色数组：pick 事件 ind 直接对应 rows 索引
-            colors = []
-            sizes = []
-            pick_idx = []
+            # 拆成两个 scatter（各统一大小），避免每点不同大小导致的
+            # PathCollection 性能问题（统一大小可复用单一字形，6000 点缩放流畅）
+            gray_c = COLOR_LIGHT_GRAY if not dark else COLOR_LIGHTER_GRAY
+            gx, gy, gi = [], [], []
+            ox, oy, oi = [], [], []
             for i in range(len(times)):
                 if i in self._corrections:
-                    continue  # 用户手动修正帧不参与散点（由蓝点叠加）
-                pick_idx.append(i)
+                    continue
                 if i in low_set:
-                    colors.append(COLOR_ORANGE)
-                    sizes.append(9)
+                    ox.append(times[i]); oy.append(speeds[i]); oi.append(i)
                 else:
-                    colors.append(COLOR_LIGHT_GRAY if not dark else COLOR_LIGHTER_GRAY)
-                    sizes.append(4)
-            self._chart_pick_idx = pick_idx
-            if colors:
-                self._chart_artists['bg_scatter'] = ax.scatter(
-                    [times[i] for i in pick_idx],
-                    [speeds[i] for i in pick_idx],
-                    c=colors, s=sizes, alpha=0.7, zorder=1,
-                    rasterized=True, picker=True, pickradius=8)
+                    gx.append(times[i]); gy.append(speeds[i]); gi.append(i)
+            if gx:
+                self._chart_artists['bg_gray'] = ax.scatter(
+                    gx, gy, c=gray_c, s=4, alpha=0.4, zorder=1,
+                    rasterized=True, edgecolors='none',
+                    picker=True, pickradius=8)
+                self._chart_pick_gray = gi
+            if ox:
+                self._chart_artists['bg_orange'] = ax.scatter(
+                    ox, oy, c=COLOR_ORANGE, s=9, alpha=0.7, zorder=2,
+                    rasterized=True, edgecolors='none',
+                    picker=True, pickradius=8)
+                self._chart_pick_orange = oi
 
             # 当前帧红点（小号实心+白边）
             cur_fi = self._current_frame
@@ -456,12 +459,15 @@ class ReviewDialog(QDialog):
         ind = event.ind
         if ind is None or len(ind) == 0:
             return
-        # scatter 返回的数据索引需映射回 rows 索引
-        idx_map = getattr(self, '_chart_pick_idx', None)
+        # 根据 scatter 来源映射回 rows 索引
+        artist = event.artist
+        idx_map = None
+        if artist is self._chart_artists.get('bg_gray'):
+            idx_map = getattr(self, '_chart_pick_gray', None)
+        elif artist is self._chart_artists.get('bg_orange'):
+            idx_map = getattr(self, '_chart_pick_orange', None)
         if idx_map is not None and ind[0] < len(idx_map):
             self._navigate_to(idx_map[ind[0]])
-        else:
-            self._navigate_to(ind[0])
 
     @staticmethod
     def _speed_label(val: float) -> str:
