@@ -61,7 +61,7 @@ LCS_TIME_WINDOW: float = 0.5         # 时间窗 (秒)
 LCS_TAU: float = 0.06                 # 指数衰减常数 exp(-dt/tau)
 LCS_HIGH_WEIGHT: float = 3.0         # pinned 帧权重倍率
 LCS_ERROR_LOW: float = 0.3           # detect: < this = error
-LCS_TRUST_HIGH: float = 0.7          # error/borderline 分界 & HIGH_TRUST 标记阈值
+LCS_TRUST_HIGH: float = 0.75         # error/borderline 分界 & HIGH_TRUST 标记阈值
 LCS_WARNING_THRESHOLD: float = 0.5   # 人工修正加速度警告阈值
 LCS_CONFIDENCE_MIN_SCORE: float = 30.0  # find_problem_segments 默认 min_score
 LCS_INTERP_WEIGHT: float = 0.25        # 插值接近度权重 (加性)
