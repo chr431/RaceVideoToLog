@@ -209,7 +209,7 @@ class ReviewDialog(QDialog):
             fig = self._figure
 
         user_zoomed = (hasattr(self, '_user_zoomed_ref')
-					   and self._user_zoomed_ref[0])
+                       and self._user_zoomed_ref[0])
         if user_zoomed:
             saved_xlim = self._saved_limits["xlim"]
             saved_ylim = self._saved_limits["ylim"]
@@ -223,60 +223,72 @@ class ReviewDialog(QDialog):
         speeds = [r[2] for r in self._rows]
         self._chart_cache = {'times': times, 'speeds': speeds}
 
-        low_regions = self._low_confidence_regions()
+        # 低置信度区间（一次计算，复用）
+        low_set = set()
+        for s, e in self._low_confidence_regions():
+            low_set.update(range(s, e + 1))
 
         if needs_rebuild:
             ax.clear()
             self._chart_params = {'dark': dark, 'bg': bg, 'fg': fg}
             self._chart_artists = {}
 
-            self._chart_artists['low_spans'] = []
-            for s, e in low_regions:
-                span = ax.axvspan(times[s], times[min(e, len(times) - 1)],
-				                  facecolor=COLOR_ORANGE, alpha=0.08, zorder=0)
-                self._chart_artists['low_spans'].append(span)
+            # 低置信度背景 span
+            done = set()
+            for s, e in self._low_confidence_regions():
+                key = (s, e)
+                if key not in done:
+                    done.add(key)
+                    ax.axvspan(times[s], times[min(e, len(times) - 1)],
+                               facecolor=COLOR_ORANGE, alpha=0.08, zorder=0)
 
-            low_indices = set()
-            for s, e in low_regions:
-                low_indices.update(range(s, e + 1))
-
-            gx, gy = [], []
-            ox, oy = [], []
+            # 单 scatter + 颜色数组：pick 事件 ind 直接对应 rows 索引
+            colors = []
+            sizes = []
+            pick_idx = []
             for i in range(len(times)):
                 if i in self._corrections:
-                    continue
-                if i in low_indices:
-                    ox.append(times[i]); oy.append(speeds[i])
+                    continue  # 已修正帧不参与散点（由蓝点叠加）
+                pick_idx.append(i)
+                if i in low_set:
+                    colors.append(COLOR_ORANGE)
+                    sizes.append(9)
                 else:
-                    gx.append(times[i]); gy.append(speeds[i])
+                    colors.append(COLOR_LIGHT_GRAY if not dark else COLOR_LIGHTER_GRAY)
+                    sizes.append(4)
+            self._chart_pick_idx = pick_idx
+            if colors:
+                self._chart_artists['bg_scatter'] = ax.scatter(
+                    [times[i] for i in pick_idx],
+                    [speeds[i] for i in pick_idx],
+                    c=colors, s=sizes, alpha=0.7, zorder=1,
+                    rasterized=True, picker=True, pickradius=5)
 
-            gray_c = COLOR_LIGHT_GRAY if not dark else COLOR_LIGHTER_GRAY
-            if gx:
-                self._chart_artists['bg_gray'] = ax.plot(
-                    gx, gy, ".", color=gray_c, markersize=2, alpha=0.4,
-                    zorder=1, rasterized=True, picker=True, pickradius=5)[0]
-            if ox:
-                self._chart_artists['bg_orange'] = ax.plot(
-                    ox, oy, ".", color=COLOR_ORANGE, markersize=3, alpha=0.7,
-                    zorder=2, rasterized=True, picker=True, pickradius=5)[0]
-
+            # 当前帧红点（小号实心+白边）
             cur_fi = self._current_frame
-            if 0 <= cur_fi < len(times):
+            if 0 <= cur_fi < len(times) and cur_fi not in self._corrections:
                 cur_v = self._rows[cur_fi][2]
                 if cur_v >= 0:
                     self._chart_artists['cur_highlight'] = ax.scatter(
-                        [times[cur_fi]], [cur_v], c=COLOR_RED, s=40,
-                        zorder=6, edgecolors='white', linewidths=1.0,
-                        marker='o', facecolors='none')
+                        [times[cur_fi]], [cur_v], c=COLOR_RED, s=12,
+                        zorder=6, edgecolors='white', linewidths=0.5)
                 else:
                     self._chart_artists['cur_highlight'] = None
             else:
                 self._chart_artists['cur_highlight'] = None
 
+            # 已修正帧蓝点（小号实心+白边）
             cx, cy = self._get_correction_xy(times)
             self._chart_artists['corrections'] = ax.scatter(
-                cx, cy, c=COLOR_BLUE, s=16, zorder=5, marker='o',
+                cx, cy, c=COLOR_BLUE, s=12, zorder=5, marker='o',
                 edgecolors='white', linewidths=0.5) if cx else None
+            # 当前帧已修正时，红点覆盖在蓝点上
+            if 0 <= cur_fi < len(times) and cur_fi in self._corrections:
+                cur_v = self._corrections[cur_fi]
+                if cur_v >= 0:
+                    self._chart_artists['cur_highlight'] = ax.scatter(
+                        [times[cur_fi]], [cur_v], c=COLOR_RED, s=12,
+                        zorder=6, edgecolors='white', linewidths=0.5)
 
             ax.set_facecolor(bg)
             fig.set_facecolor(bg)
@@ -290,28 +302,27 @@ class ReviewDialog(QDialog):
             ax.grid(True, alpha=0.15 if dark else 0.25)
             ax.autoscale_view()
         else:
+            # 增量更新：修正帧蓝点
             cx, cy = self._get_correction_xy(times)
             corr_artist = self._chart_artists.get('corrections')
             if cx:
                 if corr_artist is None:
                     self._chart_artists['corrections'] = ax.scatter(
-                        cx, cy, c=COLOR_BLUE, s=16, zorder=5, marker='o',
+                        cx, cy, c=COLOR_BLUE, s=12, zorder=5, marker='o',
                         edgecolors='white', linewidths=0.5)
                 else:
                     corr_artist.set_offsets(np.column_stack([cx, cy]) if cx
-					                        else np.empty((0, 2)))
+                                            else np.empty((0, 2)))
             elif corr_artist is not None:
                 corr_artist.set_offsets(np.empty((0, 2)))
 
+            # 更新当前帧红点
             cur_hl = self._chart_artists.get('cur_highlight')
             cur_fi = self._current_frame
             if cur_hl is not None:
-                if 0 <= cur_fi < len(times):
-                    cur_v = self._rows[cur_fi][2]
-                    if cur_v >= 0:
-                        cur_hl.set_offsets([[times[cur_fi], cur_v]])
-                    else:
-                        cur_hl.set_offsets(np.empty((0, 2)))
+                target = self._corrections.get(cur_fi, self._rows[cur_fi][2])
+                if 0 <= cur_fi < len(times) and target >= 0:
+                    cur_hl.set_offsets([[times[cur_fi], target]])
                 else:
                     cur_hl.set_offsets(np.empty((0, 2)))
 
@@ -388,7 +399,12 @@ class ReviewDialog(QDialog):
         ind = event.ind
         if ind is None or len(ind) == 0:
             return
-        self._navigate_to(ind[0])
+        # scatter 返回的数据索引需映射回 rows 索引
+        idx_map = getattr(self, '_chart_pick_idx', None)
+        if idx_map is not None and ind[0] < len(idx_map):
+            self._navigate_to(idx_map[ind[0]])
+        else:
+            self._navigate_to(ind[0])
 
     @staticmethod
     def _speed_label(val: float) -> str:
