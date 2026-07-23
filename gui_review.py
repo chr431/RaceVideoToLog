@@ -434,6 +434,16 @@ class ReviewDialog(QDialog):
         if cur > 0:
             self._navigate_to(cur - 1)
 
+    def _on_up_key(self) -> None:
+        v = int(self._speed_edit.value()) + 1
+        if v <= int(self._max_speed):
+            self._speed_edit.setValue(v)
+
+    def _on_down_key(self) -> None:
+        v = int(self._speed_edit.value()) - 1
+        if v >= 0:
+            self._speed_edit.setValue(v)
+
     def _on_right_key(self) -> None:
         cur = self._current_frame
         if cur < len(self._rows) - 1:
