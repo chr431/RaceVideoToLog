@@ -1,4 +1,4 @@
-"""统一处理流水线 — GUI 和 CLI 共用。
+﻿"""统一处理流水线 — GUI 和 CLI 共用。
 运行在调用者线程中（GUI 应在原生 threading.Thread 中调用以避免 QThread 性能损失）。
 """
 from __future__ import annotations
@@ -36,7 +36,7 @@ def _preprocess_standard(crop: np.ndarray, target_h: int, pad: int) -> np.ndarra
         resized = crop
     if pad > 0:
         resized = cv2.copyMakeBorder(resized, pad, pad, pad, pad,
-									 cv2.BORDER_REPLICATE)
+                                        cv2.BORDER_REPLICATE)
     return resized
 
 
@@ -51,15 +51,15 @@ class ProcessingPipeline:
     """
 
     def __init__(self, video_path: str | Path, roi: tuple[int, int, int, int],
-				 max_speed: float, max_accel: float,
-				 frame_div: int, target_h: int, pad: int, buffer_size: int,
-				 backend: str, ocr_model: str, speed_format: str,
-				 frame_start: str = "", frame_end: str = "",
-				 progress_cb: ProgressFn | None = None,
-				 reocr_model: str | None = None,
-				 cancel_check: "Callable[[], None] | None" = None,
-				 log_level: str = "normal",
-			 final_check: bool = False):
+                    max_speed: float, max_accel: float,
+                    frame_div: int, target_h: int, pad: int, buffer_size: int,
+                    backend: str, ocr_model: str, speed_format: str,
+                    frame_start: str = "", frame_end: str = "",
+                    progress_cb: ProgressFn | None = None,
+                    reocr_model: str | None = None,
+                    cancel_check: "Callable[[], None] | None" = None,
+                    log_level: str = "normal",
+                final_check: bool = False):
         if target_h < 8:
             raise ValueError(f"target_h 必须 >= 8，当前为 {target_h}")
         if pad < 0:
@@ -96,7 +96,7 @@ class ProcessingPipeline:
         # ── 重 OCR 缓存（绑定到 Pipeline 实例生命周期）──
         self._reocr_cache: dict[int, set[float]] = {}
         self._fps: float = 0.0  # 视频帧率，用于帧号→高精度时间
-    
+
     # ═══════════════ 公开接口 ═══════════════
 
     def run_auto(self, output_path: str | Path) -> None:
@@ -121,8 +121,8 @@ class ProcessingPipeline:
             self._run_correction(Path(output_path), skip_fill=False)
         self._timing["total"] = _time.perf_counter() - t_total
         logger.info("流水线完成: 总计 %.1fs (%s)",
-					 self._timing["total"],
-					 ", ".join(f"{k}={v:.1f}s" for k, v in self._timing.items()))
+                        self._timing["total"],
+                        ", ".join(f"{k}={v:.1f}s" for k, v in self._timing.items()))
         self._emit("完成", 100.0)
 
     def run_review_pass1(self, output_path: str | Path | None = None) -> tuple | None:
@@ -161,7 +161,7 @@ class ProcessingPipeline:
 
         self._emit("计算置信度...", 95.0)
         confidences = compute_confidence(self._rows, self._observations,
-										 self._max_speed, self._max_accel)
+                                            self._max_speed, self._max_accel)
         self._confidences = confidences
         segments = find_problem_segments(confidences, min_segment_len=1)
 
@@ -180,9 +180,9 @@ class ProcessingPipeline:
             return None
 
     def run_review_pass2(self, corrections: dict[int, float],
-						 confirmed_segments: set[int],
-						 output_path: str | Path,
-						 partial_corrections: dict[int, str] | None = None) -> None:
+                            confirmed_segments: set[int],
+                            output_path: str | Path,
+                            partial_corrections: dict[int, str] | None = None) -> None:
         """人工辅助第 2 轮：合并手动修正 → 再纠错 → 写 CSV。
 
         修正值在 _correct 内部 rows 重建后才应用，避免被覆盖。
@@ -197,9 +197,9 @@ class ProcessingPipeline:
                     break
 
         self._correct(91.0, 7.0, skip_fill=False,
-					  corrections=corrections,
-					  partial_corrections=partial_corrections,
-					  confirmed=confirmed_segments)
+                        corrections=corrections,
+                        partial_corrections=partial_corrections,
+                        confirmed=confirmed_segments)
 
         self._integrate_distance()
         self._write_csv(self._rows, Path(output_path))
@@ -244,10 +244,10 @@ class ProcessingPipeline:
         return self._ocr
 
     def _correct(self, progress_base: float, progress_span: float,
-				 skip_fill: bool,
-				 partial_corrections: dict[int, str] | None = None,
-				 corrections: dict[int, float] | None = None,
-				 confirmed: set[int] | None = None) -> None:
+                    skip_fill: bool,
+                    partial_corrections: dict[int, str] | None = None,
+                    corrections: dict[int, float] | None = None,
+                    confirmed: set[int] | None = None) -> None:
         """共享纠错逻辑：构建 rows → 应用修正 → LCS 评分 → correct_with_trust。
 
         先重建全部 RAW rows，再覆盖用户修正（PINNED）和确认段（CONFIRMED_SEG），
@@ -440,7 +440,7 @@ class ProcessingPipeline:
         self._diag_notes: dict[int, str] = {}
         self._timing["ocr"] = _time.perf_counter() - t_start
         logger.info("OCR 完成: %d 帧, 耗时 %.1fs",
-					 len(observations), self._timing["ocr"])
+                        len(observations), self._timing["ocr"])
 
     def _integrate_distance(self) -> None:
         fps = self._fps if self._fps > 0 else 1.0
@@ -468,24 +468,24 @@ class ProcessingPipeline:
             fh.write("# RaceVideoToLog v2.5.0\n")
             fh.write(f"# video_hash={vhash}, video={self._video_path.name}\n")
             fh.write(f"# roi={r[0]},{r[1]},{r[2]},{r[3]}, format={self._speed_format}"
-					 f", frame_start={self._frame_start or ''}"
-					 f", frame_end={self._frame_end or ''}\n")
+                        f", frame_start={self._frame_start or ''}"
+                        f", frame_end={self._frame_end or ''}\n")
             fh.write(f"# max_speed={self._max_speed}, max_accel={self._max_accel}"
-					 f", div={self._frame_div}, target_h={self._target_h}"
-					 f", pad={self._pad}, buffer={self._buffer_size}\n")
+                        f", div={self._frame_div}, target_h={self._target_h}"
+                        f", pad={self._pad}, buffer={self._buffer_size}\n")
             fh.write(f"# backend={self._backend_actual}, model={self._ocr_model}")
             reocr_info = f", reocr_model={self._reocr_model}" if self._reocr_model and self._reocr_model != self._ocr_model else ""
             fh.write(f"{reocr_info}\n")
             if n_pinned > 0:
                 fh.write(f"# pinned={n_pinned}\n")
             fh.write(f"# stats: total={n_total}, trusted={n_trusted},"
-					 f" corrected={n_corrected}\n")
+                        f" corrected={n_corrected}\n")
             if timing_str:
                 fh.write(f"# timing: {timing_str}\n")
             w = csv.writer(fh)
             for row in rows:
                 w.writerow([f"{row[0]:.2f}", f"{row[1]:.2f}",
-				           f"{row[2]:.2f}", str(row[3])])
+                            f"{row[2]:.2f}", str(row[3])])
 
     def _populate_diag_final(self) -> None:
         """Fill final_value, flag, and correction_note into diagnostics."""
@@ -509,7 +509,7 @@ class ProcessingPipeline:
         diag_path = diag_path.with_name(diag_path.name + "_diagnostics.csv")
         with diag_path.open("w", newline="", encoding="utf-8-sig") as fh:
             fields = ["frame", "raw_text", "raw_value", "confidence",
-			          "ocr_time_ms", "final_value", "flag", "correction_note"]
+                        "ocr_time_ms", "final_value", "flag", "correction_note"]
             w = csv.DictWriter(fh, fieldnames=fields, extrasaction="ignore")
             w.writeheader()
             for i, d in enumerate(self._diag):

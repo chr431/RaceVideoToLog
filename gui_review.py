@@ -1,4 +1,4 @@
-"""最终检查对话框 — 全帧速度曲线 + 置信度着色 + 逐帧修正。"""
+﻿"""最终检查对话框 — 全帧速度曲线 + 置信度着色 + 逐帧修正。"""
 from __future__ import annotations
 
 import config
@@ -26,10 +26,10 @@ class ReviewDialog(QDialog):
     """最终检查对话框 — 全帧速度曲线 + 图像预览 + 逐帧修正。"""
 
     def __init__(self, parent: QWidget, rows: list, observations: list,
-				 raw_frames: list, confidences: list[dict],
-				 max_speed: float,
-				 max_accel: float = config.DEFAULT_MAX_ACCEL,
-					 fps: float = 1.0) -> None:
+                    raw_frames: list, confidences: list[dict],
+                    max_speed: float,
+                    max_accel: float = config.DEFAULT_MAX_ACCEL,
+                        fps: float = 1.0) -> None:
         super().__init__(parent)
         self.setWindowTitle("最终检查 — 点击图中任意点修正单帧")
         self.resize(1200, 750)
@@ -209,7 +209,7 @@ class ReviewDialog(QDialog):
             fig = self._figure
 
         user_zoomed = (hasattr(self, '_user_zoomed_ref')
-                       and self._user_zoomed_ref[0])
+                        and self._user_zoomed_ref[0])
         if user_zoomed:
             saved_xlim = self._saved_limits["xlim"]
             saved_ylim = self._saved_limits["ylim"]
@@ -240,7 +240,7 @@ class ReviewDialog(QDialog):
                 if key not in done:
                     done.add(key)
                     ax.axvspan(times[s], times[min(e, len(times) - 1)],
-                               facecolor=COLOR_ORANGE, alpha=0.08, zorder=0)
+                                facecolor=COLOR_ORANGE, alpha=0.08, zorder=0)
 
             # 单 scatter + 颜色数组：pick 事件 ind 直接对应 rows 索引
             colors = []
@@ -346,7 +346,7 @@ class ReviewDialog(QDialog):
         return regions
 
     def _get_correction_xy(self, times: list[float]
-	                        ) -> tuple[list[float], list[float]]:
+                            ) -> tuple[list[float], list[float]]:
         cx = [times[fi] for fi in self._corrections if fi < len(times)]
         cy = [self._corrections[fi] for fi in self._corrections if fi < len(times)]
         return cx, cy
@@ -363,8 +363,8 @@ class ReviewDialog(QDialog):
                 pm = QPixmap.fromImage(qimg)
                 lw = max(50, self._img_label.width() - 8); lh = max(50, self._img_label.height() - 8)
                 scaled = pm.scaled(lw, lh,
-								   Qt.AspectRatioMode.KeepAspectRatio,
-								   Qt.TransformationMode.SmoothTransformation)
+                                    Qt.AspectRatioMode.KeepAspectRatio,
+                                    Qt.TransformationMode.SmoothTransformation)
                 self._img_label.setPixmap(scaled)
                 return
         self._img_label.setText("(无图像)")
@@ -455,12 +455,12 @@ class ReviewDialog(QDialog):
         from ocr_engine import _lcs_score_for_value
         times = [r[0] / self._fps for r in self._rows]
         score = _lcs_score_for_value(fi, v, self._rows, times,
-		                              self._max_speed, self._max_accel)
+                                        self._max_speed, self._max_accel)
         if score < LCS_WARNING_THRESHOLD:
             msg = (f"帧 #{fi} 输入值 {v:.0f} km/h 与周围邻居物理不一致\n\n"
-			       f"LCS 一致性分数: {score:.2f} / 1.00\n"
-			       f"该值在 {self._max_accel:.0f} m/s² 约束下与邻近帧矛盾。\n\n"
-			       f"确定要使用此值吗？")
+                    f"LCS 一致性分数: {score:.2f} / 1.00\n"
+                    f"该值在 {self._max_accel:.0f} m/s² 约束下与邻近帧矛盾。\n\n"
+                    f"确定要使用此值吗？")
             return False, msg
         return True, ""
 

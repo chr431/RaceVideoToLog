@@ -1,4 +1,4 @@
-"""GPU 加速配置 — 后端选择 + DLL 搜索路径注册。
+﻿"""GPU 加速配置 — 后端选择 + DLL 搜索路径注册。
 
 从 PATH 扫描 CUDA / TensorRT 目录，注册到 Windows DLL 搜索路径，
 并提供自动后端选择（TensorRT → CPU 回退链）。
@@ -106,8 +106,8 @@ def _register_gpu_dlls() -> None:
             import winreg as _wr
             _reg_paths: list[str] = []
             for _hive, _subkey in [(_wr.HKEY_CURRENT_USER, "Environment"),
-			                        (_wr.HKEY_LOCAL_MACHINE,
-			                         r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment")]:
+                                    (_wr.HKEY_LOCAL_MACHINE,
+                                        r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment")]:
                 try:
                     _k = _wr.OpenKey(_hive, _subkey, 0, _wr.KEY_READ)
                     _val, _ = _wr.QueryValueEx(_k, "Path")
@@ -118,7 +118,7 @@ def _register_gpu_dlls() -> None:
             # 追加注册表中独有的条目（去重）
             _env_set = {_os.path.normpath(p) for p in _path_raw.split(_os.pathsep) if p.strip()}
             _reg_extra = [p for p in _reg_paths
-			              if p.strip() and _os.path.normpath(p) not in _env_set]
+                            if p.strip() and _os.path.normpath(p) not in _env_set]
             if _reg_extra:
                 _path_raw += _os.pathsep + _os.pathsep.join(_reg_extra)
                 logger.info("PATH 补充注册表条目: %d 个", len(_reg_extra))
@@ -162,7 +162,7 @@ def _register_gpu_dlls() -> None:
     _registered = 0
     _path_new: list[str] = []
     for _label, _dirs in [("CUDA", _found_cuda), ("cuDNN", _found_cudnn),
-	                       ("TensorRT", _found_trt), ("DLL", _other_dirs)]:
+                            ("TensorRT", _found_trt), ("DLL", _other_dirs)]:
         if _dirs:
             logger.info("%s: %s", _label, ", ".join(_dirs[:3]))
         for _d in _dirs:

@@ -1,11 +1,11 @@
-"""RaceVideoToLog — 赛车视频速度 OCR 提取工具。
+﻿"""RaceVideoToLog — 赛车视频速度 OCR 提取工具。
 
 从车载视频中实时 OCR 识别速度数字，支持 GPU (TensorRT) / CPU 两种后端，
 输出时间-速度-距离 CSV 文件。
 
 用法:
-  python RaceVideoToLog.py                          # GUI 模式
-  python RaceVideoToLog.py video.mp4 --roi X1 Y1 X2 Y2  # CLI 模式
+    python RaceVideoToLog.py                          # GUI 模式
+    python RaceVideoToLog.py video.mp4 --roi X1 Y1 X2 Y2  # CLI 模式
 """
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ def main() -> None:
         # 仅填充用户未显式指定的参数
         # argparse defaults (action.default) vs user-specified
         _defaults = {a.dest: a.default
-		             for a in parser._actions if a.dest != "help"}
+                        for a in parser._actions if a.dest != "help"}
         for key, val in csv_settings.items():
             # Map CSV keys to argparse dest names
             _dest = {
@@ -72,7 +72,7 @@ def main() -> None:
                     except ValueError:
                         pass
                 elif _dest in ("frame_start", "frame_end", "div", "target_h",
-				               "pad", "buffer"):
+                                "pad", "buffer"):
                     try:
                         setattr(args, _dest, int(val))
                     except ValueError:

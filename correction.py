@@ -1,4 +1,4 @@
-"""Correction — 物理约束纠错流水线。
+﻿"""Correction — 物理约束纠错流水线。
 
 5 阶段流水线：LCS 错误检测 → 重OCR → LCS 最优选择 → 多轮迭代 → 级联填充。
 支持 GUI 和无头 CLI 共用同一实现。
@@ -111,25 +111,25 @@ def _auto_expand_digits(raw_text: str, max_speed_kmh: float) -> list[float]:
 
 
 def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR",
-						 max_speed_kmh: float, max_accel_mps2: float,
-						 log_fn: "Callable | None" = None,
-						 progress_fn: "Callable | None" = None,
-						 skip_fill: bool = False,
-						 timing: dict | None = None,
-						 partial_corrections: dict[int, str] | None = None,
-						 reocr_cache: dict | None = None,
-						 light_mode: bool = False,
-						 notes: dict[int, str] | None = None, pinned: set[int] | None = None,
-							 fps: float = 1.0) -> list:
+                            max_speed_kmh: float, max_accel_mps2: float,
+                            log_fn: "Callable | None" = None,
+                            progress_fn: "Callable | None" = None,
+                            skip_fill: bool = False,
+                            timing: dict | None = None,
+                            partial_corrections: dict[int, str] | None = None,
+                            reocr_cache: dict | None = None,
+                            light_mode: bool = False,
+                            notes: dict[int, str] | None = None, pinned: set[int] | None = None,
+                                fps: float = 1.0) -> list:
     """5 阶段物理约束纠错流水线。
 
     以 pinned 帧（用户手动修正）为硬约束（固定不变），
     LCS 自动检测的可信帧辅助约束，对其余帧进行错误检测、重OCR、最优选择和级联填充。
 
     Args:
-	    reocr_cache: 可选的重 OCR 缓存字典，绑定到 Pipeline 实例生命周期。
-	    light_mode: 轻量模式 — 仅重OCR + 原始值之间选择，不生成混淆/推断/插值候选，
-	                不迭代，不级联填充。用于 pass1 人工审核前预处理。
+        reocr_cache: 可选的重 OCR 缓存字典，绑定到 Pipeline 实例生命周期。
+        light_mode: 轻量模式 — 仅重OCR + 原始值之间选择，不生成混淆/推断/插值候选，
+                    不迭代，不级联填充。用于 pass1 人工审核前预处理。
     Returns: 修改后的 rows（原地修改）
     """
     pinned = pinned or set()
@@ -138,7 +138,7 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
         if rows[pi][3] < Flag.HIGH_TRUST:
             rows[pi][3] = Flag.PINNED
     pinned_set = pinned  # user-verified frames treated as ground truth
-    
+
     times = [r[0] / fps for r in rows]
     cache: dict = reocr_cache if reocr_cache is not None else {}
 
@@ -199,10 +199,10 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
 
     # ── 阶段 2+3：重 OCR + 最优选择（首轮）──
     fixed = _fix_errors(rows, observations, raw_frames, ocr, error_set,
-	                    pinned_set, times, max_speed_kmh, max_accel_mps2,
-	                    progress_fn=progress_fn, timing=timing,
-	                    partial_corrections=partial_corrections, reocr_cache=cache,
-	                    light_mode=light_mode, notes=notes, fps=fps)
+                        pinned_set, times, max_speed_kmh, max_accel_mps2,
+                        progress_fn=progress_fn, timing=timing,
+                        partial_corrections=partial_corrections, reocr_cache=cache,
+                        light_mode=light_mode, notes=notes, fps=fps)
     if log_fn:
         log_fn(f"  Stage 2+3: fixed {fixed} frames in round 1")
 
@@ -222,10 +222,10 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
         if not error_set:
             break
         fixed = _fix_errors(rows, observations, raw_frames, ocr, error_set,
-		                    pinned_set, times, max_speed_kmh, max_accel_mps2,
-		                    progress_fn=progress_fn, timing=timing,
-		                    partial_corrections=partial_corrections, reocr_cache=cache,
-		                    notes=notes, fps=fps)
+                            pinned_set, times, max_speed_kmh, max_accel_mps2,
+                            progress_fn=progress_fn, timing=timing,
+                            partial_corrections=partial_corrections, reocr_cache=cache,
+                            notes=notes, fps=fps)
         if log_fn:
             log_fn(f"  Stage 4 round {rnd}: {len(error_set)} errors, fixed {fixed}")
 
@@ -244,7 +244,7 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
             if not error_set:
                 break
             _fill_unrecoverable(rows, pinned_set, error_set, times, max_speed_kmh, max_accel_mps2, fps,
-			                    progress_fn=progress_fn, notes=notes)
+                                progress_fn=progress_fn, notes=notes)
             if log_fn:
                 log_fn(f"  Stage 5 pass {fill_pass+1}: filled {len(error_set)} unrecoverable frames")
             fill_pass += 1
@@ -265,8 +265,8 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
 # ── LCS 错误检测 ──
 
 def _detect_errors(rows: list, pinned_set: set, times: list,
-                   max_speed_kmh: float, max_accel_mps2: float,
-                   fps: float = 1.0) -> tuple[set[int], list[float], list[float]]:
+                    max_speed_kmh: float, max_accel_mps2: float,
+                    fps: float = 1.0) -> tuple[set[int], list[float], list[float]]:
     """阶段 1：LCS 左右分侧错误检测。
 
     Returns: (error_set, left_scores, right_scores)
@@ -312,14 +312,14 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
         return d
     # 跳过已标记为高信/固定的帧（阻止级联错误传播）
     error_list = sorted((i for i in error_set if i not in pinned_set and not Flag.is_trusted(rows[i][3])),
-	                    key=_dist_to_trusted)
+                        key=_dist_to_trusted)
     total = len(error_list)
     for i in error_list:
         has_partial = partial_corrections and i in partial_corrections
         interp_cand = _interp_candidate(i, rows, pinned_set, times, max_speed_kmh, fps=fps)
         oid = min(i, len(observations) - 1)
         reocr_set = _re_ocr_frame(raw_frames[i][1], ocr, max_speed_kmh,
-		                          timing=timing, cache=reocr_cache)
+                                    timing=timing, cache=reocr_cache)
 
         # ── 收集候选值 ──
         if has_partial:
@@ -365,8 +365,8 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
             best_val = None; best_score = -1.0; best_tag = ""
             for val, tag in options:
                 score = _lcs_score_for_value(i, val, rows, times,
-				                              max_speed_kmh, max_accel_mps2,
-				                              high_weight=pinned_set)
+                                                max_speed_kmh, max_accel_mps2,
+                                                high_weight=pinned_set)
                 # 参考值接近度加成
                 if ref_value is not None and ref_value > 0:
                     ref_prox = max(0.0, 1.0 - abs(val - ref_value) / max(INTERP_PROX_ABS, ref_value * INTERP_PROX_PCT))
@@ -396,15 +396,15 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
 
 
 def _re_ocr_frame(crop_bgr: "np.ndarray", ocr: "RapidOCR", max_speed_kmh: float,
-				  timing: dict | None = None, cache: dict | None = None) -> set:
+                    timing: dict | None = None, cache: dict | None = None) -> set:
     """阶段 2：对单帧尝试多种预处理高度的重 OCR，有缓存。
 
     尝试 3 种高度（24, 32, 48），取所有不同结果的并集。
     不同高度下 OCR 模型可能产生不同读数，提高候选覆盖率。
 
     Args:
-	    cache: 可选的外部缓存字典（图像哈希 → 候选值集合）。
-	           绑定到 Pipeline 实例生命周期以避免内存泄漏。
+        cache: 可选的外部缓存字典（图像哈希 → 候选值集合）。
+                绑定到 Pipeline 实例生命周期以避免内存泄漏。
     """
     cache = cache if cache is not None else {}
     if crop_bgr is not None and crop_bgr.size > 0:
@@ -510,8 +510,8 @@ def _fill_unrecoverable(rows: list, pinned_set: set, error_set: set, times: list
 # ═══════════════════════════════════════════════════════════════
 
 def compute_confidence(rows: list, observations: list, max_speed: float,
-					   max_accel: float, pinned: set[int] | None = None,
-					   fps: float = 1.0) -> list[dict]:
+                        max_accel: float, pinned: set[int] | None = None,
+                        fps: float = 1.0) -> list[dict]:
     """LCS 置信度评分 (0-100)。
 
     用 compute_lcs_scores_lr 的左右分侧 LCS 分数，取均值，
@@ -557,7 +557,7 @@ def compute_confidence(rows: list, observations: list, max_speed: float,
 
 
 def find_problem_segments(confidences: list[dict], min_score: float = LCS_CONFIDENCE_MIN_SCORE,
-						  min_segment_len: int = PROBLEM_MIN_SEGMENT_LEN) -> list[dict]:
+                            min_segment_len: int = PROBLEM_MIN_SEGMENT_LEN) -> list[dict]:
     """将低置信度连续帧聚合成问题段。
 
     min_score 默认 30（对应 LCS 0.3，即 correction 阶段的 error 阈值）。

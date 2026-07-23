@@ -1,13 +1,13 @@
-"""Unified padding benchmark — external (replicate) vs internal (rapidocr).
+﻿"""Unified padding benchmark — external (replicate) vs internal (rapidocr).
 
 Compares:
-  - External pad values: 0, 2, 4, 8, 16
-  - use_preprocess_img: True (default) vs False
-  - use_vertical_padding: True (default) vs False
+    - External pad values: 0, 2, 4, 8, 16
+    - use_preprocess_img: True (default) vs False
+    - use_vertical_padding: True (default) vs False
 
 Test parameters:
-  test4.mp4, roi=862,945,957,1003, frame_start=114, frame_end=6317, div=1
-  target_h=48, backend=tensorrt, model=v6_tiny, no correction/reOCR
+    test4.mp4, roi=862,945,957,1003, frame_start=114, frame_end=6317, div=1
+    target_h=48, backend=tensorrt, model=v6_tiny, no correction/reOCR
 
 Outputs raw OCR text per frame for direct comparison.
 """

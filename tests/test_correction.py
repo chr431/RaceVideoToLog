@@ -1,4 +1,4 @@
-"""Tests for core pure functions — LCS-based correction API."""
+﻿"""Tests for core pure functions — LCS-based correction API."""
 import pytest
 from correction import (
     expand_partial, _find_neighbor_trusted, _interp_candidate,
@@ -199,8 +199,8 @@ class TestComputeConfidence:
     def test_physically_inconsistent(self):
         """Frame at 300 km/h surrounded by 100 km/h → very low LCS."""
         rows = [[0.0, 0.0, 100.0, Flag.RAW],
-		        [0.1, 0.0, 300.0, Flag.RAW],
-		        [0.2, 0.0, 100.0, Flag.RAW]]
+                [0.1, 0.0, 300.0, Flag.RAW],
+                [0.2, 0.0, 100.0, Flag.RAW]]
         obs = [SpeedObservation(r[0], r[2], str(int(r[2]))) for r in rows]
         result = compute_confidence(rows, obs, 400, 50)
         assert result[1]["score"] < 30  # 中间帧两侧都不一致 → 极低分
@@ -210,8 +210,8 @@ class TestComputeConfidence:
         """Score thresholds produce correct reason labels."""
         # Inconsistent outlier
         rows = [[0.0, 0.0, 100.0, Flag.RAW],
-		        [0.1, 0.0, 200.0, Flag.RAW],  # bad — jumps 100 km/h
-		        [0.2, 0.0, 100.0, Flag.RAW]]
+                [0.1, 0.0, 200.0, Flag.RAW],  # bad — jumps 100 km/h
+                [0.2, 0.0, 100.0, Flag.RAW]]
         obs = [SpeedObservation(r[0], r[2], str(int(r[2]))) for r in rows]
         result = compute_confidence(rows, obs, 400, 50)
         assert result[1]["reason"] != '正常'  # middle frame is inconsistent
@@ -219,7 +219,7 @@ class TestComputeConfidence:
     def test_out_of_range(self):
         """Speed out of range → score=0."""
         rows = [[0.0, 0.0, -1.0, Flag.RAW],
-		        [0.1, 0.0, 500.0, Flag.RAW]]
+                [0.1, 0.0, 500.0, Flag.RAW]]
         obs = [SpeedObservation(r[0], r[2], "") for r in rows]
         result = compute_confidence(rows, obs, 400, 50)
         assert result[0]["score"] == 0
@@ -230,8 +230,8 @@ class TestComputeConfidence:
         """Pinned frames boost neighbor confidence when consistent — tight spacing."""
         # dt=0.02s (50fps): pinned frame at index 0, outlier at index 1, test at index 2
         rows = [[0.0, 0.0, 100.0, Flag.PINNED],
-		        [0.02, 0.0, 300.0, Flag.RAW],   # disagrees with pinned
-		        [0.04, 0.0, 101.0, Flag.RAW]]   # close to pinned
+                [0.02, 0.0, 300.0, Flag.RAW],   # disagrees with pinned
+                [0.04, 0.0, 101.0, Flag.RAW]]   # close to pinned
         obs = [SpeedObservation(r[0], r[2], str(int(r[2]))) for r in rows]
         result = compute_confidence(rows, obs, 400, 50, pinned={0})
         # Frame 2 close to pinned frame 0 (dt=0.04, exp(-0.04/0.06)=0.51, ×3 pin weight)
@@ -296,7 +296,7 @@ class TestLcsScoreForValue:
         rows, times = self._make_rows([100, 200, 105])
         rows[0][3] = Flag.PINNED
         score_pinned = _lcs_score_for_value(2, 100.0, rows, times, 400, 100,
-		                                     high_weight={0})
+                                                high_weight={0})
         # Reset frame 0 to RAW (no boost)
         rows[0][3] = Flag.RAW
         score_no_pin = _lcs_score_for_value(2, 100.0, rows, times, 400, 100)
@@ -328,8 +328,8 @@ class TestDetectErrors:
     def test_out_of_range(self):
         """Out-of-range values should be errors."""
         rows = [[0.0, 0.0, 100.0, Flag.RAW],
-		        [0.1, 0.0, -1.0, Flag.RAW],
-		        [0.2, 0.0, 500.0, Flag.RAW]]
+                [0.1, 0.0, -1.0, Flag.RAW],
+                [0.2, 0.0, 500.0, Flag.RAW]]
         errors, sl, sr = _detect_errors(rows, set(), [r[0] for r in rows], 400, 50)
         assert 1 in errors
         assert 2 in errors
@@ -337,7 +337,7 @@ class TestDetectErrors:
     def test_anchors_excluded(self):
         """Pinned/anchored frames should never be in error set."""
         rows = [[0.0, 0.0, 100.0, Flag.PINNED],
-		        [0.1, 0.0, 500.0, Flag.PINNED]]  # out of range but pinned
+                [0.1, 0.0, 500.0, Flag.PINNED]]  # out of range but pinned
         errors, sl, sr = _detect_errors(rows, {0, 1}, [r[0] for r in rows], 400, 50)
         assert 0 not in errors
         assert 1 not in errors
@@ -354,13 +354,13 @@ class TestDetectErrors:
 class TestInterpCandidate:
     def test_linear_interp(self):
         rows = [[0.0, 0.0, 100.0, Flag.HIGH_TRUST],
-		        [0.1, 0.0, 0.0, Flag.RAW],
-		        [0.2, 0.0, 200.0, Flag.HIGH_TRUST]]
+                [0.1, 0.0, 0.0, Flag.RAW],
+                [0.2, 0.0, 200.0, Flag.HIGH_TRUST]]
         val = _interp_candidate(1, rows, set(), [r[0] for r in rows], 400)
         assert val == pytest.approx(150.0)
 
     def test_no_neighbors(self):
         rows = [[0.0, 0.0, 100.0, Flag.RAW],
-		        [0.1, 0.0, 0.0, Flag.RAW]]
+                [0.1, 0.0, 0.0, Flag.RAW]]
         val = _interp_candidate(0, rows, set(), [r[0] for r in rows], 400)
         assert val is None

@@ -1,4 +1,4 @@
-"""RaceVideoToLog PySide6 GUI — 主窗口 + 导出线程。
+﻿"""RaceVideoToLog PySide6 GUI — 主窗口 + 导出线程。
 
 分离自 RaceVideoToLog.py，包含所有 GUI 相关逻辑。
 """
@@ -804,7 +804,7 @@ class RaceVideoToLogApp(QMainWindow):
         if "format" in settings:
             fmt = settings["format"].lower()
             for rb, key in [(self._fmt_ms, "m/s"), (self._fmt_kmh, "km/h"),
-			                (self._fmt_mph, "mile/h")]:
+                            (self._fmt_mph, "mile/h")]:
                 if key == fmt:
                     rb.setChecked(True); break
         if "pinned" in settings or "manual_anchor" in settings:

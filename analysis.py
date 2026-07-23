@@ -1,4 +1,4 @@
-"""RaceVideoToLog — 数据分析模块。
+﻿"""RaceVideoToLog — 数据分析模块。
 
 支持 GUI 交互式分析和 CLI 无头导出：
 - GUI: AnalysisTab 类，嵌入主窗口的 Notebook
@@ -6,11 +6,11 @@
 
 用法:
   # GUI 模式
-  from analysis import AnalysisTab
-  tab = AnalysisTab(notebook, footer, status_var, progress_var)
+    from analysis import AnalysisTab
+    tab = AnalysisTab(notebook, footer, status_var, progress_var)
 
   # CLI 模式
-  python RaceVideoToLog.py --analysis csv1.csv csv2.csv [--analysis-out PREFIX]
+    python RaceVideoToLog.py --analysis csv1.csv csv2.csv [--analysis-out PREFIX]
 """
 from __future__ import annotations
 
@@ -96,7 +96,7 @@ def smooth_data(xv: "np.ndarray | list[float]", yv: "np.ndarray | list[float]", 
 
 
 def plot_segmented(ax: "Axes", x: "np.ndarray | list[float]", y: "np.ndarray | list[float]", flags: "list[int]", normal_color: str, show_red: bool,
-				   smooth_strength: int) -> None:
+                    smooth_strength: int) -> None:
     """平滑 + 纠错段着色。
 
     - red (#F44336): auto-corrected (flag 11-19)

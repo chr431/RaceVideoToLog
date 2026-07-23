@@ -1,4 +1,4 @@
-"""数据分析 Tab — PySide6 GUI。
+﻿"""数据分析 Tab — PySide6 GUI。
 
 嵌入主窗口 QTabWidget，提供 CSV 导入、多模式图表渲染、范围选择器等功能。
 """
@@ -177,9 +177,9 @@ class AnalysisTab:
 
     # ═══════════════════ 渲染 ═══════════════════
 
-    
+
     def _setup_chart_interactions(self, ax, canvas, all_x, all_y, is_dtx, is_vt,
-	                              delta_label, label, name1, name2):
+                                    delta_label, label, name1, name2):
         """配置图表交互：SpanSelector 范围选择 + 缩放/平移。"""
         delta_text = ax.text(0.02, 0.97, "", transform=ax.transAxes,
             va="top", fontsize=9, color="#333333",
@@ -351,12 +351,12 @@ class AnalysisTab:
                         continue
                     x_data, speeds, flags = raw
                     ln_refs = plot_segmented(ax, x_data, speeds, flags,
-					                          colors[i], show_cd, smooth_str)
+                                                colors[i], show_cd, smooth_str)
                     # Cache for smooth updates
                     self._chart_lines.append((ax.lines[-2] if len(ax.lines) >= 2 else ax.lines[-1],
-					                          i, x_data, speeds, flags))
+                                                i, x_data, speeds, flags))
                     ax.plot([], [], color=colors[i], linewidth=0.8,
-					        label=Path(self._csvs[i] or "").stem)
+                            label=Path(self._csvs[i] or "").stem)
 
             # ── 标签 ──
             if is_dtx:
@@ -420,14 +420,14 @@ class AnalysisTab:
                         continue
                     x_data, speeds, flags = raw
                     _ = plot_segmented(ax, x_data, speeds, flags,
-					                    colors[i], show_cd, smooth_str)
+                                        colors[i], show_cd, smooth_str)
                     self._chart_lines.append((ax.lines[-2] if len(ax.lines) >= 2 else ax.lines[-1],
-					                          i, x_data, speeds, flags))
+                                                i, x_data, speeds, flags))
                 # 恢复图例
                 for i, raw in enumerate(all_raw):
                     if raw is not None:
                         ax.plot([], [], color=colors[i], linewidth=0.8,
-						        label=Path(self._csvs[i] or "").stem)
+                                label=Path(self._csvs[i] or "").stem)
 
             canvas.draw_idle()
 

@@ -1,4 +1,4 @@
-"""Accuracy verification: run pipeline on test video and compare against ground truth.
+﻿"""Accuracy verification: run pipeline on test video and compare against ground truth.
 
 Usage: python tools/verify_accuracy.py [--headless]
 """
@@ -27,9 +27,9 @@ def compare(truth: dict[int, float], result_path: str) -> dict:
     """Compare pipeline output CSV against truth.
 
     Returns stats dict with:
-	  - total, matched, wrong, missing, extra
-	  - errors: list of (frame, pipeline_speed, truth_speed)
-	  - false_trusted: frames with flag>=21 but speed wrong
+        - total, matched, wrong, missing, extra
+        - errors: list of (frame, pipeline_speed, truth_speed)
+        - false_trusted: frames with flag>=21 but speed wrong
     """
     from ocr_engine import Flag
     result: dict[int, tuple[float, int]] = {}
