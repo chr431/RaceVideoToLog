@@ -1,4 +1,4 @@
-﻿"""最终检查对话框 — 全帧速度曲线 + 置信度着色 + 逐帧修正。"""
+"""最终检查对话框 — 全帧速度曲线 + 置信度着色 + 逐帧修正。"""
 from __future__ import annotations
 
 import config

@@ -1,4 +1,4 @@
-﻿"""Tests for core pure functions — LCS-based correction API."""
+"""Tests for core pure functions — LCS-based correction API."""
 import pytest
 from correction import (
     expand_partial, _find_neighbor_trusted, _interp_candidate,

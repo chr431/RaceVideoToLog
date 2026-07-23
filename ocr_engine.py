@@ -1,4 +1,4 @@
-﻿"""OCR engine for RaceVideoToLog.
+"""OCR engine for RaceVideoToLog.
 
 SpeedObservation, preprocessing, correction algorithms,
 model configuration, and supporting utilities.
@@ -648,5 +648,3 @@ def lcs_detect_errors(scores_l: list[float], scores_r: list[float],
 class _CancelExport(Exception):
     """内部异常：用户取消了导出任务。"""
     pass
-
-

@@ -1,4 +1,4 @@
-﻿"""统一处理流水线 — GUI 和 CLI 共用。
+"""统一处理流水线 — GUI 和 CLI 共用。
 运行在调用者线程中（GUI 应在原生 threading.Thread 中调用以避免 QThread 性能损失）。
 """
 from __future__ import annotations

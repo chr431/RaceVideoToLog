@@ -1,4 +1,4 @@
-﻿"""Unified padding benchmark — external (replicate) vs internal (rapidocr).
+"""Unified padding benchmark — external (replicate) vs internal (rapidocr).
 
 Compares:
     - External pad values: 0, 2, 4, 8, 16

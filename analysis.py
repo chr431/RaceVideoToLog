@@ -1,4 +1,4 @@
-﻿"""RaceVideoToLog — 数据分析模块。
+"""RaceVideoToLog — 数据分析模块。
 
 支持 GUI 交互式分析和 CLI 无头导出：
 - GUI: AnalysisTab 类，嵌入主窗口的 Notebook

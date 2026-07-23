@@ -1,4 +1,4 @@
-﻿"""RaceVideoToLog PySide6 GUI — 主窗口 + 导出线程。
+"""RaceVideoToLog PySide6 GUI — 主窗口 + 导出线程。
 
 分离自 RaceVideoToLog.py，包含所有 GUI 相关逻辑。
 """
@@ -931,5 +931,3 @@ class RaceVideoToLogApp(QMainWindow):
             self._footer.hide()
         else:
             self._footer.show()
-
-

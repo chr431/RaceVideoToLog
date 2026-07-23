@@ -1,4 +1,4 @@
-﻿"""数据分析 Tab — PySide6 GUI。
+"""数据分析 Tab — PySide6 GUI。
 
 嵌入主窗口 QTabWidget，提供 CSV 导入、多模式图表渲染、范围选择器等功能。
 """

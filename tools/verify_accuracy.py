@@ -1,4 +1,4 @@
-﻿"""Accuracy verification: run pipeline on test video and compare against ground truth.
+"""Accuracy verification: run pipeline on test video and compare against ground truth.
 
 Usage: python tools/verify_accuracy.py [--headless]
 """

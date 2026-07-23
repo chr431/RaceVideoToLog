@@ -1,4 +1,4 @@
-﻿"""GPU 加速配置 — 后端选择 + DLL 搜索路径注册。
+"""GPU 加速配置 — 后端选择 + DLL 搜索路径注册。
 
 从 PATH 扫描 CUDA / TensorRT 目录，注册到 Windows DLL 搜索路径，
 并提供自动后端选择（TensorRT → CPU 回退链）。
