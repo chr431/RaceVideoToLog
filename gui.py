@@ -875,9 +875,9 @@ class RaceVideoToLogApp(QMainWindow):
             return
         self._export_btn.setEnabled(True); self._cancel_btn.setEnabled(False)
         self._export_thread = None
-        self._show_final_check()
+        self._show_final_check(mode)
 
-    def _show_final_check(self) -> None:
+    def _show_final_check(self, review_scope: str = "auto") -> None:
         pipeline = getattr(self, "_pipeline", None)
         out = getattr(self, "_review_output_path", None)
         if pipeline is None or out is None:
@@ -891,7 +891,8 @@ class RaceVideoToLogApp(QMainWindow):
                 pipeline._max_speed, pipeline._max_accel)
         dlg = ReviewDialog(self, rows, pipeline._observations,
             pipeline._raw_frames, confidences,
-            pipeline._max_speed, pipeline._max_accel)
+            pipeline._max_speed, pipeline._max_accel,
+            review_scope=review_scope)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             for fi, v in dlg.get_corrections().items():
                 if 0 <= fi < len(rows):

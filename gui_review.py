@@ -29,6 +29,7 @@ class ReviewDialog(QDialog):
                     raw_frames: list, confidences: list[dict],
                     max_speed: float,
                     max_accel: float = config.DEFAULT_MAX_ACCEL,
+                    review_scope: str = "auto",
                         fps: float = 1.0) -> None:
         super().__init__(parent)
         self.setWindowTitle("最终检查 — 点击图中任意点修正单帧")
@@ -43,6 +44,7 @@ class ReviewDialog(QDialog):
         self._max_speed = max_speed
         self._max_accel = max_accel
         self._fps = fps
+        self._review_scope = review_scope  # "auto"=仅剖面偏离, "full"=所有信号
         self._corrections: dict[int, float] = {}
         self._current_frame: int = 0
 
@@ -334,16 +336,15 @@ class ReviewDialog(QDialog):
         self._canvas.draw_idle()
 
     def _low_confidence_regions(self) -> list[tuple[int, int]]:
-        """推导需审核区域：中值剖面偏离 + LCS 低分 + pass1 修正帧。
+        """推导需审核区域。
 
-        中值剖面偏离检测与 correction.py 中 HIGH_TRUST 判定一致，
-        能捕获 LCS 无法检测的"一致性孤岛"（局部自洽但偏离全局趋势）。
+        auto 模式：仅中值剖面偏离（最可疑的极少数帧）。
+        full 模式：中值偏离 + LCS 低分 + 被修正帧。
         """
         n = len(self._rows)
         if n < 5:
             return []
 
-        # 中值滤波参考剖面（15 帧窗口，和 correction.py 一致）
         speeds = np.array([r[2] for r in self._rows], dtype=float)
         half = 7
         median_profile = np.zeros(n, dtype=float)
@@ -352,27 +353,25 @@ class ReviewDialog(QDialog):
             hi = min(n, i + half + 1)
             median_profile[i] = float(np.median(speeds[lo:hi]))
 
+        use_all = (self._review_scope == "full")
         regions = []
         i = 0
         while i < n:
-            # 合并三种信号：中值偏离 / LCS 低分 / 被修正
             v = speeds[i]
             ref = median_profile[i]
             profile_bad = (ref > 0 and (v < 0 or abs(v - ref) > max(4.0, ref * 0.02)))
             c = self._confidences[i] if i < len(self._confidences) else {}
             lcs_bad = c.get("score", 100) < 30
             corrected = c.get("is_corrected", False)
+            is_suspect = profile_bad or (use_all and (lcs_bad or corrected))
 
-            if profile_bad or lcs_bad or corrected:
+            if is_suspect:
                 start = i
                 while i < n:
-                    v2 = speeds[i]
-                    ref2 = median_profile[i]
+                    v2 = speeds[i]; ref2 = median_profile[i]
                     p2 = (ref2 > 0 and (v2 < 0 or abs(v2 - ref2) > max(4.0, ref2 * 0.02)))
                     c2 = self._confidences[i] if i < len(self._confidences) else {}
-                    l2 = c2.get("score", 100) < 30
-                    co2 = c2.get("is_corrected", False)
-                    if not (p2 or l2 or co2):
+                    if not (p2 or (use_all and (c2.get("score", 100) < 30 or c2.get("is_corrected", False)))):
                         break
                     i += 1
                 regions.append((start, i - 1))
