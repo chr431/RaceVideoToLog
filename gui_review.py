@@ -75,9 +75,10 @@ class ReviewDialog(QDialog):
 
         header = QHBoxLayout()
         header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        n_low = sum(1 for c in self._confidences if c.get("score", 100) < 30)
+        regions = self._low_confidence_regions()
+        n_low = sum(e - s + 1 for s, e in regions)
         header.addWidget(StrongBodyLabel("最终检查"))
-        header.addWidget(CaptionLabel(f"  — 点击散点图选帧修正，橙色=低置信度({n_low}帧)，完成后点击「确认保存」"))
+        header.addWidget(CaptionLabel(f"  — 点击散点图选帧修正，橙色=需审核({n_low}帧)，完成后点击「确认保存」"))
         root.addLayout(header)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -262,7 +263,7 @@ class ReviewDialog(QDialog):
                     [times[i] for i in pick_idx],
                     [speeds[i] for i in pick_idx],
                     c=colors, s=sizes, alpha=0.7, zorder=1,
-                    rasterized=True, picker=True, pickradius=5)
+                    rasterized=True, picker=True, pickradius=8)
 
             # 当前帧红点（小号实心+白边）
             cur_fi = self._current_frame
@@ -333,13 +334,46 @@ class ReviewDialog(QDialog):
         self._canvas.draw_idle()
 
     def _low_confidence_regions(self) -> list[tuple[int, int]]:
+        """推导需审核区域：中值剖面偏离 + LCS 低分 + pass1 修正帧。
+
+        中值剖面偏离检测与 correction.py 中 HIGH_TRUST 判定一致，
+        能捕获 LCS 无法检测的"一致性孤岛"（局部自洽但偏离全局趋势）。
+        """
+        n = len(self._rows)
+        if n < 5:
+            return []
+
+        # 中值滤波参考剖面（15 帧窗口，和 correction.py 一致）
+        speeds = np.array([r[2] for r in self._rows], dtype=float)
+        half = 7
+        median_profile = np.zeros(n, dtype=float)
+        for i in range(n):
+            lo = max(0, i - half)
+            hi = min(n, i + half + 1)
+            median_profile[i] = float(np.median(speeds[lo:hi]))
+
         regions = []
-        n = len(self._confidences)
         i = 0
         while i < n:
-            if self._confidences[i].get("score", 100) < 30:
+            # 合并三种信号：中值偏离 / LCS 低分 / 被修正
+            v = speeds[i]
+            ref = median_profile[i]
+            profile_bad = (ref > 0 and (v < 0 or abs(v - ref) > max(4.0, ref * 0.02)))
+            c = self._confidences[i] if i < len(self._confidences) else {}
+            lcs_bad = c.get("score", 100) < 30
+            corrected = c.get("is_corrected", False)
+
+            if profile_bad or lcs_bad or corrected:
                 start = i
-                while i < n and self._confidences[i].get("score", 100) < 30:
+                while i < n:
+                    v2 = speeds[i]
+                    ref2 = median_profile[i]
+                    p2 = (ref2 > 0 and (v2 < 0 or abs(v2 - ref2) > max(4.0, ref2 * 0.02)))
+                    c2 = self._confidences[i] if i < len(self._confidences) else {}
+                    l2 = c2.get("score", 100) < 30
+                    co2 = c2.get("is_corrected", False)
+                    if not (p2 or l2 or co2):
+                        break
                     i += 1
                 regions.append((start, i - 1))
             i += 1
