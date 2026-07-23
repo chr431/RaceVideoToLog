@@ -119,6 +119,7 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
                             partial_corrections: dict[int, str] | None = None,
                             reocr_cache: dict | None = None,
                             light_mode: bool = False,
+                            reocr_only: bool = False,
                             notes: dict[int, str] | None = None, pinned: set[int] | None = None,
                                 fps: float = 1.0) -> list:
     """5 阶段物理约束纠错流水线。
@@ -128,8 +129,8 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
 
     Args:
         reocr_cache: 可选的重 OCR 缓存字典，绑定到 Pipeline 实例生命周期。
-        light_mode: 轻量模式 — 仅重OCR + 原始值之间选择，不生成混淆/推断/插值候选，
-                    不迭代，不级联填充。用于 pass1 人工审核前预处理。
+        light_mode: 轻量模式 — 仅 re-OCR 候选，不迭代不填充（pass1 用）。
+        reocr_only: 仅 re-OCR 候选生成（不含混淆/扩展/插值），但保留完整迭代+填充。
     Returns: 修改后的 rows（原地修改）
     """
     pinned = pinned or set()
@@ -202,7 +203,7 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
                         pinned_set, times, max_speed_kmh, max_accel_mps2,
                         progress_fn=progress_fn, timing=timing,
                         partial_corrections=partial_corrections, reocr_cache=cache,
-                        light_mode=light_mode, notes=notes, fps=fps)
+                        light_mode=light_mode, reocr_only=reocr_only, notes=notes, fps=fps)
     if log_fn:
         log_fn(f"  Stage 2+3: fixed {fixed} frames in round 1")
 
@@ -225,7 +226,7 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
                             pinned_set, times, max_speed_kmh, max_accel_mps2,
                             progress_fn=progress_fn, timing=timing,
                             partial_corrections=partial_corrections, reocr_cache=cache,
-                            notes=notes, fps=fps)
+                            reocr_only=reocr_only, notes=notes, fps=fps)
         if log_fn:
             log_fn(f"  Stage 4 round {rnd}: {len(error_set)} errors, fixed {fixed}")
 
@@ -297,6 +298,7 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
                 partial_corrections: dict[int, str] | None = None,
                 reocr_cache: dict | None = None,
                 light_mode: bool = False,
+                reocr_only: bool = False,
                 notes: dict[int, str] | None = None,
                 fps: float = 1.0) -> int:
     """阶段 2+3：对每个 error 帧重 OCR 获取备选，LCS 评分选最优值填入。"""
@@ -322,26 +324,21 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
                                     timing=timing, cache=reocr_cache)
 
         # ── 收集候选值 ──
+        only_reocr = light_mode or reocr_only
         if has_partial:
             candidates = expand_partial(partial_corrections[i], max_speed_kmh)
         else:
-            if light_mode:
-                # 轻量模式：仅 re-OCR 值，不生成混淆/推断/插值候选
-                candidates = list(reocr_set)
-            else:
-                candidates = list(reocr_set)
-            # 混淆字符候选
-            confusion_cands = build_speed_candidates(observations[oid].raw_text, max_speed_kmh)
-            for c in confusion_cands:
-                if c not in candidates:
-                    candidates.append(c)
-            # 自动缺位扩展：OCR 读到 "21" → 生成所有可能的 2-3 位数
-            for c in _auto_expand_digits(observations[oid].raw_text, max_speed_kmh):
-                if c not in candidates:
-                    candidates.append(c)
+            candidates = list(reocr_set)
+            if not only_reocr:
+                confusion_cands = build_speed_candidates(observations[oid].raw_text, max_speed_kmh)
+                for c in confusion_cands:
+                    if c not in candidates:
+                        candidates.append(c)
+                for c in _auto_expand_digits(observations[oid].raw_text, max_speed_kmh):
+                    if c not in candidates:
+                        candidates.append(c)
 
-        # 插值候选（light_mode 下不使用）
-        if not light_mode and interp_cand is not None:
+        if not only_reocr and interp_cand is not None:
             candidates.append(interp_cand)
 
         # ── 选择最佳候选：候选 + 当前值 + 参考值 统一评分 ──
@@ -352,7 +349,7 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
             for c in candidates:
                 if 0 <= c <= max_speed_kmh:
                     options.append((c, "candidate"))
-            if interp_cand is not None and not light_mode:
+            if interp_cand is not None and not only_reocr:
                 options.append((interp_cand, "interp"))
             if 0 <= raw_val <= max_speed_kmh:
                 options.append((raw_val, "current"))

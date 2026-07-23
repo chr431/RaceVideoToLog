@@ -104,7 +104,7 @@ class _ExportThread(QThread):
                     pipeline.run_auto(self._output_path)
                     result_container["mode"] = "auto"
                 else:
-                    pipeline.run_review_pass1(self._output_path)
+                    pipeline.run_auto(self._output_path, reocr_only=True)
                     result_container["mode"] = "review"
                 self.app._pipeline = pipeline
                 self.app._review_output_path = self._output_path
@@ -886,8 +886,9 @@ class RaceVideoToLogApp(QMainWindow):
         rows = pipeline._rows
         confidences = getattr(pipeline, '_confidences', None)
         if confidences is None:
-            confidences = [{"index": i, "score": 100.0, "is_corrected": False,
-                "speed": rows[i][2], "reason": ""} for i in range(len(rows))]
+            from correction import compute_confidence
+            confidences = compute_confidence(rows, pipeline._observations,
+                pipeline._max_speed, pipeline._max_accel)
         dlg = ReviewDialog(self, rows, pipeline._observations,
             pipeline._raw_frames, confidences,
             pipeline._max_speed, pipeline._max_accel)

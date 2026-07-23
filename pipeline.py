@@ -99,7 +99,7 @@ class ProcessingPipeline:
 
     # ═══════════════ 公开接口 ═══════════════
 
-    def run_auto(self, output_path: str | Path) -> None:
+    def run_auto(self, output_path: str | Path, reocr_only: bool = False) -> None:
         """自动纠错模式：完整流水线 → 写 CSV。"""
         t_total = _time.perf_counter()
         self._emit("加载 OCR 引擎...", 1.0)
@@ -118,7 +118,7 @@ class ProcessingPipeline:
             self._write_csv(self._rows, Path(output_path))
             self._write_diagnostics(Path(output_path))
         else:
-            self._run_correction(Path(output_path), skip_fill=False)
+            self._run_correction(Path(output_path), skip_fill=False, reocr_only=reocr_only)
         self._timing["total"] = _time.perf_counter() - t_total
         logger.info("流水线完成: 总计 %.1fs (%s)",
                         self._timing["total"],
@@ -247,7 +247,8 @@ class ProcessingPipeline:
                     skip_fill: bool,
                     partial_corrections: dict[int, str] | None = None,
                     corrections: dict[int, float] | None = None,
-                    confirmed: set[int] | None = None) -> None:
+                    confirmed: set[int] | None = None,
+                    reocr_only: bool = False) -> None:
         """共享纠错逻辑：构建 rows → 应用修正 → LCS 评分 → correct_with_trust。
 
         先重建全部 RAW rows，再覆盖用户修正（PINNED）和确认段（CONFIRMED_SEG），
@@ -288,6 +289,7 @@ class ProcessingPipeline:
             reocr_cache=self._reocr_cache,
             notes=self._diag_notes if self._diag else None,
             pinned=self._pinned if self._pinned else None,
+            reocr_only=reocr_only,
             fps=self._fps)
         self._populate_diag_final()
         self._timing["correction"] = _time.perf_counter() - t0
@@ -300,9 +302,9 @@ class ProcessingPipeline:
         self._write_csv(self._rows, Path(output_path))
         self._write_diagnostics(Path(output_path))
 
-    def _run_correction(self, output_path: Path, skip_fill: bool) -> None:
+    def _run_correction(self, output_path: Path, skip_fill: bool, reocr_only: bool = False) -> None:
         """自动纠错模式的完整纠错 + 写 CSV（调用 _correct 后继续）。"""
-        self._correct(91.0, 6.0, skip_fill=skip_fill)
+        self._correct(91.0, 6.0, skip_fill=skip_fill, reocr_only=reocr_only)
         if not self._final_check:
             self.finalize(output_path)
 
