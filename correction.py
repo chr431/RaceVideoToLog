@@ -670,12 +670,14 @@ def _generate_candidates(
     # These get full expansion + profile candidate to recover the missing digit.
     is_short = obs.raw_text and len(obs.raw_text) < 3
 
-    # ── Hundreds-digit fix for 3-digit frames ──
-    # When OCR reads "117" but truth is 217, the hundreds digit is wrong.
-    # Adding ±100 as protected candidates lets Viterbi fix this via transition cost.
-    if not is_short and obs.raw_text and len(obs.raw_text) == 3 and raw_val > 0:
-        for delta in (100, -100):
-            alt = raw_val + delta
+    # ── Hundreds-digit candidates for 3-digit frames ──
+    # OCR may misread the hundreds digit: "117" when truth is 217.
+    # Generate ALL possible hundreds-digit variants: base, 100+base, 200+base...
+    # e.g., raw=116 → 16, 116, 216, 316. Viterbi picks via transition cost.
+    if not is_short and obs.raw_text and obs.raw_text.isdigit() and len(obs.raw_text) == 3 and raw_val > 0:
+        base = int(obs.raw_text) % 100
+        for hundreds in range(0, int(max_speed_kmh) + 1, 100):
+            alt = hundreds + base
             if 0 <= alt <= max_speed_kmh and alt not in protected_set:
                 protected.append(alt)
                 protected_set.add(alt)
