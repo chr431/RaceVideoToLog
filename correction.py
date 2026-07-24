@@ -181,11 +181,8 @@ def _fill_unrecoverable(rows: list, pinned_set: set, error_set: set, times: list
     total = len(sorted_errors)
     progress_done = 0
     for i in sorted_errors:
-        # ── When profile_values are available, use them as primary fill target ──
-        # This handles large consistency islands where trusted neighbors are far away.
         if profile_values is not None and i < len(profile_values) and profile_values[i] > 0:
             pv = profile_values[i]
-            # Find nearest non-error frame on either side for acceleration clamping
             la = None
             for j in range(i - 1, -1, -1):
                 if j not in error_set and 0 <= rows[j][2] <= max_speed_kmh:
@@ -199,15 +196,13 @@ def _fill_unrecoverable(rows: list, pinned_set: set, error_set: set, times: list
             if la is not None:
                 lv = rows[la][2]; lt = rows[la][0] / fps
                 left_dt = max(times[i] - lt, 1e-3)
-                left_max_dv = max_accel_mps2 * left_dt * MPS_TO_KMH
-                lo = max(lo, lv - left_max_dv)
-                hi = min(hi, lv + left_max_dv)
+                lo = max(lo, lv - max_accel_mps2 * left_dt * MPS_TO_KMH)
+                hi = min(hi, lv + max_accel_mps2 * left_dt * MPS_TO_KMH)
             if ra is not None:
                 rv = rows[ra][2]; rt = rows[ra][0] / fps
                 right_dt = max(rt - times[i], 1e-3)
-                right_max_dv = max_accel_mps2 * right_dt * MPS_TO_KMH
-                lo = max(lo, rv - right_max_dv)
-                hi = min(hi, rv + right_max_dv)
+                lo = max(lo, rv - max_accel_mps2 * right_dt * MPS_TO_KMH)
+                hi = min(hi, rv + max_accel_mps2 * right_dt * MPS_TO_KMH)
             val = round(max(lo, min(hi, pv)))
         else:
             # ── No profile: interpolate between trusted neighbors ──
@@ -481,15 +476,37 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
         log_fn(f"  Stage 2: Viterbi found {len(viterbi_result['error_set'])} errors, "
                f"{len(viterbi_result['corrected'])} corrections")
 
-    # ── Stage 3: 应用 Viterbi 修正 + HIGH_TRUST 标记 ──
+    # ── Stage 3: 应用 Viterbi 修正 ──
     fixed = _apply_viterbi_corrections(
         rows, viterbi_result, pinned_set, notes,
         only_reocr=only_reocr, log_fn=log_fn,
     )
+    if log_fn:
+        log_fn(f"  Stage 3: {fixed} corrections applied")
 
-    # Mark HIGH_TRUST for frames with high Viterbi confidence
-    # Physics gate: must be physically consistent with BOTH neighbors.
-    # max_accel already has safety margin built in — use max_dv directly.
+    # ── Stage 4: Fill unrecoverable (auto mode: aggressive profile-based fill) ──
+    if skip_fill or light_mode:
+        if log_fn:
+            log_fn(f"  Stage 4: skipped ({'light_mode' if light_mode else 'skip_fill'})")
+    else:
+        remaining_errors, wide_profile_fill = _find_remaining_errors(rows, viterbi_result, trusted_set, pinned_set, observations)
+        if remaining_errors:
+            fill_pass = 0
+            while fill_pass < FILL_MAX_PASSES and remaining_errors:
+                _fill_unrecoverable(rows, pinned_set, remaining_errors, times,
+                                    max_speed_kmh, max_accel_mps2, fps,
+                                    progress_fn=progress_fn, notes=notes,
+                                    profile_values=wide_profile_fill)
+                if log_fn:
+                    log_fn(f"  Stage 4 pass {fill_pass+1}: filled {len(remaining_errors)} unrecoverable frames")
+                fill_pass += 1
+                remaining_errors, wide_profile_fill = _find_remaining_errors(rows, viterbi_result, trusted_set, pinned_set, observations)
+                if not remaining_errors:
+                    break
+        elif log_fn:
+            log_fn(f"  Stage 4: no remaining errors to fill")
+
+    # ── Stage 5: HIGH_TRUST marking (after fill: corrected values get trusted) ──
     confidence = viterbi_result['confidence']
     trust_threshold = 70.0
     n_trusted = 0
@@ -501,87 +518,42 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
         v = rows[i][2]
         if v < 0:
             continue
-        # Viterbi confidence biased against later frames in long segments.
-        # For single-candidate frames, trust the profile+physics checks instead.
         if ci['score'] < trust_threshold and i in candidates_by_frame and len(candidates_by_frame[i]) > 1:
             continue
-        # Physics check: verify against RELIABLE neighbors only.
-        # Skip short-text frames (OCR unreliable) and REOCR_AUTO (Viterbi wasn't confident).
-        # Only RAW 3-digit and already-trusted frames are reliable references.
         left_ok = True
         for j in range(i - 1, max(-1, i - 4), -1):
-            if j < 0:
-                break
+            if j < 0: break
             nbr_v = rows[j][2]
-            if nbr_v < 0:
-                continue
+            if nbr_v < 0: continue
             nbr_rt = observations[j].raw_text if j < len(observations) else ''
-            nbr_short = nbr_rt and len(nbr_rt) < 3
-            nbr_reocr = (rows[j][3] == Flag.REOCR_AUTO)
-            if nbr_short or nbr_reocr:
-                continue  # unreliable neighbor, look further
-            if abs(v - nbr_v) > _max_dv:
-                left_ok = False
+            if nbr_rt and len(nbr_rt) < 3: continue
+            if rows[j][3] == Flag.REOCR_AUTO: continue
+            if abs(v - nbr_v) > _max_dv: left_ok = False
             break
-        if not left_ok:
-            continue
+        if not left_ok: continue
         right_ok = True
         for j in range(i + 1, min(n, i + 4)):
             nbr_v = rows[j][2]
-            if nbr_v < 0:
-                continue
+            if nbr_v < 0: continue
             nbr_rt = observations[j].raw_text if j < len(observations) else ''
-            nbr_short = nbr_rt and len(nbr_rt) < 3
-            nbr_reocr = (rows[j][3] == Flag.REOCR_AUTO)
-            if nbr_short or nbr_reocr:
-                continue
-            if abs(nbr_v - v) > _max_dv:
-                right_ok = False
+            if nbr_rt and len(nbr_rt) < 3: continue
+            if rows[j][3] == Flag.REOCR_AUTO: continue
+            if abs(nbr_v - v) > _max_dv: right_ok = False
             break
-        if not right_ok:
-            continue
-        # Wide-profile check: must be consistent with global trend.
-        # Prevents wrong clusters (e.g. speed=21 when profile says 200) from
-        # being marked HIGH_TRUST and blocking corrections downstream.
+        if not right_ok: continue
         if i < len(wide_profile) and wide_profile[i] > 0:
             if abs(v - wide_profile[i]) > max(4.0, wide_profile[i] * 0.02):
                 continue
         rows[i][3] = Flag.HIGH_TRUST
         n_trusted += 1
     if log_fn:
-        log_fn(f"  Stage 3: {fixed} corrections applied, {n_trusted} new HIGH_TRUST")
+        log_fn(f"  Stage 5: {n_trusted} new HIGH_TRUST")
 
-    # ── Stage 4: Fill unrecoverable ──
-    if skip_fill or light_mode:
-        if log_fn:
-            log_fn(f"  Stage 4: skipped ({'light_mode' if light_mode else 'skip_fill'})")
-    else:
-        # Find remaining errors: frames with very low Viterbi confidence
-        remaining_errors, wide_profile = _find_remaining_errors(rows, viterbi_result, trusted_set, pinned_set, observations)
-        if remaining_errors:
-            fill_pass = 0
-            while fill_pass < FILL_MAX_PASSES and remaining_errors:
-                _fill_unrecoverable(rows, pinned_set, remaining_errors, times,
-                                    max_speed_kmh, max_accel_mps2, fps,
-                                    progress_fn=progress_fn, notes=notes,
-                            profile_values=wide_profile)
-                if log_fn:
-                    log_fn(f"  Stage 4 pass {fill_pass+1}: filled {len(remaining_errors)} unrecoverable frames")
-                fill_pass += 1
-                remaining_errors, wide_profile = _find_remaining_errors(rows, viterbi_result, trusted_set, pinned_set, observations)
-                if not remaining_errors:
-                    break
-        elif log_fn:
-            log_fn(f"  Stage 4: no remaining errors to fill")
-
-    # ── Stage 5: Smoothness enforcement (auto mode only) ──
-    # Final safety net: override ANY frame that creates physically impossible
-    # adjacent transitions. A smooth curve with slight inaccuracy is better
-    # than one with 100 km/h single-frame spikes.
+    # ── Stage 6: Smoothness enforcement (auto mode only) ──
     if not skip_fill and not light_mode:
         n_smoothed = _smoothness_pass(rows, times, max_speed_kmh, max_accel_mps2, fps, notes, wide_profile)
         if log_fn and n_smoothed > 0:
-            log_fn(f"  Stage 5: smoothed {n_smoothed} physically impossible transitions")
+            log_fn(f"  Stage 6: smoothed {n_smoothed} profile-deviating spikes")
 
     # Store confidence for compute_confidence() to use
     _store_confidence_cache(rows, confidence)
@@ -632,20 +604,20 @@ def _identify_suspect_frames(
                 real_suspect.add(i)
                 continue
 
-        # ── Physics check: 3-digit frames that create impossible acceleration ──
-        # Even though OCR reads 3 digits (e.g., "116"), if neighbors are at
-        # ~216, the jump requires ~300 m/s² — physically impossible.
-        # Flag such frames to generate expansion candidates for the wrong digit.
+        # ── Physics check: flag frames that are inconsistent with BOTH neighbors ──
+        # A single-neighbor violation means the neighbor is wrong, not this frame.
+        # Both-neighbor violation means this frame is the outlier.
         if times is not None and i > 0 and i < n - 1:
             dt = times[i] - times[i-1] if i > 0 else 1.0
             if dt > 0:
-                max_dv = max_accel_mps2 * dt * MPS_TO_KMH * 2  # 2× tolerance for brief spikes
-                # Check both neighbors
+                max_dv = max_accel_mps2 * dt * MPS_TO_KMH * 2
+                bad_count = 0
                 for ni in (i-1, i+1):
                     if 0 <= ni < n and rows[ni][2] > 0 and v > 0:
                         if abs(v - rows[ni][2]) > max_dv:
-                            real_suspect.add(i)
-                            break
+                            bad_count += 1
+                if bad_count >= 2:
+                    real_suspect.add(i)
 
     # Expand context window around real suspects
     context_only: set[int] = set()
@@ -841,21 +813,20 @@ def _find_remaining_errors(
         wide_profile[i] = float(np.median(vals[lo:hi]))
 
     # ── Find frames with large deviation from wide profile ──
-    # Only fill short-text frames (1-2 digit OCR readings): their OCR is
+    # Only fill short-text frames (1-2 digit OCR): their raw value is
     # unreliable and the correct value is likely in the profile.
-    # 3-digit frames that deviate from the profile are more likely to be
-    # correct — the profile is probably polluted by a consistency island.
+    # 3-digit frames are generally trustworthy — if they deviate from the
+    # profile, the profile is likely polluted by a consistency island.
     error_set: set[int] = set()
     for i in range(n):
         if i in trusted_set or i in pinned_set:
             continue
         if Flag.is_trusted(rows[i][3]):
             continue
-        # Only target short-text frames
         if observations is not None and i < len(observations):
             rt = observations[i].raw_text
             if rt and len(rt) >= 3:
-                continue  # 3-digit frame: trust the OCR, not the profile
+                continue  # 3-digit frame: trust the OCR
         v = rows[i][2]
         ref = wide_profile[i]
         if v < 0 or ref <= 0:

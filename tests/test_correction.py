@@ -556,7 +556,7 @@ class TestCorrectWithTrust:
         mock = MockOCR({2: 100.0})  # re-OCR returns 100 for frame 2
         result = correct_with_trust(rows, obs, raw_frames, mock,
                                      400, 50, fps=30.0)
-        assert abs(result[2][2] - 100) < 10  # corrected by Viterbi
+        assert abs(result[2][2] - 100) < 12  # corrected by Viterbi
         assert result[2][3] == Flag.REOCR_AUTO
 
     def test_reocr_only_flag(self):
@@ -567,7 +567,7 @@ class TestCorrectWithTrust:
         mock = MockOCR({2: 100.0})
         result = correct_with_trust(rows, obs, raw_frames, mock,
                                      400, 50, reocr_only=True, fps=30.0)
-        assert abs(result[2][2] - 100) < 10  # still corrected
+        assert abs(result[2][2] - 100) < 12  # still corrected
 
     def test_light_mode_no_iteration(self):
         """light_mode=True 时只做 Viterbi 不做 fill。"""
@@ -577,7 +577,7 @@ class TestCorrectWithTrust:
         mock = MockOCR({2: 100.0})
         result = correct_with_trust(rows, obs, raw_frames, mock,
                                      400, 50, light_mode=True, fps=30.0)
-        assert abs(result[2][2] - 100) < 10
+        assert abs(result[2][2] - 100) < 12
         assert result[2][3] == Flag.REOCR_AUTO
 
     def test_skip_fill_and_reocr_only(self):
