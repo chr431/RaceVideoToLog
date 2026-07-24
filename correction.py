@@ -501,14 +501,20 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
         i = ci['index']
         if i in trusted_set or rows[i][3] != Flag.RAW or ci['score'] < trust_threshold:
             continue
-        # Physics check: both adjacent transitions must be physically feasible
         v = rows[i][2]
         if v < 0:
             continue
+        # Physics check: both adjacent transitions must be physically feasible
         if i > 0 and rows[i-1][2] >= 0 and abs(v - rows[i-1][2]) > _max_dv:
             continue
         if i + 1 < n and rows[i+1][2] >= 0 and abs(rows[i+1][2] - v) > _max_dv:
             continue
+        # Wide-profile check: must be consistent with global trend.
+        # Prevents wrong clusters (e.g. speed=21 when profile says 200) from
+        # being marked HIGH_TRUST and blocking corrections downstream.
+        if i < len(wide_profile) and wide_profile[i] > 0:
+            if abs(v - wide_profile[i]) > max(4.0, wide_profile[i] * 0.02):
+                continue
         rows[i][3] = Flag.HIGH_TRUST
         n_trusted += 1
     if log_fn:

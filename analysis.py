@@ -42,7 +42,7 @@ def parse_csv(path: str | Path) -> tuple[list[float], list[float], list[float], 
     # Read fps from CSV header for frame→time conversion
     from ocr_engine import parse_csv_header
     header = parse_csv_header(str(path))
-    fps = float(header.get("fps", "30"))
+    fps = float(header.get("fps", "60"))
 
     times, dists, speeds, flags = [], [], [], []
     with open(str(path), "r", encoding="utf-8-sig") as f:
