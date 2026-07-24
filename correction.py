@@ -209,14 +209,8 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
     if log_fn:
         log_fn(f"  Stage 2+3: fixed {fixed} frames in round 1")
 
-    # ── Light mode: 一轮即止，剩余错误标记为待审核 ──
+    # ── Light mode: 一轮即止 ──
     if light_mode:
-        error_set, _scores_l, _scores_r = _detect_errors(rows, pinned_set, times, max_speed_kmh, max_accel_mps2, fps=fps)
-        for i in error_set:
-            if i not in pinned_set and rows[i][3] == Flag.RAW:
-                rows[i][3] = Flag.FLAGGED_REVIEW
-        if log_fn:
-            log_fn(f"  Light: {len(error_set)} frames flagged for manual review")
         return rows
 
     # ── 阶段 4：多轮迭代 ──
@@ -236,12 +230,8 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
     # ── 阶段 5：迭代填充直到收敛（处理级联效应）──
     # reocr_only 模式下跳过填充（纯物理插值，不看图像）
     if skip_fill or reocr_only:
-        error_set, _scores_l, _scores_r = _detect_errors(rows, pinned_set, times, max_speed_kmh, max_accel_mps2, fps=fps)
-        for i in error_set:
-            if i not in pinned_set and rows[i][3] == Flag.RAW:
-                rows[i][3] = Flag.FLAGGED_REVIEW
         if log_fn:
-            log_fn(f"  Stage 5: {len(error_set)} frames flagged for manual review")
+            log_fn(f"  Stage 5: skipped (reocr_only/skip_fill)")
     else:
         fill_pass = 0
         while fill_pass < FILL_MAX_PASSES:

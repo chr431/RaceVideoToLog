@@ -67,7 +67,6 @@ class Flag:
         HIGH_TRUST (21)   — LCS 评分 >=0.7，自动识别为高可信
         PINNED (22)       — 用户手动修正，绝对真值
         CONFIRMED_SEG (23)— 用户确认的段内帧
-        FLAGGED_REVIEW(30)— 标记待人工审核
     """
     RAW: int = 0
     REOCR_AUTO: int = 11
@@ -76,7 +75,6 @@ class Flag:
     HIGH_TRUST: int = 21
     PINNED: int = 22
     CONFIRMED_SEG: int = 23
-    FLAGGED_REVIEW: int = 30
 
     # Backward-compat aliases
     ANCHOR_AUTO: int = 21

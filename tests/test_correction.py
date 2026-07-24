@@ -452,7 +452,7 @@ class TestCorrectWithTrust:
         assert result[2][3] == Flag.REOCR_AUTO
 
     def test_skip_fill_and_reocr_only(self):
-        """skip_fill + reocr_only + re-OCR 无候选 → FLAGGED_REVIEW。"""
+        """skip_fill + reocr_only + re-OCR 无候选 → 保持 RAW。"""
         rows = self._make_rows([100, 100, 0, 100, 100])
         obs = self._make_obs(["100"] * 5)
         raw_frames = [(i, _make_frame(i)) for i in range(5)]
@@ -460,5 +460,5 @@ class TestCorrectWithTrust:
         result = correct_with_trust(rows, obs, raw_frames, mock,
                                      400, 50, skip_fill=True, reocr_only=True,
                                      fps=30.0)
-        # frame 2 was error, couldn't fix via re-OCR → flagged for review
-        assert result[2][3] == Flag.FLAGGED_REVIEW
+        # frame 2 was error, couldn't fix → stays RAW
+        assert result[2][3] == Flag.RAW
