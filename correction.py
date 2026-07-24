@@ -270,7 +270,9 @@ def _smoothness_pass(rows: list, times: list, max_speed_kmh: float,
         return 0
 
     max_dv = max_accel_mps2 * (times[1] - times[0]) * MPS_TO_KMH if n >= 2 else 8.0
-    threshold = max_dv * 3.0  # 3× max_accel → clearly impossible
+    # Only catch truly impossible jumps: >50 km/h between adjacent frames.
+    # At 30fps, 50 km/h/frame ≈ 420 m/s² — far beyond any vehicle's capability.
+    threshold = max(50.0, max_dv * 5.0)
 
     smoothed = 0
     # Multiple passes: fixing one spike may reveal another
@@ -536,6 +538,14 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
         elif log_fn:
             log_fn(f"  Stage 4: no remaining errors to fill")
 
+    # ── Stage 5: Smoothness enforcement (auto mode only) ──
+    # Final safety net: override ANY frame that creates physically impossible
+    # adjacent transitions. A smooth curve with slight inaccuracy is better
+    # than one with 100 km/h single-frame spikes.
+    if not skip_fill and not light_mode:
+        n_smoothed = _smoothness_pass(rows, times, max_speed_kmh, max_accel_mps2, fps, notes)
+        if log_fn and n_smoothed > 0:
+            log_fn(f"  Stage 5: smoothed {n_smoothed} physically impossible transitions")
 
     # Store confidence for compute_confidence() to use
     _store_confidence_cache(rows, confidence)
