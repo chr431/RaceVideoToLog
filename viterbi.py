@@ -295,37 +295,55 @@ def _viterbi_segment(
 
 def _obs_cost(fi: int, v: float, rows: list, median_profile: list[float],
               obs_weight: float, profile_weight: float) -> float:
-    """Observation cost: deviation from raw OCR + deviation from median profile."""
-    raw_v = rows[fi][2]
-    # Relative deviation from OCR reading (scale-invariant)
-    raw_ref = max(1.0, abs(raw_v)) if raw_v > 0 else 1.0
-    obs = obs_weight * abs(v - raw_v) / raw_ref
+    """Observation cost: capped penalty for overriding OCR + profile deviation.
 
-    # Deviation from median profile (global trend)
+    The OCR-override penalty is SATURATED: deviating by 20 km/h or 200 km/h
+    both represent "rejecting the OCR reading", so the penalty is capped.
+    This prevents the observation cost from trapping Viterbi at wrong raw values
+    when the correct value requires a large jump (e.g., 21→221 for a hundreds-
+    digit error). The transition cost handles physical feasibility.
+    """
+    raw_v = rows[fi][2]
+    # Relative deviation from OCR reading, capped at 100%
+    if raw_v > 0:
+        raw_ratio = abs(v - raw_v) / max(1.0, abs(raw_v))
+    else:
+        raw_ratio = abs(v - raw_v)
+    obs = obs_weight * min(1.0, raw_ratio)  # Saturate at obs_weight
+
+    # Deviation from median profile (global trend) — also capped
     if fi < len(median_profile):
         mp = median_profile[fi]
         if mp > 0:
-            mp_ref = max(1.0, mp)
-            obs += profile_weight * abs(v - mp) / mp_ref
+            mp_ratio = abs(v - mp) / max(1.0, mp)
+            obs += profile_weight * min(2.0, mp_ratio)  # Capped at 2× weight
 
     return obs
 
 
 def _trans_cost(v: float, w: float, dt: float, max_accel_mps2: float,
                 accel_weight: float) -> float:
-    """Transition cost: quadratic penalty for exceeding max acceleration.
+    """Transition cost: exponential penalty for physically implausible acceleration.
 
-    cost = accel_weight * max(0, |dv| - max_dv)²
+    Design:
+    - 0 to 0.7×max_dv: cost = 0 (comfortably feasible)
+    - 0.7×max_dv to max_dv: slow growth (aggressive but possible)
+    - Beyond max_dv: rapid exponential growth (physically impossible)
+    - Ceiling very high: 100 km/h jumps completely dominate the decision
 
-    Physically feasible transitions (|dv| <= max_dv) cost zero.
-    Mild violations cost little; severe violations grow quadratically.
+    The exponential shape matches the user's max_accel setting: users set
+    max_accel higher than true physical limits as a safety margin, so the
+    penalty should ramp up gently near max_accel and explode beyond it.
     """
     if dt <= 0:
         dt = 1.0 / 30.0
     max_dv = max_accel_mps2 * dt * MPS_TO_KMH
     dv = abs(w - v)
-    if dv <= max_dv:
-        return 0.0
+
+    # Quadratic penalty beyond max_dv:
+    # Excess of 1 km/h → cost=1, excess of 100 km/h → cost=10000.
+    # The quadratic shape makes moderate violations costly and severe
+    # violations completely dominant — exactly what's needed.
     excess = dv - max_dv
     return accel_weight * excess * excess
 

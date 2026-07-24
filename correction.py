@@ -253,6 +253,88 @@ def _fill_unrecoverable(rows: list, pinned_set: set, error_set: set, times: list
             progress_fn(progress_done, total)
 
 
+def _smoothness_pass(rows: list, times: list, max_speed_kmh: float,
+                     max_accel_mps2: float, fps: float = 1.0,
+                     notes: dict[int, str] | None = None) -> int:
+    """Auto-mode post-processing: eliminate physically impossible transitions.
+
+    Scans for adjacent frames where |v_i - v_{i-1}| exceeds max_accel by
+    a wide margin (3×). Such spikes are physically impossible regardless
+    of OCR confidence — a 100 km/h single-frame jump would require ~300 m/s².
+
+    Overrides ANY flag (including HIGH_TRUST). In auto mode, curve smoothness
+    is the top priority over per-frame accuracy.
+    """
+    n = len(rows)
+    if n < 3:
+        return 0
+
+    max_dv = max_accel_mps2 * (times[1] - times[0]) * MPS_TO_KMH if n >= 2 else 8.0
+    threshold = max_dv * 3.0  # 3× max_accel → clearly impossible
+
+    smoothed = 0
+    # Multiple passes: fixing one spike may reveal another
+    for _pass in range(5):
+        fixed_this_pass = 0
+        for i in range(1, n - 1):
+            v_cur = rows[i][2]
+            if v_cur < 0:
+                continue
+
+            # Check left and right transitions
+            v_prev = rows[i-1][2]
+            v_next = rows[i+1][2]
+            left_bad = v_prev >= 0 and abs(v_cur - v_prev) > threshold
+            right_bad = v_next >= 0 and abs(v_next - v_cur) > threshold
+
+            if not left_bad and not right_bad:
+                continue
+
+            # Interpolate from nearest valid neighbors
+            # Find left neighbor (not involved in a bad transition)
+            la = None
+            for j in range(i - 1, -1, -1):
+                if rows[j][2] >= 0:
+                    la = j; break
+            ra = None
+            for j in range(i + 1, n):
+                if rows[j][2] >= 0:
+                    ra = j; break
+
+            if la is not None and ra is not None:
+                lv = rows[la][2]; lt = rows[la][0] / fps
+                rv = rows[ra][2]; rt = rows[ra][0] / fps
+                total_dt = max(rt - lt, 1e-3)
+                frac = (times[i] - lt) / total_dt
+                new_val = round(lv + (rv - lv) * frac)
+                # Clamp to acceleration limits from each side
+                left_dt = max(times[i] - lt, 1e-3)
+                right_dt = max(rt - times[i], 1e-3)
+                lo = max(0.0, lv - max_accel_mps2 * left_dt * MPS_TO_KMH)
+                hi = min(max_speed_kmh, lv + max_accel_mps2 * left_dt * MPS_TO_KMH)
+                lo = max(lo, rv - max_accel_mps2 * right_dt * MPS_TO_KMH)
+                hi = min(hi, rv + max_accel_mps2 * right_dt * MPS_TO_KMH)
+                new_val = round(max(lo, min(hi, new_val)))
+            elif la is not None:
+                new_val = rows[la][2]
+            elif ra is not None:
+                new_val = rows[ra][2]
+            else:
+                continue
+
+            old_val = rows[i][2]
+            rows[i][2] = int(new_val)
+            if notes is not None:
+                notes[i] = f"smooth: {old_val:.0f}→{new_val:.0f}"
+            smoothed += 1
+            fixed_this_pass += 1
+
+        if fixed_this_pass == 0:
+            break
+
+    return smoothed
+
+
 # ═══════════════════════════════════════════════════════════════
 # 主纠错流水线 (Viterbi-based)
 # ═══════════════════════════════════════════════════════════════
@@ -295,7 +377,9 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
         mode_str = " (light)" if light_mode else ""
         log_fn(f"Correction{mode_str}: {n} rows, {len(pinned_set)} pinned, Viterbi DP")
 
-    # ── Stage 0: 全局中值剖面（抗离群值，作为 Viterbi 观测代价的全局趋势参考）──
+    # ── Stage 0: 双窗口中值剖面 ──
+    # Narrow (0.5s): Viterbi 观测代价用，对孤立离群值敏感
+    # Wide (5s): 候选生成用，抗一致性孤岛污染，为短读数帧提供可靠的百位候选
     def _median_filter_np(y: "np.ndarray", window: int) -> "np.ndarray":
         half = window // 2
         result = np.zeros(len(y), dtype=float)
@@ -323,10 +407,20 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
     else:
         median_profile = _vals.tolist()
 
+    # ── Wide profile (5s): robust to consistency islands, used for candidate generation ──
+    _wide_win = max(31, int(2.5 / max(_dt, 0.01)))
+    if _wide_win % 2 == 0:
+        _wide_win += 1
+    _wide_win = min(_wide_win, n)
+    if n >= _wide_win:
+        wide_profile = _median_filter_np(_vals, _wide_win).tolist()
+    else:
+        wide_profile = median_profile  # fallback to narrow
+
     # ── Stage 1: 识别可疑帧 + 生成候选 ──
     # 可疑帧（剖面偏离/短文本）：完整候选生成
     # 上下文帧（可疑帧附近）：仅原始OCR值作为候选，但参与Viterbi段
-    real_suspect, context_only = _identify_suspect_frames(rows, observations, median_profile, pinned_set, n)
+    real_suspect, context_only = _identify_suspect_frames(rows, observations, wide_profile, pinned_set, n, times, max_accel_mps2)
     suspect_frames = set(real_suspect) | set(context_only)
 
     candidates_by_frame: dict[int, list[float]] = {}
@@ -334,36 +428,9 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
     progress_done = 0
     only_reocr = light_mode or reocr_only
 
-    # ── Detect large suspect clusters (>8 consecutive frames) ──
-    # Viterbi expansion candidates can corrupt large clusters (consistency islands).
-    # Defer these to the fill stage which uses a wider, more robust profile.
-    large_cluster_frames: set[int] = set()
-    if real_suspect:
-        sorted_suspect = sorted(real_suspect)
-        cluster_start = sorted_suspect[0]
-        for k in range(1, len(sorted_suspect)):
-            if sorted_suspect[k] - sorted_suspect[k-1] > 1:
-                # End of cluster
-                cluster_size = sorted_suspect[k-1] - cluster_start + 1
-                if cluster_size > 8:
-                    large_cluster_frames.update(range(cluster_start, sorted_suspect[k-1] + 1))
-                cluster_start = sorted_suspect[k]
-        # Last cluster
-        cluster_size = sorted_suspect[-1] - cluster_start + 1
-        if cluster_size > 8:
-            large_cluster_frames.update(range(cluster_start, sorted_suspect[-1] + 1))
-
     for fi in real_suspect:
-        # Large clusters: raw value only (defer to fill stage)
-        if fi in large_cluster_frames:
-            raw_v = rows[fi][2]
-            if 0 <= raw_v <= max_speed_kmh:
-                candidates_by_frame[fi] = [raw_v]
-            else:
-                candidates_by_frame[fi] = [0.0]
-            continue
-
-        mp_ref = median_profile[fi] if fi < len(median_profile) else None
+        # Use wide profile for candidate ranking — robust against consistency islands
+        mp_ref = wide_profile[fi] if fi < len(wide_profile) else None
         cands = _generate_candidates(
             fi, rows, observations, raw_frames, ocr, pinned_set,
             times, max_speed_kmh, cache, split_results,
@@ -423,17 +490,26 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
     )
 
     # Mark HIGH_TRUST for frames with high Viterbi confidence
-    # Skip large-cluster frames: their confidence is path-based (not accuracy-based)
+    # Physics gate: must be physically consistent with BOTH neighbors.
+    # max_accel already has safety margin built in — use max_dv directly.
     confidence = viterbi_result['confidence']
     trust_threshold = 70.0
     n_trusted = 0
+    _max_dv = max_accel_mps2 * (times[1] - times[0]) * MPS_TO_KMH if n >= 2 else 8.0
     for ci in confidence:
         i = ci['index']
-        if i in large_cluster_frames:
-            continue  # defer to fill stage — Viterbi confidence unreliable in clusters
-        if i not in trusted_set and rows[i][3] == Flag.RAW and ci['score'] >= trust_threshold:
-            rows[i][3] = Flag.HIGH_TRUST
-            n_trusted += 1
+        if i in trusted_set or rows[i][3] != Flag.RAW or ci['score'] < trust_threshold:
+            continue
+        # Physics check: both adjacent transitions must be physically feasible
+        v = rows[i][2]
+        if v < 0:
+            continue
+        if i > 0 and rows[i-1][2] >= 0 and abs(v - rows[i-1][2]) > _max_dv:
+            continue
+        if i + 1 < n and rows[i+1][2] >= 0 and abs(rows[i+1][2] - v) > _max_dv:
+            continue
+        rows[i][3] = Flag.HIGH_TRUST
+        n_trusted += 1
     if log_fn:
         log_fn(f"  Stage 3: {fixed} corrections applied, {n_trusted} new HIGH_TRUST")
 
@@ -460,6 +536,7 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
         elif log_fn:
             log_fn(f"  Stage 4: no remaining errors to fill")
 
+
     # Store confidence for compute_confidence() to use
     _store_confidence_cache(rows, confidence)
 
@@ -469,16 +546,20 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
 def _identify_suspect_frames(
     rows: list, observations: list, median_profile: list[float],
     pinned_set: set[int], n: int,
+    times: list[float] | None = None,
+    max_accel_mps2: float = 50.0,
 ) -> tuple[list[int], list[int]]:
     """Identify frames that may need correction.
 
     Returns: (real_suspect, context_only) where:
-    - real_suspect: frames with profile deviation or short text — gets full candidates
-    - context_only: frames near suspects — included in Viterbi segment but raw-only candidate
+    - real_suspect: frames with profile deviation, short text, or physically
+      impossible transitions — gets full candidates
+    - context_only: frames near suspects — raw-only candidate
 
     Criteria for real_suspect:
     - Median profile deviation > threshold
-    - Short OCR text (1-2 digits, likely missing a digit)
+    - Short OCR text (1-2 digits)
+    - Physically impossible acceleration vs neighbors (catches 116→216 errors)
     """
     real_suspect: set[int] = set()
     window = VITERBI_CONTEXT_WINDOW
@@ -487,7 +568,7 @@ def _identify_suspect_frames(
         if i in pinned_set or Flag.is_trusted(rows[i][3]):
             continue
         v = rows[i][2]
-        if v < 0 or v > 400:  # rough max_speed check
+        if v < 0 or v > 400:
             real_suspect.add(i)
             continue
 
@@ -504,6 +585,21 @@ def _identify_suspect_frames(
             if rt and len(rt) < 3:
                 real_suspect.add(i)
                 continue
+
+        # ── Physics check: 3-digit frames that create impossible acceleration ──
+        # Even though OCR reads 3 digits (e.g., "116"), if neighbors are at
+        # ~216, the jump requires ~300 m/s² — physically impossible.
+        # Flag such frames to generate expansion candidates for the wrong digit.
+        if times is not None and i > 0 and i < n - 1:
+            dt = times[i] - times[i-1] if i > 0 else 1.0
+            if dt > 0:
+                max_dv = max_accel_mps2 * dt * MPS_TO_KMH * 2  # 2× tolerance for brief spikes
+                # Check both neighbors
+                for ni in (i-1, i+1):
+                    if 0 <= ni < n and rows[ni][2] > 0 and v > 0:
+                        if abs(v - rows[ni][2]) > max_dv:
+                            real_suspect.add(i)
+                            break
 
     # Expand context window around real suspects
     context_only: set[int] = set()
@@ -574,6 +670,16 @@ def _generate_candidates(
     # These get full expansion + profile candidate to recover the missing digit.
     is_short = obs.raw_text and len(obs.raw_text) < 3
 
+    # ── Hundreds-digit fix for 3-digit frames ──
+    # When OCR reads "117" but truth is 217, the hundreds digit is wrong.
+    # Adding ±100 as protected candidates lets Viterbi fix this via transition cost.
+    if not is_short and obs.raw_text and len(obs.raw_text) == 3 and raw_val > 0:
+        for delta in (100, -100):
+            alt = raw_val + delta
+            if 0 <= alt <= max_speed_kmh and alt not in protected_set:
+                protected.append(alt)
+                protected_set.add(alt)
+
     # ── Median profile candidate: ONLY for short-text frames ──
     if is_short and mp > 0:
         mp_rounded = round(mp)
@@ -601,9 +707,13 @@ def _generate_candidates(
             other.append(interp_val)
             other_set.add(interp_val)
 
-    # Truncate other candidates by combined rank
+    # Truncate other candidates by rank
+    # Short-text frames: keep ALL expansion candidates. They're rare (~0.5% of frames)
+    # and the Viterbi transition cost will select the physically correct one.
+    # Truncation risks dropping the correct hundreds-digit expansion (121, 221).
+    # 3-digit frames: raw OCR is trustworthy, limit to VITERBI_MAX_CANDIDATES.
     remaining = VITERBI_MAX_CANDIDATES - len(protected)
-    if remaining > 0 and len(other) > remaining:
+    if remaining > 0 and len(other) > remaining and not is_short:
         def _rank(v: float) -> float:
             d_raw = abs(v - raw_val) / max(1.0, abs(raw_val)) if raw_val > 0 else abs(v - raw_val)
             d_mp = abs(v - mp) / max(1.0, mp)
