@@ -56,34 +56,42 @@ def set_gpu_backend(backend: str) -> None:
     global _gpu_backend
     _gpu_backend = backend
 
-# ═══════════════════ LCS 局部一致性评分 ═══════════════════
-LCS_TIME_WINDOW: float = 0.5         # 时间窗 (秒)
-LCS_TAU: float = 0.06                 # 指数衰减常数 exp(-dt/tau)
-LCS_HIGH_WEIGHT: float = 3.0         # pinned 帧权重倍率
-LCS_ERROR_LOW: float = 0.3           # detect: < this = error
-LCS_TRUST_HIGH: float = 0.75         # error/borderline 分界 & HIGH_TRUST 标记阈值
-LCS_WARNING_THRESHOLD: float = 0.5   # 人工修正加速度警告阈值
-LCS_CONFIDENCE_MIN_SCORE: float = 30.0  # find_problem_segments 默认 min_score
+# ═══════════════════ Viterbi 全局最优路径选择 ═══════════════════
+# 替代 LCS 候选评分 — 联合优化所有帧，不依赖邻居当前值
+VITERBI_OBS_WEIGHT: float = 0.3        # 偏离 OCR 原始值的代价权重
+VITERBI_PROFILE_WEIGHT: float = 0.15   # 偏离中值剖面的代价权重
+VITERBI_ACCEL_WEIGHT: float = 1.0      # 加速度超标代价权重 (二次惩罚)
+VITERBI_CONF_BONUS: float = 0.05       # OCR 置信度奖励权重
+VITERBI_TRUST_THRESHOLD: float = 0.85  # Viterbi 置信度 > this → HIGH_TRUST
+VITERBI_MAX_CANDIDATES: int = 15       # 每帧最大候选数
+VITERBI_CONTEXT_WINDOW: int = 2        # 可疑帧前后的上下文窗口（帧数）
+
+# ═══════════════════ LCS 局部一致性评分（deprecated: 仅 gui_review._check_accel 使用）══════════════════
+LCS_TIME_WINDOW: float = 0.5           # 时间窗 (秒)
+LCS_TAU: float = 0.06                  # 指数衰减常数 exp(-dt/tau)
+LCS_HIGH_WEIGHT: float = 3.0           # pinned 帧权重倍率
+LCS_ERROR_LOW: float = 0.3             # detect: < this = error
+LCS_TRUST_HIGH: float = 0.75           # error/borderline 分界 & HIGH_TRUST 标记阈值
+LCS_WARNING_THRESHOLD: float = 0.5     # 人工修正加速度警告阈值
+LCS_CONFIDENCE_MIN_SCORE: float = 30.0 # find_problem_segments 默认 min_score
 LCS_INTERP_WEIGHT: float = 0.25        # 插值接近度权重 (加性)
 LCS_NOVELTY_WEIGHT: float = 0.10       # 新颖性权重（非原始OCR加分）
 
-# ═══════════════════ 中值滤波参考剖面验证 ═══════════════════
-# 在 HIGH_TRUST 标记前，用中值滤波剖面检测"一致性孤岛"
-# ——局部物理自洽但偏离全局趋势的 OCR 误读
-PROFILE_TIME_WINDOW: float = 0.5       # 中值滤波时间窗口 (秒)，根据实际帧间隔折算帧数
-PROFILE_MIN_WINDOW: int = 5            # 最小滤波窗口 (帧数)，确保低帧率下仍有效
-PROFILE_ABS_TOLERANCE: float = 4.0     # 绝对偏差容许 (km/h)
-PROFILE_PCT_TOLERANCE: float = 0.02    # 相对偏差容许 (比例, 0.02=2%)
+# ═══════════════════ 中值滤波参考剖面（deprecated: 已融入 Viterbi 观测代价）══════════════════
+PROFILE_TIME_WINDOW: float = 0.5
+PROFILE_MIN_WINDOW: int = 5
+PROFILE_ABS_TOLERANCE: float = 4.0
+PROFILE_PCT_TOLERANCE: float = 0.02
 
 # ═══════════════════ 纠错迭代参数 ═══════════════════
-CORRECTION_MAX_ROUNDS: int = 4         # Stage 4 最大迭代轮数
-FILL_MAX_PASSES: int = 10              # Stage 5 最大填充轮数
-CORRECTION_ACCEPT_MIN_SCORE: float = 0.35  # 接受修正的最低 LCS 分数
+CORRECTION_MAX_ROUNDS: int = 4         # deprecated: Viterbi 一次全局最优，不再迭代
+FILL_MAX_PASSES: int = 50              # Stage 4 最大填充轮数（大簇需要更多轮次）
+CORRECTION_ACCEPT_MIN_SCORE: float = 0.35  # deprecated: Viterbi 代替候选评分
 CORRECTION_MIN_DIFF: float = 0.5       # 接受修正的最小速度差 (km/h)
 
 # ═══════════════════ 候选评分参数 ═══════════════════
-INTERP_PROX_ABS: float = 15.0          # 插值接近度绝对带宽 (km/h)
-INTERP_PROX_PCT: float = 0.07          # 插值接近度相对带宽 (比例)
+INTERP_PROX_ABS: float = 15.0          # deprecated: Viterbi 代替候选评分
+INTERP_PROX_PCT: float = 0.07          # deprecated: Viterbi 代替候选评分
 REOCR_HEIGHTS: tuple = (24, 32, 48)    # 重 OCR 尝试的预处理高度 (px)
 
 # ═══════════════════ 问题段检测参数 ═══════════════════

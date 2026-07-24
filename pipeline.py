@@ -100,8 +100,13 @@ class ProcessingPipeline:
 
     # ═══════════════ 公开接口 ═══════════════
 
-    def run_auto(self, output_path: str | Path, reocr_only: bool = False) -> None:
-        """自动纠错模式：完整流水线 → 写 CSV。"""
+    def run_auto(self, output_path: str | Path, reocr_only: bool = True,
+                    skip_fill: bool = False) -> None:
+        """自动纠错模式：完整流水线 → 写 CSV。
+
+        reocr_only=True (默认): 仅使用 re-OCR + split OCR 候选，但对 1-2 位短读数始终扩展。
+        skip_fill=False (默认): Viterbi 后运行宽窗口剖面填充，自动修复遗漏的大偏差帧。
+        """
         t_total = _time.perf_counter()
         self._emit("加载 OCR 引擎...", 1.0)
         self._ensure_ocr()
@@ -119,7 +124,7 @@ class ProcessingPipeline:
             self._write_csv(self._rows, Path(output_path))
             self._write_diagnostics(Path(output_path))
         else:
-            self._run_correction(Path(output_path), skip_fill=False, reocr_only=reocr_only)
+            self._run_correction(Path(output_path), skip_fill=skip_fill, reocr_only=reocr_only)
             for row in self._rows:
                 if row[2] > self._max_speed:
                     row[2] = -1
