@@ -61,6 +61,9 @@ def evaluate(truth: dict[int, float], result: dict[int, tuple[float, int]]) -> d
     diff_3_5 = int(np.sum((diffs_arr > 2) & (diffs_arr < 5)))
     diff_5plus = severe_5
 
+    # Top-5 deviations (robust against truth=-1 sentinels)
+    top5 = sorted(diffs_arr, reverse=True)[:5]
+
     # False trusted: flag >= 21 but wrong
     false_trusted = 0
     for fi in common:
@@ -78,6 +81,7 @@ def evaluate(truth: dict[int, float], result: dict[int, tuple[float, int]]) -> d
         "total_errors": total_errors, "error_rate": 100 * total_errors / n,
         "diff_1": diff_1, "diff_2": diff_2, "diff_3_5": diff_3_5, "diff_5plus": diff_5plus,
         "max_diff": float(np.max(diffs_arr)),
+        "top5_diffs": [float(d) for d in top5],
         "median_diff": float(np.median(diffs_arr)),
         "mean_diff": float(np.mean(diffs_arr)),
         "false_trusted": false_trusted,
@@ -131,7 +135,7 @@ def print_result(label: str, r: dict) -> None:
     print(f"  Severe  (diff≥5): {r['severe_5']} ({r['severe_5_pct']:.2f}%)")
     print(f"  Error breakdown:  Δ1={r['diff_1']}  Δ2={r['diff_2']}  Δ3-5={r['diff_3_5']}  Δ5+={r['diff_5plus']}")
     print(f"  Total errors (>0.5): {r['total_errors']} ({r['error_rate']:.2f}%)")
-    print(f"  Max diff: {r['max_diff']:.0f} km/h  Median diff: {r['median_diff']:.2f} km/h  Mean: {r['mean_diff']:.2f}")
+    print(f"  Top-5 diffs: {[f'{d:.0f}' for d in r.get('top5_diffs', [r['max_diff']])]}  Median: {r['median_diff']:.2f}  Mean: {r['mean_diff']:.2f}")
     print(f"  False trusted: {r['false_trusted']}  HIGH_TRUST frames: {r['n_trusted']}")
 
 

@@ -65,6 +65,7 @@ VITERBI_CONF_BONUS: float = 0.05       # OCR 置信度奖励权重
 VITERBI_TRUST_THRESHOLD: float = 0.85  # Viterbi 置信度 > this → HIGH_TRUST
 VITERBI_MAX_CANDIDATES: int = 15       # 每帧最大候选数
 VITERBI_CONTEXT_WINDOW: int = 2        # 可疑帧前后的上下文窗口（帧数）
+SMOOTHNESS_THRESHOLD_MULT: float = 5.0 # Stage 5 平滑阈值 = max_dv × 倍数
 
 # ═══════════════════ LCS 局部一致性评分（deprecated: 仅 gui_review._check_accel 使用）══════════════════
 LCS_TIME_WINDOW: float = 0.5           # 时间窗 (秒)

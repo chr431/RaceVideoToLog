@@ -19,6 +19,7 @@ from config import (MPS_TO_KMH,
     CORRECTION_MIN_DIFF,
     REOCR_HEIGHTS,
     VITERBI_CONTEXT_WINDOW,
+    SMOOTHNESS_THRESHOLD_MULT,
     ACCEL_ANOMALY_THRESHOLD, MAX_SUGGESTED_FRAMES,
     PROBLEM_MIN_SEGMENT_LEN, MAX_PARTIAL_WILDCARDS,
     LCS_CONFIDENCE_MIN_SCORE,
@@ -270,9 +271,7 @@ def _smoothness_pass(rows: list, times: list, max_speed_kmh: float,
         return 0
 
     max_dv = max_accel_mps2 * (times[1] - times[0]) * MPS_TO_KMH if n >= 2 else 8.0
-    # Only catch truly impossible jumps: >50 km/h between adjacent frames.
-    # At 30fps, 50 km/h/frame ≈ 420 m/s² — far beyond any vehicle's capability.
-    threshold = max(50.0, max_dv * 5.0)
+    threshold = max_dv * SMOOTHNESS_THRESHOLD_MULT
 
     smoothed = 0
     # Multiple passes: fixing one spike may reveal another
