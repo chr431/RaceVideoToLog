@@ -121,6 +121,7 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
                             light_mode: bool = False,
                             reocr_only: bool = False,
                             notes: dict[int, str] | None = None, pinned: set[int] | None = None,
+                            split_results: dict[int, str] | None = None,
                                 fps: float = 1.0) -> list:
     """5 阶段物理约束纠错流水线。
 
@@ -203,7 +204,8 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
                         pinned_set, times, max_speed_kmh, max_accel_mps2,
                         progress_fn=progress_fn, timing=timing,
                         reocr_cache=cache,
-                        light_mode=light_mode, reocr_only=reocr_only, notes=notes, fps=fps)
+                        light_mode=light_mode, reocr_only=reocr_only, notes=notes,
+                    split_results=split_results, fps=fps)
     if log_fn:
         log_fn(f"  Stage 2+3: fixed {fixed} frames in round 1")
 
@@ -226,7 +228,8 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
                             pinned_set, times, max_speed_kmh, max_accel_mps2,
                             progress_fn=progress_fn, timing=timing,
                             partial_corrections=partial_corrections, reocr_cache=cache,
-                            reocr_only=reocr_only, notes=notes, fps=fps)
+                            reocr_only=reocr_only, notes=notes,
+                    split_results=split_results, fps=fps)
         if log_fn:
             log_fn(f"  Stage 4 round {rnd}: {len(error_set)} errors, fixed {fixed}")
 
@@ -301,6 +304,7 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
                 light_mode: bool = False,
                 reocr_only: bool = False,
                 notes: dict[int, str] | None = None,
+                split_results: dict[int, str] | None = None,
                 fps: float = 1.0) -> int:
     """阶段 2+3：对每个 error 帧重 OCR 获取备选，LCS 评分选最优值填入。"""
     n = len(rows)
@@ -326,6 +330,17 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
         # ── 收集候选值 ──
         only_reocr = light_mode or reocr_only
         candidates = list(reocr_set)
+        # 分割 OCR 候选：缺位帧（OCR 只读到 1-2 位）的恢复值
+        # 来自实际图像分割，比盲猜更可靠，额外加分
+        _split_bonus = False
+        if split_results and i in split_results:
+            try:
+                split_val = int(split_results[i])
+                if 0 <= split_val <= max_speed_kmh and split_val not in candidates:
+                    candidates.append(split_val)
+                    _split_bonus = True
+            except ValueError:
+                pass
         if not only_reocr:
             confusion_cands = build_speed_candidates(observations[oid].raw_text, max_speed_kmh)
             for c in confusion_cands:
@@ -367,6 +382,9 @@ def _fix_errors(rows: list, observations: list, raw_frames: list, ocr: "RapidOCR
                     score += ref_prox * LCS_INTERP_WEIGHT
                 # 新颖性
                 if abs(val - raw_val) > CORRECTION_MIN_DIFF:
+                    score += LCS_NOVELTY_WEIGHT
+                # 分割 OCR 候选额外加分
+                if _split_bonus and abs(val - split_val) < 0.5:
                     score += LCS_NOVELTY_WEIGHT
                 if score > best_score:
                     best_score = score; best_val = val; best_tag = tag

@@ -89,8 +89,8 @@ class Flag:
 
     @classmethod
     def is_trusted(cls, flag: int) -> bool:
-        """是否为高可信帧 — HIGH_TRUST 或 PINNED (>=20)。"""
-        return flag >= 20
+        """是否为高可信帧 — HIGH_TRUST / PINNED / CONFIRMED_SEG (20-29)。"""
+        return 20 <= flag <= 29
 
     @classmethod
     def is_anchor(cls, flag: int) -> bool:

@@ -89,6 +89,7 @@ class ProcessingPipeline:
         self._raw_frames: list[tuple[float, np.ndarray]] = []
         self._observations: list[SpeedObservation] = []
         self._rows: list[list] = []
+        self._split_results: dict[int, str] = {}  # frame_idx → split-OCR combined text
         self._pinned: set[int] = set()
         self._segments: list[dict] = []
         # ── 性能计时 ──
@@ -195,6 +196,7 @@ class ProcessingPipeline:
             notes=self._diag_notes if self._diag else None,
             pinned=self._pinned if self._pinned else None,
             reocr_only=reocr_only,
+            split_results=self._split_results if self._split_results else None,
             fps=self._fps)
         self._populate_diag_final()
         self._timing["correction"] = _time.perf_counter() - t0
@@ -326,6 +328,24 @@ class ProcessingPipeline:
                     timestamp=fi,
                     raw_speed_kmh=int(sv * SOURCE_TO_KMH[speed_format]),
                     raw_text=rt))
+                # 短文本缺位检测：OCR 读到 1-2 位时，用三等分分割 OCR 尝试恢复
+                if len(rt) < 3:
+                    _crop = self._raw_frames[done][1]  # 当前帧的原始裁剪
+                    _h, _w = _crop.shape[:2]
+                    if _w > 12:
+                        _w3 = _w // 3
+                        _parts = []
+                        for _j in range(3):
+                            _sp = _crop[:, _j*_w3:((_j+1)*_w3 if _j<2 else _w)]
+                            if _sp.shape[1] <= 4:
+                                _parts.append('?'); continue
+                            _proc = _preprocess_standard(_sp, target_h, pad)
+                            _r = ocr(_proc)
+                            _sv, _rt, _ = extract_speed_value(_r)
+                            _parts.append(_rt if _rt else '?')
+                        _combined = ''.join(s for s in _parts if s != '?')
+                        if len(_combined) >= 3:
+                            self._split_results[fi] = _combined
             else:
                 observations.append(SpeedObservation(fi, -1, ""))
             if _collect_diag:
