@@ -668,7 +668,7 @@ class RaceVideoToLogApp(QMainWindow):
             painter.setPen(QPen(QColor("#ff5050"), max(2, int(scale * 2))))
             painter.drawRect(l, t, r - l, b - t)
             # 纵向三等分线（虚线，半透明）
-            dash_pen = QPen(QColor(255, 80, 80, 100), max(1, int(scale)))
+            dash_pen = QPen(QColor(255, 80, 80), max(1, int(scale)))
             from PySide6.QtCore import Qt as _Qt
             dash_pen.setStyle(_Qt.PenStyle.DashLine)
             painter.setPen(dash_pen)
