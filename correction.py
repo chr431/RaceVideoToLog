@@ -499,7 +499,7 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
     _max_dv = max_accel_mps2 * (times[1] - times[0]) * MPS_TO_KMH if n >= 2 else 8.0
     for ci in confidence:
         i = ci['index']
-        if i in trusted_set or Flag.is_trusted(rows[i][3]) or ci['score'] < trust_threshold:
+        if i in trusted_set or rows[i][3] != Flag.RAW or ci['score'] < trust_threshold:
             continue
         v = rows[i][2]
         if v < 0:
