@@ -421,7 +421,9 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
     # ── Stage 1: 识别可疑帧 + 生成候选 ──
     # 可疑帧（剖面偏离/短文本）：完整候选生成
     # 上下文帧（可疑帧附近）：仅原始OCR值作为候选，但参与Viterbi段
-    real_suspect, context_only = _identify_suspect_frames(rows, observations, wide_profile, pinned_set, n, times, max_accel_mps2)
+    real_suspect_narrow, context_only = _identify_suspect_frames(rows, observations, median_profile, pinned_set, n, times, max_accel_mps2)
+    real_suspect_wide, _ = _identify_suspect_frames(rows, observations, wide_profile, pinned_set, n, times, max_accel_mps2)
+    real_suspect = sorted(set(real_suspect_narrow) | set(real_suspect_wide))
     suspect_frames = set(real_suspect) | set(context_only)
 
     candidates_by_frame: dict[int, list[float]] = {}
@@ -499,15 +501,49 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
     _max_dv = max_accel_mps2 * (times[1] - times[0]) * MPS_TO_KMH if n >= 2 else 8.0
     for ci in confidence:
         i = ci['index']
-        if i in trusted_set or rows[i][3] != Flag.RAW or ci['score'] < trust_threshold:
+        if i in trusted_set or rows[i][3] != Flag.RAW:
             continue
         v = rows[i][2]
         if v < 0:
             continue
-        # Physics check: both adjacent transitions must be physically feasible
-        if i > 0 and rows[i-1][2] >= 0 and abs(v - rows[i-1][2]) > _max_dv:
+        # Viterbi confidence biased against later frames in long segments.
+        # For single-candidate frames, trust the profile+physics checks instead.
+        if ci['score'] < trust_threshold and i in candidates_by_frame and len(candidates_by_frame[i]) > 1:
             continue
-        if i + 1 < n and rows[i+1][2] >= 0 and abs(rows[i+1][2] - v) > _max_dv:
+        # Physics check: verify against RELIABLE neighbors only.
+        # Skip short-text frames (OCR unreliable) and REOCR_AUTO (Viterbi wasn't confident).
+        # Only RAW 3-digit and already-trusted frames are reliable references.
+        left_ok = True
+        for j in range(i - 1, max(-1, i - 4), -1):
+            if j < 0:
+                break
+            nbr_v = rows[j][2]
+            if nbr_v < 0:
+                continue
+            nbr_rt = observations[j].raw_text if j < len(observations) else ''
+            nbr_short = nbr_rt and len(nbr_rt) < 3
+            nbr_reocr = (rows[j][3] == Flag.REOCR_AUTO)
+            if nbr_short or nbr_reocr:
+                continue  # unreliable neighbor, look further
+            if abs(v - nbr_v) > _max_dv:
+                left_ok = False
+            break
+        if not left_ok:
+            continue
+        right_ok = True
+        for j in range(i + 1, min(n, i + 4)):
+            nbr_v = rows[j][2]
+            if nbr_v < 0:
+                continue
+            nbr_rt = observations[j].raw_text if j < len(observations) else ''
+            nbr_short = nbr_rt and len(nbr_rt) < 3
+            nbr_reocr = (rows[j][3] == Flag.REOCR_AUTO)
+            if nbr_short or nbr_reocr:
+                continue
+            if abs(nbr_v - v) > _max_dv:
+                right_ok = False
+            break
+        if not right_ok:
             continue
         # Wide-profile check: must be consistent with global trend.
         # Prevents wrong clusters (e.g. speed=21 when profile says 200) from
