@@ -256,83 +256,80 @@ def _fill_unrecoverable(rows: list, pinned_set: set, error_set: set, times: list
 
 def _smoothness_pass(rows: list, times: list, max_speed_kmh: float,
                      max_accel_mps2: float, fps: float = 1.0,
-                     notes: dict[int, str] | None = None) -> int:
-    """Auto-mode post-processing: eliminate physically impossible transitions.
+                     notes: dict[int, str] | None = None,
+                     wide_profile: list[float] | None = None) -> int:
+    """Auto-mode: profile-anchored spike removal.
 
-    Scans for adjacent frames where |v_i - v_{i-1}| exceeds max_accel by
-    a wide margin (3×). Such spikes are physically impossible regardless
-    of OCR confidence — a 100 km/h single-frame jump would require ~300 m/s².
+    Frames that deviate from the wide median profile by more than threshold
+    are pulled toward the profile. Small clusters (≤5 frames) are treated as
+    OCR errors; larger clusters are legitimate speed changes and are preserved.
 
-    Overrides ANY flag (including HIGH_TRUST). In auto mode, curve smoothness
-    is the top priority over per-frame accuracy.
+    Overrides ANY flag (including HIGH_TRUST).
     """
     n = len(rows)
-    if n < 3:
+    if n < 3 or wide_profile is None:
         return 0
 
     max_dv = max_accel_mps2 * (times[1] - times[0]) * MPS_TO_KMH if n >= 2 else 8.0
     threshold = max_dv * SMOOTHNESS_THRESHOLD_MULT
 
     smoothed = 0
-    # Multiple passes: fixing one spike may reveal another
-    for _pass in range(5):
+    for _pass in range(10):
         fixed_this_pass = 0
-        for i in range(1, n - 1):
+        for i in range(n):
             v_cur = rows[i][2]
             if v_cur < 0:
                 continue
-
-            # Check left and right transitions
-            v_prev = rows[i-1][2]
-            v_next = rows[i+1][2]
-            left_bad = v_prev >= 0 and abs(v_cur - v_prev) > threshold
-            right_bad = v_next >= 0 and abs(v_next - v_cur) > threshold
-
-            if not left_bad and not right_bad:
+            pv = wide_profile[i] if i < len(wide_profile) else v_cur
+            if pv <= 0:
+                continue
+            if abs(v_cur - pv) <= threshold:
                 continue
 
-            # Interpolate from nearest valid neighbors
-            # Find left neighbor (not involved in a bad transition)
-            la = None
-            for j in range(i - 1, -1, -1):
-                if rows[j][2] >= 0:
-                    la = j; break
-            ra = None
-            for j in range(i + 1, n):
-                if rows[j][2] >= 0:
-                    ra = j; break
-
-            if la is not None and ra is not None:
-                lv = rows[la][2]; lt = rows[la][0] / fps
-                rv = rows[ra][2]; rt = rows[ra][0] / fps
-                total_dt = max(rt - lt, 1e-3)
-                frac = (times[i] - lt) / total_dt
-                new_val = round(lv + (rv - lv) * frac)
-                # Clamp to acceleration limits from each side
-                left_dt = max(times[i] - lt, 1e-3)
-                right_dt = max(rt - times[i], 1e-3)
-                lo = max(0.0, lv - max_accel_mps2 * left_dt * MPS_TO_KMH)
-                hi = min(max_speed_kmh, lv + max_accel_mps2 * left_dt * MPS_TO_KMH)
-                lo = max(lo, rv - max_accel_mps2 * right_dt * MPS_TO_KMH)
-                hi = min(hi, rv + max_accel_mps2 * right_dt * MPS_TO_KMH)
-                new_val = round(max(lo, min(hi, new_val)))
-            elif la is not None:
-                new_val = rows[la][2]
-            elif ra is not None:
-                new_val = rows[ra][2]
-            else:
+            # Cluster size check: small clusters are OCR errors
+            cluster_size = 1
+            for j in range(i-1, -1, -1):
+                if rows[j][2] >= 0 and abs(rows[j][2] - (wide_profile[j] if j < len(wide_profile) else rows[j][2])) > threshold:
+                    cluster_size += 1
+                else:
+                    break
+            for j in range(i+1, n):
+                if rows[j][2] >= 0 and abs(rows[j][2] - (wide_profile[j] if j < len(wide_profile) else rows[j][2])) > threshold:
+                    cluster_size += 1
+                else:
+                    break
+            if cluster_size > 5:
                 continue
 
+            # Pull toward profile, clamped by acceleration
+            target = pv
+            lo, hi = 0.0, max_speed_kmh
+            for j in range(i-1, -1, -1):
+                if rows[j][2] >= 0 and abs(rows[j][2] - (wide_profile[j] if j < len(wide_profile) else rows[j][2])) <= threshold:
+                    lv = rows[j][2]; lt = rows[j][0] / fps
+                    dt_l = max(times[i] - lt, 1e-3)
+                    lo = max(lo, lv - max_accel_mps2 * dt_l * MPS_TO_KMH)
+                    hi = min(hi, lv + max_accel_mps2 * dt_l * MPS_TO_KMH)
+                    break
+            for j in range(i+1, n):
+                if rows[j][2] >= 0 and abs(rows[j][2] - (wide_profile[j] if j < len(wide_profile) else rows[j][2])) <= threshold:
+                    rv = rows[j][2]; rt = rows[j][0] / fps
+                    dt_r = max(rt - times[i], 1e-3)
+                    lo = max(lo, rv - max_accel_mps2 * dt_r * MPS_TO_KMH)
+                    hi = min(hi, rv + max_accel_mps2 * dt_r * MPS_TO_KMH)
+                    break
+
+            new_val = round(max(lo, min(hi, target)))
             old_val = rows[i][2]
+            if abs(new_val - old_val) < 0.5:
+                continue
             rows[i][2] = int(new_val)
             if notes is not None:
                 notes[i] = f"smooth: {old_val:.0f}→{new_val:.0f}"
             smoothed += 1
             fixed_this_pass += 1
-
         if fixed_this_pass == 0:
             break
-
     return smoothed
 
 
@@ -582,7 +579,7 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
     # adjacent transitions. A smooth curve with slight inaccuracy is better
     # than one with 100 km/h single-frame spikes.
     if not skip_fill and not light_mode:
-        n_smoothed = _smoothness_pass(rows, times, max_speed_kmh, max_accel_mps2, fps, notes)
+        n_smoothed = _smoothness_pass(rows, times, max_speed_kmh, max_accel_mps2, fps, notes, wide_profile)
         if log_fn and n_smoothed > 0:
             log_fn(f"  Stage 5: smoothed {n_smoothed} physically impossible transitions")
 
