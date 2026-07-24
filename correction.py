@@ -421,9 +421,7 @@ def correct_with_trust(rows: list, observations: list, raw_frames: list, ocr: "R
     # ── Stage 1: 识别可疑帧 + 生成候选 ──
     # 可疑帧（剖面偏离/短文本）：完整候选生成
     # 上下文帧（可疑帧附近）：仅原始OCR值作为候选，但参与Viterbi段
-    real_suspect_narrow, context_only = _identify_suspect_frames(rows, observations, median_profile, pinned_set, n, times, max_accel_mps2)
-    real_suspect_wide, _ = _identify_suspect_frames(rows, observations, wide_profile, pinned_set, n, times, max_accel_mps2)
-    real_suspect = sorted(set(real_suspect_narrow) | set(real_suspect_wide))
+    real_suspect, context_only = _identify_suspect_frames(rows, observations, median_profile, pinned_set, n, times, max_accel_mps2)
     suspect_frames = set(real_suspect) | set(context_only)
 
     candidates_by_frame: dict[int, list[float]] = {}
