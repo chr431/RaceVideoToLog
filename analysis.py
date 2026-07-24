@@ -33,11 +33,17 @@ from config import COLOR_BLUE, COLOR_ORANGE, COLOR_GRAY
 def parse_csv(path: str | Path) -> tuple[list[float], list[float], list[float], list[int]]:
     """解析 CSV 文件，返回 (times, dists, speeds, flags)。
 
-    每行格式: timestamp,distance,speed_kmh,flag
+    每行格式: frame_number,distance,speed_kmh,flag
+    第一列是帧号，自动除以 fps 转为秒。
     - 跳过以 # 开头的注释行和空行
     - try/except 保护浮点转换
     - 裁剪起始零速帧，距离和时间归零
     """
+    # Read fps from CSV header for frame→time conversion
+    from ocr_engine import parse_csv_header
+    header = parse_csv_header(str(path))
+    fps = float(header.get("fps", "30"))
+
     times, dists, speeds, flags = [], [], [], []
     with open(str(path), "r", encoding="utf-8-sig") as f:
         for line in f:
@@ -47,7 +53,7 @@ def parse_csv(path: str | Path) -> tuple[list[float], list[float], list[float], 
             parts = line.split(",")
             if len(parts) >= 3:
                 try:
-                    times.append(float(parts[0]))
+                    times.append(float(parts[0]) / fps)  # frame → seconds
                     dists.append(float(parts[1]))
                     speeds.append(float(parts[2]))
                     flags.append(int(parts[3]) if len(parts) > 3 else 0)

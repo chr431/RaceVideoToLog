@@ -404,7 +404,8 @@ class ProcessingPipeline:
                         f", frame_end={self._frame_end or ''}\n")
             fh.write(f"# max_speed={self._max_speed}, max_accel={self._max_accel}"
                         f", div={self._frame_div}, target_h={self._target_h}"
-                        f", pad={self._pad}, buffer={self._buffer_size}\n")
+                        f", pad={self._pad}, buffer={self._buffer_size}"
+                        f", fps={self._fps:.1f}\n")
             fh.write(f"# backend={self._backend_actual}, model={self._ocr_model}")
             reocr_info = f", reocr_model={self._reocr_model}" if self._reocr_model and self._reocr_model != self._ocr_model else ""
             fh.write(f"{reocr_info}\n")
