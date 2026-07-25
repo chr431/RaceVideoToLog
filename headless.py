@@ -10,8 +10,8 @@ from pipeline import ProcessingPipeline
 
 
 def run_headless(args: argparse.Namespace) -> None:
-    logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
     """命令行无头模式：不启动 GUI，直接分析并输出 CSV。"""
+    logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
     if not args.roi:
         print("错误: 命令行模式需要 --roi X1 Y1 X2 Y2")
         sys.exit(1)

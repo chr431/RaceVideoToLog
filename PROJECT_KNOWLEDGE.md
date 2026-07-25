@@ -1,5 +1,9 @@
 # RaceVideoToLog — 项目知识总结
 
+> **⚠️ 注意：本文档部分内容已过时**（如 LCS 5阶段纠错算法、onnxruntime-gpu 依赖、decord 默认解码器等）。
+> 最新架构参见 `.claude/memory/viterbi-v5-architecture.md` 和 `consistency-island-detection.md`。
+> 最后更新：2026-07 针对 v2.5 之前的版本。
+
 ## 项目概述
 
 从赛车视频中 OCR 提取速度数字，输出时间-速度-距离 CSV 文件。

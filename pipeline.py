@@ -19,7 +19,7 @@ from ocr_engine import (
 )
 from config import MPS_TO_KMH
 from error_detection import detect_errors
-from correction import correct_errors, compute_confidence, find_problem_segments
+from correction import correct_errors
 from gpu_setup import get_gpu_backend, get_engine_params, get_engine_type
 
 logger = logging.getLogger("RaceVideoToLog.pipeline")
@@ -108,7 +108,7 @@ class ProcessingPipeline:
     # ═══════════════ 公开接口 ═══════════════
 
     def run_auto(self, output_path: str | Path, reocr_only: bool = True,
-                 skip_fill: bool = False, mode: str = "auto") -> None:
+                 mode: str = "auto") -> None:
         """纠错流水线 → 写 CSV。
 
         mode: \"auto\" → full pipeline + force_smooth
@@ -131,8 +131,7 @@ class ProcessingPipeline:
             self._write_csv(self._rows, Path(output_path))
             self._write_diagnostics(Path(output_path))
         else:
-            self._run_correction(Path(output_path), skip_fill=skip_fill,
-                                reocr_only=reocr_only, mode=mode)
+            self._run_correction(Path(output_path), reocr_only=reocr_only, mode=mode)
             for row in self._rows:
                 if row[2] > self._max_speed:
                     row[2] = -1
@@ -181,7 +180,6 @@ class ProcessingPipeline:
         return self._ocr
 
     def _correct(self, progress_base: float, progress_span: float,
-                    skip_fill: bool,
                     corrections: dict[int, float] | None = None,
                     reocr_only: bool = False, mode: str = "auto") -> None:
         """Two-phase correction: Phase 1 detect, Phase 2 correct."""
@@ -240,10 +238,10 @@ class ProcessingPipeline:
         self.last_output_path = out_path
         return out_path
 
-    def _run_correction(self, output_path: Path, skip_fill: bool, reocr_only: bool = False,
+    def _run_correction(self, output_path: Path, reocr_only: bool = False,
                         mode: str = "auto") -> None:
         """纠错 + 写 CSV（调用 _correct 后继续）。"""
-        self._correct(91.0, 6.0, skip_fill=skip_fill, reocr_only=reocr_only, mode=mode)
+        self._correct(91.0, 6.0, reocr_only=reocr_only, mode=mode)
         if not self._final_check:
             self.finalize(output_path)
 

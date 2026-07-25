@@ -1,11 +1,13 @@
-# RaceVideoToLog v2.5.0
+# RaceVideoToLog v2.6.0
 
-从赛车游戏视频中提取速度数据，生成时间-速度-距离 CSV 文件。使用 decord (NVDEC) 硬件加速视频解码 + TensorRT FP16 OCR 推理，支持 PySide6 Fluent Design GUI 和 CLI 两种界面。
+从赛车游戏视频中提取速度数据，生成时间-速度-距离 CSV 文件。默认使用 cv2 视频解码 + TensorRT FP16 OCR 推理（decord 可选），支持 PySide6 Fluent Design GUI 和 CLI 两种界面。
 
 ## 安装
 
 ```bash
-pip install rapidocr onnxruntime opencv-python-headless numpy matplotlib pyside6 pyside6-fluent-widgets decord
+pip install rapidocr onnxruntime opencv-python-headless numpy matplotlib pyside6 pyside6-fluent-widgets
+# 可选: GPU 视频解码
+pip install decord
 ```
 
 ### GPU 加速（可选）
@@ -91,13 +93,13 @@ RaceVideoToLog/
 CSV 头包含完整处理参数和统计信息：
 
 ```csv
-# RaceVideoToLog v2.5.0
+# RaceVideoToLog v2.6.0
 # video_hash=94ac7e06b58914e7, video=test4.mp4
 # roi=862,945,957,1003, format=km/h, frame_start=114, frame_end=6317
-# max_speed=400.0, max_accel=70.0, div=1, target_h=24.0, pad=0.0, buffer=16
-# backend=TensorRT, model=v6_small
-# stats: total=6203, trusted=4265, corrected=318
-# timing: ocr=23.5s, correction=0.4s, integrate_write=0.0s
+# max_speed=400.0, max_accel=70.0, div=1, target_h=48, pad=0, buffer=16
+# backend=TensorRT, model=v6_tiny, reocr_model=v6_small
+# stats: total=6203, trusted=6091, corrected=111
+# timing: ocr=13.5s, correction=8.5s, total=22.0s
 1.90,0.00,0.00,0
 1.92,0.00,3.00,0
 ```
@@ -110,7 +112,7 @@ CSV 头包含完整处理参数和统计信息：
 | 11 | `Flag.REOCR_AUTO` | re-OCR 自动修正 |
 | 12 | `Flag.FILL_INTERP` | 物理插值填充 |
 | 13 | `Flag.PARTIAL_AUTO` | 部分数字自动修正 |
-| 21 | `Flag.HIGH_TRUST` | LCS 高可信帧 |
+| 21 | `Flag.HIGH_TRUST` | 自动高可信帧 (Viterbi+物理验证) |
 | 22 | `Flag.PINNED` | 用户手动修正（绝对真值） |
 | 23 | `Flag.CONFIRMED_SEG` | 人工确认段 |
 | 30 | `Flag.FLAGGED_REVIEW` | 待人工审核 |
@@ -120,7 +122,7 @@ CSV 头包含完整处理参数和统计信息：
 OCR 读到的数字可能缺失部分位（如 `221` 被识别为 `21`），系统会**自动生成候选**：
 
 - OCR 读到 1-2 位数字时，自动生成所有可能的缺位扩展（如 `"21"` → [21, 121, 221, 321]）
-- 由 LCS（局部一致性评分）自动选择最优候选，不做插值猜测
+- 由 Viterbi 动态规划全局最优路径选择最优候选
 - 人工审核时也可手动输入 `"12x"` 约束候选范围
 
 ## CLI 参数
@@ -134,10 +136,10 @@ python RaceVideoToLog.py [video] [options]
 可选参数:
   --roi X1 Y1 X2 Y2          识别范围
   --format {m/s,km/h,mile/h} 速度单位 (默认: km/h)
-  --div N                    采样间隔 1/N (默认: 2)
+  --div N                    采样间隔 1/N (默认: 1)
   --max-speed N              最大速度 km/h (默认: 400)
   --max-accel N              最大加速度 m/s² (默认: 50)
-  --target-h N               OCR 高度 px (默认: 24)
+  --target-h N               OCR 高度 px (默认: 48)
   --pad N                    边缘填充 px (默认: 0)
   --buffer N                 缓冲队列大小 (默认: 16)
   --backend {auto,tensorrt,cpu}  OCR 后端 (默认: auto)

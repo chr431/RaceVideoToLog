@@ -64,7 +64,7 @@ def evaluate(truth: dict[int, float], result: dict[int, tuple[float, int]]) -> d
 
 
 def run_pipeline(video: str, truth_csv: str, max_speed: float, max_accel: float,
-                 reocr_only: bool = True, skip_fill: bool = False) -> tuple[list, str]:
+                 reocr_only: bool = True, mode: str = "auto") -> tuple[list, str]:
 	settings = parse_csv_header(truth_csv)
 	roi = tuple(int(x) for x in settings["roi"].split(","))
 	div = int(settings.get("div", "1"))
@@ -92,7 +92,7 @@ def run_pipeline(video: str, truth_csv: str, max_speed: float, max_accel: float,
 		speed_format=speed_format, frame_start=frame_start, frame_end=frame_end,
 		progress_cb=progress, log_level="normal",
 	)
-	pipeline.run_auto(output, reocr_only=reocr_only, skip_fill=skip_fill)
+	pipeline.run_auto(output, reocr_only=reocr_only, mode=mode)
 	actual_output = str(pipeline.last_output_path) if pipeline.last_output_path else output
 	return pipeline._rows, actual_output
 
@@ -123,15 +123,16 @@ def main() -> None:
 	else: max_speed, max_accel = 400.0, 50.0
 
 	mode = sys.argv[1] if len(sys.argv) > 1 else "--baseline"
-	skip_fill = "--manual" in sys.argv
+	is_manual = "--manual" in sys.argv
+	run_mode = "manual" if is_manual else "auto"
 
 	if mode == "--baseline":
 		t0 = time.perf_counter()
-		rows, output = run_pipeline(video, truth_csv, max_speed, max_accel, skip_fill=skip_fill)
+		rows, output = run_pipeline(video, truth_csv, max_speed, max_accel, mode=run_mode)
 		elapsed = time.perf_counter() - t0
 		truth = load_truth(truth_csv); result = load_result(output)
 		r = evaluate(truth, result)
-		mode_str = "manual" if skip_fill else "auto"
+		mode_str = run_mode
 		print(f"\n{'='*60}\nVideo: {Path(video).name}  Mode: {mode_str}  ({elapsed:.1f}s)")
 		print_result("Baseline", r)
 		if os.path.exists(output):

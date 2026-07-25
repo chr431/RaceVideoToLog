@@ -1,11 +1,11 @@
 """Correction — Phase 2: error correction based on confidence scores.
 
-Receives per-frame confidence from Phase 1 (ErrorDetection), interprets
-the scores, and applies corrections using Viterbi DP + optional fill/smoothing.
+Receives per-frame confidence from Phase 1 (error_detection), interprets
+the scores, and applies corrections using Viterbi DP + fill + smoothness.
 
-Two modes:
-- Manual: high accuracy, minimal corrections. Only fixes clearly wrong frames.
-- Auto: prioritizes curve smoothness. Wider correction net + fill + smoothing.
+Both modes share the same full pipeline (fill, smoothness, auto-align).
+Auto mode additionally runs _force_sg_smooth — iterative 5-frame median
+filter on ALL frames to minimize max_dv (frame-to-frame speed change).
 """
 from __future__ import annotations
 import logging
@@ -23,9 +23,7 @@ from config import (
     MANUAL_CORRECT_THRESHOLD, AUTO_CORRECT_THRESHOLD,
     AUTO_SMOOTH_CLUSTER_MAX, AUTO_SMOOTH_DEVIATION_MULT,
     VITERBI_SOFT_ANCHOR_CONFIDENCE, CORRECTION_MAX_ROUNDS,
-    LCS_CONFIDENCE_MIN_SCORE, ACCEL_ANOMALY_THRESHOLD,
-    MAX_SUGGESTED_FRAMES, PROBLEM_MIN_SEGMENT_LEN, MAX_PARTIAL_WILDCARDS,
-    VITERBI_MAX_CANDIDATES,
+    MAX_PARTIAL_WILDCARDS, VITERBI_MAX_CANDIDATES,
 )
 
 if TYPE_CHECKING:
@@ -495,9 +493,7 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
     pinned_set = pinned
     cache: dict = reocr_cache if reocr_cache is not None else {}
     correct_threshold = MANUAL_CORRECT_THRESHOLD if mode == "manual" else AUTO_CORRECT_THRESHOLD
-    # Both modes now get fill + smoothness + auto-align.
     # Auto mode additionally gets force_smooth at the end.
-    skip_fill = False
     force_smooth = (mode == "auto")
 
     conf_by_idx: dict[int, float] = {}
@@ -710,25 +706,23 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
                    f"{round_fixed} fixed, {round_trusted} new HT")
         if round_fixed == 0 and round_trusted == 0: break
 
-    if not skip_fill:
-        remaining_errors: set[int] = set()
-        for i in range(n):
-            if i in trusted_set or i in pinned_set or Flag.is_trusted(rows[i][3]): continue
-            if conf_by_idx.get(i, 50) < 30: remaining_errors.add(i)
-        if remaining_errors:
-            for fill_pass in range(FILL_MAX_PASSES):
-                if not remaining_errors: break
-                _fill_unrecoverable(rows, pinned_set, remaining_errors, times,
-                    max_speed_kmh, max_accel_mps2, fps, progress_fn=progress_fn, notes=notes)
-                if log_fn: log_fn(f"  Fill pass {fill_pass+1}: {len(remaining_errors)} frames")
-                remaining_errors = {i for i in range(n)
-                    if i not in trusted_set and i not in pinned_set
-                    and not Flag.is_trusted(rows[i][3]) and conf_by_idx.get(i, 50) < 30}
-        elif log_fn: log_fn("  Fill: no remaining errors")
+    remaining_errors: set[int] = set()
+    for i in range(n):
+        if i in trusted_set or i in pinned_set or Flag.is_trusted(rows[i][3]): continue
+        if conf_by_idx.get(i, 50) < 30: remaining_errors.add(i)
+    if remaining_errors:
+        for fill_pass in range(FILL_MAX_PASSES):
+            if not remaining_errors: break
+            _fill_unrecoverable(rows, pinned_set, remaining_errors, times,
+                max_speed_kmh, max_accel_mps2, fps, progress_fn=progress_fn, notes=notes)
+            if log_fn: log_fn(f"  Fill pass {fill_pass+1}: {len(remaining_errors)} frames")
+            remaining_errors = {i for i in range(n)
+                if i not in trusted_set and i not in pinned_set
+                and not Flag.is_trusted(rows[i][3]) and conf_by_idx.get(i, 50) < 30}
+    elif log_fn: log_fn("  Fill: no remaining errors")
 
-    if not skip_fill:
-        n_smoothed = _smoothness_pass(rows, times, max_speed_kmh, max_accel_mps2, fps, notes)
-        if log_fn and n_smoothed > 0: log_fn(f"  Smoothness: {n_smoothed} spikes smoothed")
+    n_smoothed = _smoothness_pass(rows, times, max_speed_kmh, max_accel_mps2, fps, notes)
+    if log_fn and n_smoothed > 0: log_fn(f"  Smoothness: {n_smoothed} spikes smoothed")
 
     # ── SG-guided alignment (both modes) ──
     n_aligned = _auto_align_pass(rows, observations, times, max_speed_kmh,
@@ -777,37 +771,33 @@ def compute_confidence(rows: list, observations: list, max_speed: float,
     return confidences
 
 
-def find_problem_segments(confidences: list[dict], min_score: float = LCS_CONFIDENCE_MIN_SCORE,
-                          min_segment_len: int = PROBLEM_MIN_SEGMENT_LEN) -> list[dict]:
-    segments = []; i = 0
-    while i < len(confidences):
-        if confidences[i]['score'] < min_score:
-            start = i; reasons = set()
-            while i < len(confidences) and confidences[i]['score'] < min_score:
-                r = confidences[i].get('reason', '')
-                if r and r != '正常': reasons.add(r)
-                i += 1
-            count = i - start
-            if count >= min_segment_len:
-                seg_frames = confidences[start:i]
-                scores = [f['score'] for f in seg_frames]
-                segments.append({'start': start, 'end': i - 1, 'count': count,
-                    'avg_score': round(sum(scores) / len(scores), 1),
-                    'min_score': min(scores),
-                    'reason': ', '.join(sorted(reasons)[:3]) if reasons else '低置信度'})
-        i += 1
-    for seg in segments:
-        suggested = {seg['start'], seg['end'] - 1 if seg['end'] > seg['start'] else seg['start']}
-        seg_frames = confidences[seg['start']:seg['end']]
-        if seg_frames: suggested.add(min(seg_frames, key=lambda f: f['score'])['index'])
-        for fi in range(seg['start'] + 1, seg['end']):
-            if fi > 0 and fi + 1 < len(confidences):
-                v = confidences[fi].get('speed', 0)
-                v_prev = confidences[fi - 1].get('speed', 0)
-                v_next = confidences[fi + 1].get('speed', 0)
-                if v > 0 and v_prev > 0 and abs(v - v_prev) > ACCEL_ANOMALY_THRESHOLD: suggested.add(fi)
-                if v > 0 and v_next > 0 and abs(v_next - v) > ACCEL_ANOMALY_THRESHOLD: suggested.add(fi + 1)
-            if len(suggested) >= MAX_SUGGESTED_FRAMES: break
-        seg['suggested'] = sorted(suggested)
-    segments.sort(key=lambda s: s['avg_score'])
-    return segments
+
+# ═══════════════════ Deprecated backward-compat alias ═══════════════════
+# correct_with_trust was renamed to correct_errors in v2.5.
+# Kept for test compatibility.
+def correct_with_trust(rows, observations, raw_frames, ocr,
+                       max_speed_kmh, max_accel_mps2,
+                       confidence_scores=None, times=None,
+                       pinned=None, reocr_cache=None,
+                       reocr_only=True, split_results=None,
+                       fps=1.0, skip_fill=False, **kwargs):
+    import warnings
+    warnings.warn("correct_with_trust is deprecated, use correct_errors",
+                  DeprecationWarning, stacklevel=2)
+    # Build times + confidence if not provided (backward compat)
+    n = len(rows)
+    if times is None:
+        times = [r[0] / fps for r in rows]
+    if confidence_scores is None:
+        confidence_scores = compute_confidence(rows, observations,
+                                                max_speed_kmh, max_accel_mps2,
+                                                fps=fps)
+    mode = "manual" if skip_fill else "auto"
+    result_rows, result_conf = correct_errors(
+        rows, observations, raw_frames, ocr,
+        confidence_scores, times,
+        max_speed_kmh, max_accel_mps2,
+        mode=mode, pinned=pinned,
+        reocr_cache=reocr_cache, reocr_only=reocr_only,
+        split_results=split_results, fps=fps)
+    return result_rows

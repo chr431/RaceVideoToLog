@@ -1,7 +1,7 @@
 """OCR engine for RaceVideoToLog.
 
-SpeedObservation, preprocessing, correction algorithms,
-model configuration, and supporting utilities.
+SpeedObservation, preprocessing, LCS scoring, Flag enum,
+candidate generation, SG filtering, and OCR/parsing utilities.
 """
 from __future__ import annotations
 import logging
@@ -14,8 +14,7 @@ import numpy as np
 
 import config
 from config import (MPS_TO_KMH, SOURCE_TO_KMH,
-    LCS_TIME_WINDOW, LCS_TAU, LCS_HIGH_WEIGHT,
-    LCS_ERROR_LOW, LCS_TRUST_HIGH)
+    LCS_TIME_WINDOW, LCS_TAU, LCS_HIGH_WEIGHT)
 
 # Lazy matplotlib font config (no import-time side effects)
 _matplotlib_configured = False
@@ -46,7 +45,6 @@ __all__ = [
     "normalize_ocr_text", "format_duration", "codec_from_fourcc",
     "safe_int", "safe_float", "SOURCE_TO_KMH", "OCR_NUMBER_RE",
     "compute_video_hash",
-    "compute_lcs_scores", "compute_lcs_scores_lr", "lcs_detect_errors",
     "_lcs_score_for_value", "_lcs_score_lr",
     "_reset_backend", "_select_backend", "_get_model_params",
     "_CancelExport",
@@ -64,7 +62,7 @@ class Flag:
         REOCR_AUTO (11)   — 重 OCR 自动修正
         FILL_INTERP (12)  — 物理插值填充
         PARTIAL_AUTO (13) — 部分数字模式推断修正
-        HIGH_TRUST (21)   — LCS 评分 >=0.7，自动识别为高可信
+        HIGH_TRUST (21)   — Viterbi+物理验证，自动高可信帧
         PINNED (22)       — 用户手动修正，绝对真值
         CONFIRMED_SEG (23)— 用户确认的段内帧
     """
@@ -75,10 +73,6 @@ class Flag:
     HIGH_TRUST: int = 21
     PINNED: int = 22
     CONFIRMED_SEG: int = 23
-
-    # Backward-compat aliases
-    ANCHOR_AUTO: int = 21
-    ANCHOR_MANUAL: int = 22
 
     @classmethod
     def is_corrected(cls, flag: int) -> bool:
@@ -585,62 +579,6 @@ def _lcs_score_for_value(i: int, v: float, rows: list, times: list[float],
     left, right = _lcs_score_lr(i, v, rows, times, max_speed_kmh, max_accel_mps2,
                                     time_window, tau, high_weight)
     return (left + right) / 2.0
-
-
-def compute_lcs_scores(rows: list, max_speed_kmh: float,
-                        max_accel_mps2: float, time_window: float = LCS_TIME_WINDOW,
-                        pinned: set[int] | None = None,
-                        fps: float = 1.0) -> list[float]:
-    """局部一致性评分（合并分数）— 向后兼容。"""
-    n = len(rows)
-    scores = [0.0] * n
-    times = [r[0] / fps for r in rows]
-    for i in range(n):
-        scores[i] = _lcs_score_for_value(i, rows[i][2], rows, times,
-                                            max_speed_kmh, max_accel_mps2,
-                                            time_window=time_window,
-                                            high_weight=pinned)
-    return scores
-
-
-def compute_lcs_scores_lr(rows: list, max_speed_kmh: float,
-                            max_accel_mps2: float, time_window: float = LCS_TIME_WINDOW,
-                            pinned: set[int] | None = None,
-                            fps: float = 1.0) -> tuple[list[float], list[float]]:
-    """局部一致性评分（左右分侧）。
-
-    Returns: (left_scores, right_scores)
-    - 单侧无邻居时默认 1.0
-    """
-    n = len(rows)
-    left_scores = [0.0] * n
-    right_scores = [0.0] * n
-    times = [r[0] / fps for r in rows]
-    for i in range(n):
-        left_scores[i], right_scores[i] = _lcs_score_lr(
-            i, rows[i][2], rows, times, max_speed_kmh, max_accel_mps2,
-            time_window=time_window, high_weight=pinned)
-    return left_scores, right_scores
-
-
-def lcs_detect_errors(scores_l: list[float], scores_r: list[float],
-                        low: float = LCS_ERROR_LOW,
-                        borderline: float = LCS_TRUST_HIGH) -> tuple[set[int], set[int]]:
-    """根据 LCS 左右分侧分数将帧分为错误集和存疑集。
-
-    - error:  左或右任一侧 < low（单侧不一致即触发）
-    - borderline: 非 error 但左或右任一侧 < borderline
-    - 仅两侧均 >= borderline 才被视为可信
-    """
-    error_set: set[int] = set()
-    borderline_set: set[int] = set()
-    for i in range(len(scores_l)):
-        sl, sr = scores_l[i], scores_r[i]
-        if sl < low or sr < low:
-            error_set.add(i)
-        elif sl < borderline or sr < borderline:
-            borderline_set.add(i)
-    return error_set, borderline_set
 
 
 class _CancelExport(Exception):

@@ -57,16 +57,11 @@ def set_gpu_backend(backend: str) -> None:
     global _gpu_backend
     _gpu_backend = backend
 
-# ═══════════════════ LCS 局部一致性评分 ═══════════════════
+# ═══════════════════ LCS 评分（GUI 人工修正 + 内部校验）═══════════════════
 LCS_TIME_WINDOW: float = 0.5         # 时间窗 (秒)
 LCS_TAU: float = 0.06                 # 指数衰减常数 exp(-dt/tau)
 LCS_HIGH_WEIGHT: float = 3.0         # pinned 帧权重倍率
-LCS_ERROR_LOW: float = 0.3           # detect: < this = error
-LCS_TRUST_HIGH: float = 0.75         # error/borderline 分界 & HIGH_TRUST 标记阈值
 LCS_WARNING_THRESHOLD: float = 0.5   # 人工修正加速度警告阈值
-LCS_CONFIDENCE_MIN_SCORE: float = 30.0  # find_problem_segments 默认 min_score
-LCS_INTERP_WEIGHT: float = 0.25        # 插值接近度权重 (加性)
-LCS_NOVELTY_WEIGHT: float = 0.10       # 新颖性权重（非原始OCR加分）
 
 # ═══════════════════ 错误检测：多信号置信度评分 ═══════════════════
 ERROR_DETECT_OCR_CONF_WEIGHT: float = 0.01   # OCR 模型内部置信度（几乎不可靠）
@@ -93,11 +88,6 @@ CORRECTION_MIN_DIFF: float = 0.5
 AUTO_SMOOTH_CLUSTER_MAX: int = 5
 AUTO_SMOOTH_DEVIATION_MULT: float = 5.0
 REOCR_HEIGHTS: tuple = (24, 32, 48)
-
-# ═══════════════════ 问题段检测参数 ═══════════════════
-ACCEL_ANOMALY_THRESHOLD: float = 10.0  # 邻帧加速度异常阈值 (km/h)
-MAX_SUGGESTED_FRAMES: int = 8          # 每个问题段最多建议帧数
-PROBLEM_MIN_SEGMENT_LEN: int = 3       # 问题段最小连续帧数
 
 # ═══════════════════ 部分数字扩展参数 ═══════════════════
 MAX_PARTIAL_WILDCARDS: int = 2         # expand_partial 最大通配符数
