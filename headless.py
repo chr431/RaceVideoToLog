@@ -63,7 +63,7 @@ def run_headless(args: argparse.Namespace) -> None:
 
     t0 = time.perf_counter()
     try:
-        pipeline.run_auto(output_path)
+        pipeline.run_auto(output_path, mode=getattr(args, 'mode', 'auto'))
     except Exception as e:
         print(f"\n错误: {e}")
         sys.exit(1)

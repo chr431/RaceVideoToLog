@@ -103,10 +103,10 @@ class _ExportThread(QThread):
                     video_backend=self._video_backend,
                 )
                 if mode == "auto":
-                    pipeline.run_auto(self._output_path)
+                    pipeline.run_auto(self._output_path, mode="auto")
                     result_container["mode"] = "auto"
                 else:
-                    pipeline.run_auto(self._output_path, reocr_only=True, skip_fill=True)
+                    pipeline.run_auto(self._output_path, mode="manual")
                     result_container["mode"] = "review"
                 self.app._pipeline = pipeline
                 self.app._review_output_path = self._output_path

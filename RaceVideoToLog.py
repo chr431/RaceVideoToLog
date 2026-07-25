@@ -52,6 +52,8 @@ def main() -> None:
     parser.add_argument("--frame-end", type=int, metavar="N")
     parser.add_argument("--log-level", choices=["normal","detailed","debug"],
         default=config.DEFAULT_LOG_LEVEL, help="日志级别 (默认 normal)")
+    parser.add_argument("--mode", choices=["auto","manual"], default="auto",
+        help="纠错模式 (默认 auto)")
     parser.add_argument("--from-csv", type=str, metavar="PATH",
         help="从已有 CSV 文件头导入设置（可被显式参数覆盖）")
     args = parser.parse_args()

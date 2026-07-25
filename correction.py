@@ -406,6 +406,76 @@ def _auto_align_pass(rows: list, observations: list, times: list,
     return corrected
 
 
+# ═══════════════════ Force-SG smoothing (auto-mode final pass) ═══════════════════
+
+def _force_sg_smooth(rows: list, times: list, max_speed_kmh: float,
+                     max_accel_mps2: float, fps: float = 1.0,
+                     notes: dict[int, str] | None = None) -> int:
+    """Auto mode only: aggressive median-filter smoothing on ALL frames
+    regardless of flags. Goal is to minimize max_dv (frame-to-frame
+    speed change), not to match truth values.
+
+    Uses iterative 5-frame sliding median: if the center value deviates
+    from the local median by more than max_dv_per_frame * 1.2, it gets
+    replaced by the median (acceleration-clamped)."""
+    n = len(rows)
+    if n < 5:
+        return 0
+    max_dv_per_frame = max_accel_mps2 * (times[1] - times[0]) * MPS_TO_KMH if n >= 2 else 4.0
+    threshold = max_dv_per_frame * 1.2
+    total_smoothed = 0
+
+    for _pass in range(15):
+        changed = 0
+        for i in range(2, n - 2):
+            v = rows[i][2]
+            if v < 0:
+                continue
+            # 5-frame median
+            neighbors = [rows[j][2] for j in range(i - 2, i + 3) if rows[j][2] >= 0]
+            if len(neighbors) < 3:
+                continue
+            neighbors.sort()
+            median = neighbors[len(neighbors) // 2]
+
+            if abs(v - median) < 0.5:
+                continue
+
+            # Only nudge if beyond threshold, toward median
+            diff = median - v
+            if abs(diff) <= threshold:
+                continue
+
+            # Acceleration clamp
+            lo, hi = 0.0, max_speed_kmh
+            if i > 0 and rows[i - 1][2] >= 0:
+                dt_left = max(times[i] - times[i - 1], 1e-3)
+                dv_limit = max_accel_mps2 * dt_left * MPS_TO_KMH
+                lo = max(lo, rows[i - 1][2] - dv_limit)
+                hi = min(hi, rows[i - 1][2] + dv_limit)
+            if i < n - 1 and rows[i + 1][2] >= 0:
+                dt_right = max(times[i + 1] - times[i], 1e-3)
+                dv_limit = max_accel_mps2 * dt_right * MPS_TO_KMH
+                lo = max(lo, rows[i + 1][2] - dv_limit)
+                hi = min(hi, rows[i + 1][2] + dv_limit)
+
+            target = v + diff * 0.7  # Partial nudge (70%)
+            new_val = round(max(lo, min(hi, target)))
+            if abs(new_val - v) < 1:
+                continue
+
+            rows[i][2] = int(new_val)
+            if notes is not None:
+                notes[i] = (notes.get(i, '') + f" forceSG: {v:.0f}→{new_val:.0f}").strip()
+            changed += 1
+
+        total_smoothed += changed
+        if changed == 0:
+            break
+
+    return total_smoothed
+
+
 # ═══════════════════ Main correction pipeline ═══════════════════
 
 def correct_errors(rows: list, observations: list, raw_frames: list,
@@ -425,7 +495,10 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
     pinned_set = pinned
     cache: dict = reocr_cache if reocr_cache is not None else {}
     correct_threshold = MANUAL_CORRECT_THRESHOLD if mode == "manual" else AUTO_CORRECT_THRESHOLD
-    skip_fill = (mode == "manual")
+    # Both modes now get fill + smoothness + auto-align.
+    # Auto mode additionally gets force_smooth at the end.
+    skip_fill = False
+    force_smooth = (mode == "auto")
 
     conf_by_idx: dict[int, float] = {}
     for c in confidence_scores: conf_by_idx[c['index']] = c['score']
@@ -657,15 +730,19 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
         n_smoothed = _smoothness_pass(rows, times, max_speed_kmh, max_accel_mps2, fps, notes)
         if log_fn and n_smoothed > 0: log_fn(f"  Smoothness: {n_smoothed} spikes smoothed")
 
-    # ── Auto mode: gentle SG-guided alignment ──
-    # For frames with moderate SG deviation, nudge toward local
-    # interpolation to fix systematic small OCR errors (5-15 km/h).
-    # Manual mode skips this — it's designed to be conservative.
-    if mode == "auto":
-        n_aligned = _auto_align_pass(rows, observations, times, max_speed_kmh,
-                                     max_accel_mps2, fps, confidence_scores, notes)
-        if log_fn and n_aligned > 0:
-            log_fn(f"  Auto-align: {n_aligned} frames nudged")
+    # ── SG-guided alignment (both modes) ──
+    n_aligned = _auto_align_pass(rows, observations, times, max_speed_kmh,
+                                 max_accel_mps2, fps, confidence_scores, notes)
+    if log_fn and n_aligned > 0:
+        log_fn(f"  Auto-align: {n_aligned} frames nudged")
+
+    # ── Auto mode only: forced SG smoothing ──
+    # Ignores all flags, applies aggressive median-filter smoothing
+    # to minimize max_dv (frame-to-frame speed change).
+    if force_smooth:
+        n_forced = _force_sg_smooth(rows, times, max_speed_kmh, max_accel_mps2, fps, notes)
+        if log_fn and n_forced > 0:
+            log_fn(f"  Force-SG: {n_forced} frame-nudges applied")
 
     for c in confidence_scores:
         i = c['index']
