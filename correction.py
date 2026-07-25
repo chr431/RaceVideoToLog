@@ -411,12 +411,15 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
         total_c = sum(len(c) for c in candidates_by_frame.values())
         log_fn(f"  Candidates: {n_with} frames ({n_cheap} cheap), {total_c} total")
 
-    # Build reference values for island-interior frames (confidence < 65).
-    # Uses interpolation as zero-cost reference so Viterbi prefers it over wrong raw.
+    # Auto mode: build reference values for ALL non-trusted frames.
+    # Makes Viterbi prefer physics-based interpolation, catching more
+    # errors at the cost of potentially small over-corrections.
+    # Manual mode: only for very low confidence (conservative).
     reference_values: dict[int, float] = {}
     for i in range(n):
         if i in pinned_set or Flag.is_trusted(rows[i][3]): continue
-        if conf_by_idx.get(i, 50) < 65:
+        # Auto mode: all non-trusted frames. Manual mode: only < 40
+        if mode == "auto" or conf_by_idx.get(i, 50) < 40:
             ref = _local_interp(i, rows, observations, times, max_speed_kmh, fps=fps)
             if ref is None:
                 ref = _interp_candidate(i, rows, pinned_set, times, max_speed_kmh, fps=fps)
