@@ -1,180 +1,106 @@
-## v2.5.0 更新日志
+# Release Notes
 
-### 🚀 TensorRT FP16 推理引擎
+## v2.6.0 (2026-07-25)
 
-- **TensorRT 10.x 替代 ONNX CUDA**：v6_tiny 纯推理 850fps（+59% vs ONNX 534fps），v6_small 393fps（+58%）
-- **自动回退 CPU**：无 GPU 环境自动使用 ONNX Runtime CPU 推理（v6_tiny ~394fps）
-- **首次构建引擎**：~3 分钟（缓存为 `.engine` 文件，后续秒加载）
-- **PATH + 注册表扫描**：自动发现 CUDA/TensorRT DLL，支持未注销重登的会话
-- GUI / CLI 后端选项：TensorRT / 自动 / CPU
+### 核心变更：两阶段 Viterbi 纠错架构
 
-### 🎬 decord NVDEC 硬件加速视频解码
+完全重写纠错系统，从 LCS 局部一致性评分 5 阶段流水线替换为两阶段 Viterbi 动态规划：
 
-- decord 替代 cv2.VideoCapture，纯解码 +54-64%（HEVC 752fps / H264 767fps）
-- 解决 DLL 冲突（ORT 先 → decord 后导入顺序）
-- cv2 CPU 自动回退（无 GPU 时）
+**Phase 1 — 错误检测** (`error_detection.py`，新文件)
+- 只读：不修改任何值或 flag
+- 7 个信号连续置信度评分 [0,100]：ocr_conf、physics、linearity、reocr_agree、text_len、accel_spike、sg_dev
+- 加速度尖峰对检测识别一致性孤岛边界
+- SG 中值滤波偏离度检测孤岛内部（全局趋势不一致但局部物理自洽）
 
-### ⚡ 性能总览 (RTX 4060, v6_tiny)
+**Phase 2 — 错误纠正** (`correction.py`，重写)
+- Viterbi DP 全局最优路径选择 (`viterbi.py`，新文件)：在每帧候选集上联合优化，不再依赖邻居当前值
+- 观测代价（偏离参考值）+ 转移代价（加速度超标平方惩罚）
+- 多轮 Viterbi + Fill + Smoothness + Auto-align + Force-SG 六段式后处理
 
-| 指标 | v2.4 (ONNX GPU) | v2.5 (TRT FP16) | 提升 |
-| --- | --- | --- | --- |
-| 纯推理 | 534 fps | **850 fps** | +59% |
-| 管线 OCR 阶段 | 7.6s | **6.6s** | -13% |
-| 管线总计 | 19.3s | **15.5s** | -20% |
-| EXE 体积 | 637 MB | 443 MB | **-30%** |
+旧函数 `correct_with_trust` 保留为 deprecated wrapper，`_detect_errors` 和 `find_problem_segments` 已移除。
 
-### 📦 依赖变更
+### 一致性孤岛修正
 
-- **保留**：rapidocr 3.9.1, onnxruntime (CPU), opencv, PySide6, matplotlib
-- **新增**：decord（视频解码）
-- **可选 GPU**：tensorrt 10.x + cuda-python + CUDA Toolkit 12.x
-- **移除**：onnxruntime-gpu（ORT CUDA provider 不再需要）
+针对连续多帧 OCR 同向误读的"一致性孤岛"问题：
+- **远距离插值**：当局部邻居也在孤岛内时，跳过 30 帧寻找外部正确锚点
+- **候选值过滤**：内部一致的 3 位数字帧移除相差 ≥100 的百位变体（防止 168→68 误修）
+- **孤岛轮次限制**：孤岛候选存在时 Viterbi 限 1 轮（防止 r1 修正→r2 回退）
+- **参考值保护**：physics≥90 + linearity≥90 + sg_dev≥80 的帧跳过插值参考值
 
-### 🧹 架构清理
+### 模式重构
 
-- 移除 ONNX CUDA 后端（auto 回退链：TensorRT → CPU）
-- `_register_gpu_dlls()`：PATH 扫描 + 注册表补充，无硬编码路径
-- 取消按钮正常工作（Pipeline 添加 cancel_check 回调）
-- 修复信号泄漏（重导出时旧线程信号覆盖新线程）
-- GUI 死代码清理（_debug_log, debug_cb, _log）
-- 全面更新文档、docstring、README
+| 特性 | v2.5 手动 | v2.6 手动 | v2.6 自动 |
+|------|----------|----------|----------|
+| 纠错管线 | 仅 re-OCR | 完整管线 | 完整管线 |
+| Force-SG 平滑 | — | — | ✅ |
+| 目标 | 保守 | 匹配真值 | 最小化 max_dv |
 
----
+- 手动模式从仅重 OCR 升级为完整管线（fill + smoothness + auto-align）
+- 自动模式新增 Force-SG：5 帧滑动中值滤波，无视 flag，迭代平滑至收敛
+- CLI 新增 `--mode {auto,manual}` 参数
 
-## v2.4.0 更新日志
+### 准确率改进（vs ground truth）
 
-### 🚀 双模型流水线
+| 指标 | test.mp4 v2.5 | test.mp4 v2.6 自动 | test4.mp4 v2.5 | test4.mp4 v2.6 自动 |
+|------|-------------|-------------------|---------------|-------------------|
+| Correct (d≤2) | 99.1% | **99.6%** | 99.1% | **99.0%** |
+| Severe (d≥5) | 31 | **1** | 48 | **24** |
+| Severe (d≥20) | 18 | **1** | ~25 | **5** |
+| RealMax | ~100 | 100 (边界帧) | ~200 | **55** |
 
-- **主 OCR + 重 OCR 模型独立选择**：GUI 和 CLI 均支持分别指定主 OCR 模型（首次识别）和重 OCR 模型（纠错阶段）
-- **默认组合 v6_tiny + v6_small**：tiny 主 OCR 快 42%，small 重 OCR 保证纠错质量，整体提速 28%，99.6% 帧与全程 small 完全一致（平均差异 0.022 km/h）
-- CLI 新增 `--reocr-model` 参数，GUI 新增重 OCR ComboBox
+### 可配置视频解码器
 
-### 🧠 纠错算法增强
+- 新增 `--video-backend {cv2,decord}` CLI/GUI 选项
+- 默认 cv2（兼容性好、内存低），decord 可选（NVDEC 硬件加速，~2.6GB 显存）
+- CSV 头写入 `video_backend` 字段
+- `--from-csv` 支持导入 video_backend 设置
 
-- **短暂偏离检测器** (`_detect_brief_excursion`)：捕获"下探又弹回"模式（如 219→212→219），解决此类偏离在物理容限内但实为 OCR 误读的问题
-- **卡值检测器** (`_detect_stuck_value`)：检测连续 ≥3 帧完全相同但上下文在变化的模式（OCR 重复输出同一错误值）
-- **投票制错误检测**：从"首个命中即退出"升级为 8 种检测器全部投票（≥2 票确定错误，1 票 + 锚点稀疏 >30 帧 = 错误），减少假阳性
-- **动态评分权重**：候选评分权重根据到最近锚点的距离动态调整——锚点密集区锚点权重主导 (~0.5)，稀疏区邻居/平滑权重上升
-- **时间缩放 anchor_score 阈值**：从固定 `max_accel * 3.6`（如 252 km/h）改为 `max_accel * time_to_anchor * 3.6 * 3`，近锚点处（1 帧约 13 km/h）更严格
-- **最低分数阈值**：候选分必须 >0.3 才接受修正，防止低置信度修正引发连锁漂移
+### 日志与调试
 
-### 🎯 锚点选择改进
+- 新增 `--log-level {normal,detailed,debug}` CLI/GUI 选项
+- normal 级别仅输出主 CSV
+- detailed/debug 额外输出 `_stage_report.csv`（逐帧 7 信号）+ `_summary.json`
+- debug 额外输出 `_diagnostics.csv`
 
-- **宽窗口一致性检查**（新增第 4 阶段）：±30 帧中位数偏离 >20 km/h 的锚点被剔除，解决局部验证无法检测的"多步渐进漂移"（如 216→117 在 0.12s 内累计 99 km/h 但每步都在容限内）
-- **图连通性验证**（第 5 阶段）：替换逐点加速度验证，DFS 找最大连通分量，保留物理自洽的锚点集合
-- 锚点选择从 4 阶段升级为 5 阶段
+### Bug 修复
 
-### 🔧 重 OCR 策略优化
+- **最终检查无图像**：`_raw_frames` 在 `finalize()` 中过早清空 → 延迟到 GUI `_finish_export()` 清空
+- **Re-OCR 失效**：`_raw_frames = {}` 破坏候选生成 → 恢复列表传递
+- **诊断文件帧号错位**：使用顺序索引而非实际帧号 → 存储实际帧号
+- **decord 内存泄漏**：VR 对象缓存所有解码帧 → OCR 完成后显式释放
 
-- 重 OCR 高度从 h=24 改为 **h=32**（与主 OCR h=24 不同，约 10% 概率产生不同读数）
-- 基准测试验证：h=24 重 OCR 与主 OCR **永远产生相同值**（0/309 帧差异），纯属无效开销
-- 完整 fallback 链（OTSU/CLAHE/反转/use_det=False × 多高度）24.8x 更慢，仅多覆盖 9.7% 错误帧——已确认不值得
+### 命名重构
 
-### 🧹 代码清理
+旧名（基于实现）→ 新名（基于功能）：
+- `LCS_TIME_WINDOW` → `CONSISTENCY_TIME_WINDOW`
+- `LCS_TAU` → `CONSISTENCY_DECAY_TAU`
+- `LCS_HIGH_WEIGHT` → `CONSISTENCY_PINNED_WEIGHT`
+- `LCS_WARNING_THRESHOLD` → `MANUAL_EDIT_ACCEL_WARNING`
+- `_lcs_score_for_value` → `_neighbor_consistency_score`
+- `VITERBI_SOFT_ANCHOR_CONFIDENCE` → `VITERBI_TRUSTED_BOUNDARY_CONFIDENCE`
+- `Flag.ANCHOR_AUTO` / `Flag.ANCHOR_MANUAL` → 已移除
+- GUI 设置键 `manual_anchor`/`auto_anchor` 保留向后兼容
 
-- **config.py** 精简 60%：移除 50+ 行从未被导入的常量（检测器阈值、评分权重、置信度参数——均硬编码在对应模块中）
-- 移除死代码：`ocr_digital_fallback`、`_estimate_raw_trust`、`_gpu_backend`/`_gpu_patched`/`_sync_gpu_backend` 兼容桥接
-- 移除死导入：gui.py（csv, traceback, SpeedObservation, _oe）、pipeline.py（_oe）、ocr_engine.py（os）
-- 版本号统一 v2.3.0 → v2.4.0
+### 死代码清理
 
-### 📄 文档
+移除：`compute_lcs_scores`、`compute_lcs_scores_lr`、`lcs_detect_errors`、`find_problem_segments`、`LCS_ERROR_LOW`、`LCS_TRUST_HIGH`、`LCS_INTERP_WEIGHT`、`LCS_NOVELTY_WEIGHT`、`LCS_CONFIDENCE_MIN_SCORE`、`ACCEL_ANOMALY_THRESHOLD`、`MAX_SUGGESTED_FRAMES`、`PROBLEM_MIN_SEGMENT_LEN`、`skip_fill` 参数链路
 
-- `PROJECT_KNOWLEDGE.md` 彻底重写：当前架构、ProcessingPipeline 双模式、8 检测器、5 阶段锚点选择、双模型策略验证数据
-- README 默认模型和 CLI 参数更新
+### 文档
 
----
-
-## v2.3.0 更新日志
-
-### 🔧 依赖升级
-
-- **onnxruntime-gpu** 1.26 → 1.27：CUDA 12.x 原生构建，修复多线程 cuDNN 冲突
-- 移除冗余 `onnxruntime` CPU-only 包（`onnxruntime-gpu` 已内置 CPU 推理）
-- 移除未使用依赖 `easyocr`、`torch`、`scipy`、`pandas` 等，venv 缩减 ~54%
-
-### 🧹 代码结构优化
-
-- **`widget_utils.py`** — 提取共享 GUI 组件（`make_static_card`、`setup_chart_zoom_pan`），消除 3 个文件间 ~80 行重复代码
-- **`Flag` 枚举** (`ocr_engine.Flag`) — 统一管理 flag 常量（RAW=0, REOCR_AUTO=11 等），附带 `is_corrected()` / `is_anchor()` 方法，消除散布的魔法数字
-- **Wildcard import 清理** — `gui.py` 中 `from ocr_engine import *` 替换为显式导入
-- **`_reocr_cache` 生命周期** — 从模块级全局变量绑定到 Pipeline 实例
-- **ROI 拖拽重绘节流** — 16ms 单次定时器避免高频鼠标事件过度重绘
-
-### ⚡ 性能优化
-
-- **Savitzky-Golay 滤波**：逐点 lstsq (O(N×W³)) → 预计算卷积系数 + `np.convolve` (O(N))，10-100x 加速
-- **`_reocr_cache` 键值**：`hash(tobytes())` 完整数组拷贝 → `hash(data[:256])`
-
-### 📊 调试与可观测性
-
-- **日志系统**：`print()` → `logging` 模块，静默异常全部补充日志
-- **CSV 统计行**：`# stats: total=N, anchors=M, corrected=K`
-- **CSV 计时行**：`# timing: ocr=Xs, correction=Ys, ...`
-- **Pipeline 阶段计时**：各阶段耗时自动记录，CLI 输出详细分解
-- **CUDA v13 路径扫描**：`_register_gpu_dlls()` 新增 v13.x 检测
-
-### 📦 构建优化
-
-- TensorRT EP 代码移除（PP-OCRv6_small 上无加速效果）
-- Qt6 未用模块排除（Quick/Qml/Pdf/Network 等，-60MB）
-- ORT 非推理子目录排除（transformers/tools/quantization，-4MB）
-- 最终构建：~567 MB (onedir)
+- README 重写为用户文档（安装→用法→输出→参数）
+- PROJECT_KNOWLEDGE 重写为开发知识库（架构→算法→性能→已知局限→历史演进）
+- 记忆库新增 `viterbi-v5-architecture.md` 和 `consistency-island-detection.md`
 
 ---
 
-## v2.2.0 更新日志
+## v2.5.0
 
-### 🧠 自动部分数字推断
+### 初始版本
 
-OCR 经常漏读或误读个别数字位（如 221 被识别为 21），现在系统会**自动推断**缺失位置：
-
-- 根据邻居帧插值速度与 OCR 原始文本，自动生成部分数字模式（如 OCR 读到 "21"、邻居约 221 → 自动推断 "x21"）
-- 候选值优先于 re-OCR 和混淆候选，但不独占，最终由评分函数选择最优值
-- 新增 `_infer_partial_pattern()` 函数，支持插入缺失位和替换误读位两种模式
-- Flag 13 标记自动部分数字修正
-
-### 📊 人工审核窗口改进
-
-- **图表缩放与平移**：滚轮缩放 + 右键拖拽平移，与数据分析 Tab 交互一致
-- **散点图**：替换折线图为散点图，当前段橙色高亮 + 背景色块，已确认段绿色，问题段红色
-- **布局稳定**：matplotlib `layout='none'` 消除画布尺寸乒乓效应，拖拽增加 40ms 节流
-- **图像预览优化**：识别区域预览不再被压扁，比例更贴近实际裁剪区域
-
-### 📄 CSV 头格式优化
-
-- **按语义分行**：时空范围 → 处理参数 → 推理引擎 → 纠错模式
-- **`parse_csv_header()`** 改用正则解析，兼容逗号空格和纯逗号两种分隔符，正确处理 ROI 值和空值
-- **向后兼容**：旧格式 CSV 也能完整解析（`test4_truth.csv` 从 2 个 key 提升到 14 个）
-- 修复 `auto_anchor` 标签在 `max_speed<=0` 和 review 无问题段时的遗漏
-
-### 🐛 Bug 修复
-
-- **导入设置按钮变量复用**："导入视频"和"导入设置"按钮共用一个变量名，分别改为 `_import_video_btn` 和 `_import_settings_btn`
-- **Radio button 信号**：`clicked` → `toggled`，解决 `setChecked()` 不触发模式切换的问题
-- **ROI 导入后预览不刷新**：添加 `_redraw()` 调用
-- **`_fix_errors` 重复计算**：提升 `interp_cand` 和 `reocr_set` 到循环顶部，消除重复 re-OCR 调用
-- **锚点加速度验证**：改为对比任意有效速度帧，不再仅限于锚点之间
-
-### ⚡ 性能优化
-
-- QThread → 原生 `threading.Thread`，消除 CUDA ONNX 推理的 4.6x 性能损失
-- 初次 OCR 使用纯 BGR resize（无灰度转换、无 OTSU 二值化）
-- 移除 digital fallback 和 re-OCR OTSU/CLAHE 变体
-- 解码 + OCR 合并为单流水线循环，生产者解码预处理，消费者推理
-
-### 📋 Flag 系统
-
-| Flag | 含义 |
-| ---- | ---- |
-| 0    | 原始 OCR |
-| 11   | re-OCR 自动修正 |
-| 12   | 插值填充 |
-| 13   | 部分数字自动修正 |
-| 21   | 自动锚点帧 |
-| 22   | 人工修正帧 |
-| 23   | 人工确认段 |
-| 30   | 待人工审核 |
-
----
-
-🔗 [完整提交历史](https://github.com/chr431/RaceVideoToLog/compare/v2.1.0...v2.2.0)
+- LCS 局部一致性评分 5 阶段纠错流水线
+- 中值滤波参考剖面验证一致性孤岛检测
+- TensorRT + ONNX Runtime 双后端
+- PySide6 Fluent Design GUI + CLI 无头模式
+- decord NVDEC 硬件解码（默认）
+- 人工审核对话框：问题段列表 + 部分数字通配符输入 `12x`
+- PP-OCRv6 tiny/small 双模型策略
