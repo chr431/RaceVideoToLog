@@ -354,42 +354,22 @@ class ReviewDialog(QDialog):
         self._canvas.draw_idle()
 
     def _low_confidence_regions(self) -> list[tuple[int, int]]:
-        """推导需审核区域。
-
-        auto 模式：仅中值剖面偏离（最可疑的极少数帧）。
-        full 模式：中值偏离 + LCS 低分 + 被修正帧。
-        """
+        """Use Phase 1 multi-signal confidence scores (inc. accel spikes)."""
         n = len(self._rows)
         if n < 5:
             return []
-
-        speeds = np.array([r[2] for r in self._rows], dtype=float)
-        half = 7
-        median_profile = np.zeros(n, dtype=float)
-        for i in range(n):
-            lo = max(0, i - half)
-            hi = min(n, i + half + 1)
-            median_profile[i] = float(np.median(speeds[lo:hi]))
-
-        use_all = (self._review_scope != "auto")
         regions = []
         i = 0
         while i < n:
-            v = speeds[i]
-            ref = median_profile[i]
-            profile_bad = (ref > 0 and (v < 0 or abs(v - ref) > max(4.0, ref * 0.02)))
             c = self._confidences[i] if i < len(self._confidences) else {}
-            lcs_bad = c.get("score", 100) < 30
+            score = c.get("score", 100)
             corrected = c.get("is_corrected", False)
-            is_suspect = profile_bad or (use_all and (lcs_bad or corrected))
-
+            is_suspect = score < 70 or corrected
             if is_suspect:
                 start = i
                 while i < n:
-                    v2 = speeds[i]; ref2 = median_profile[i]
-                    p2 = (ref2 > 0 and (v2 < 0 or abs(v2 - ref2) > max(4.0, ref2 * 0.02)))
                     c2 = self._confidences[i] if i < len(self._confidences) else {}
-                    if not (p2 or (use_all and (c2.get("score", 100) < 30 or c2.get("is_corrected", False)))):
+                    if not (c2.get("score", 100) < 70 or c2.get("is_corrected", False)):
                         break
                     i += 1
                 regions.append((start, i - 1))

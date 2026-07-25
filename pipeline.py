@@ -96,11 +96,15 @@ class ProcessingPipeline:
         self._timing: dict[str, float] = {}
         # ── 重 OCR 缓存（绑定到 Pipeline 实例生命周期）──
         self._reocr_cache: dict[int, set[float]] = {}
-        self._fps: float = 0.0  # 视频帧率，用于帧号→高精度时间
+        self._fps: float = 0.0
+        self._error_report: "object | None" = None
+        self._detection_confidence: list[dict] = []
+        self._confidences: list[dict] = []
+        self.last_output_path: Path | None = None
 
     # ═══════════════ 公开接口 ═══════════════
 
-    def run_auto(self, output_path: str | Path, reocr_only: bool = False) -> None:
+    def run_auto(self, output_path: str | Path, reocr_only: bool = True, skip_fill: bool = False) -> None:
         """自动纠错模式：完整流水线 → 写 CSV。"""
         t_total = _time.perf_counter()
         self._emit("加载 OCR 引擎...", 1.0)
@@ -119,7 +123,7 @@ class ProcessingPipeline:
             self._write_csv(self._rows, Path(output_path))
             self._write_diagnostics(Path(output_path))
         else:
-            self._run_correction(Path(output_path), skip_fill=False, reocr_only=reocr_only)
+            self._run_correction(Path(output_path), skip_fill=skip_fill, reocr_only=reocr_only)
             for row in self._rows:
                 if row[2] > self._max_speed:
                     row[2] = -1
@@ -171,43 +175,56 @@ class ProcessingPipeline:
                     skip_fill: bool,
                     corrections: dict[int, float] | None = None,
                     reocr_only: bool = False) -> None:
-        """构建 rows → 应用用户修正 → LCS 纠错。"""
+        """Two-phase correction: Phase 1 detect, Phase 2 correct."""
         self._rows = self._build_initial_rows()
-
         if corrections:
             for fi, v in corrections.items():
                 if 0 <= fi < len(self._rows):
                     self._rows[fi][2] = v
                     self._rows[fi][3] = Flag.PINNED
-
         t0 = _time.perf_counter()
-        self._emit("纠错: LCS 评分 + 检测误差...", progress_base + 1.0)
-        corr_timing: dict[str, float] = {}
-        def _prog(done: int, total: int) -> None:
-            if done % max(1, total // 5) != 0 and done != total:
-                return
-            pct = done / max(total, 1)
-            self._emit(f"纠错: {done}/{total} 帧", progress_base + 1.0 + pct * progress_span)
-        self._rows = correct_with_trust(
-            self._rows, self._observations, self._raw_frames, self._reocr,
-            self._max_speed, self._max_accel,
-            progress_fn=_prog, timing=corr_timing, skip_fill=skip_fill,
-            reocr_cache=self._reocr_cache,
-            notes=self._diag_notes if self._diag else None,
-            pinned=self._pinned if self._pinned else None,
-            reocr_only=reocr_only,
+        n = len(self._rows)
+        times = [r[0] / self._fps for r in self._rows]
+        self._emit("Phase 1: error detection...", progress_base + 1.0)
+        self._error_report = detect_errors(
+            self._rows, self._observations, times,
+            self._max_accel, self._max_speed,
+            reocr_values_by_frame=None,
             split_results=self._split_results if self._split_results else None,
             fps=self._fps)
+        self._detection_confidence = self._error_report.confidence
+        self._confidences = self._detection_confidence
+        n_low = sum(1 for c in self._detection_confidence if c['score'] < 30)
+        n_med = sum(1 for c in self._detection_confidence if 30 <= c['score'] < 70)
+        n_high = sum(1 for c in self._detection_confidence if c['score'] >= 70)
+        logger.info("Phase 1: %%d frames high=%%d medium=%%d low=%%d", n, n_high, n_med, n_low)
+        mode = "manual" if skip_fill else "auto"
+        self._emit(f"Phase 2: correction ({mode})...", progress_base + 2.0)
+        def _prog(done, total):
+            if done % max(1, total // 5) != 0 and done != total: return
+            self._emit(f"corr: {done}/{total}", progress_base + 2.0 + (done/max(total,1))*progress_span)
+        self._rows, self._detection_confidence = correct_errors(
+            self._rows, self._observations, self._raw_frames, self._reocr,
+            self._detection_confidence, times,
+            self._max_speed, self._max_accel, mode=mode,
+            pinned=self._pinned if self._pinned else None,
+            reocr_cache=self._reocr_cache, reocr_only=reocr_only,
+            split_results=self._split_results if self._split_results else None,
+            fps=self._fps, progress_fn=_prog,
+            notes=self._diag_notes if self._diag else None)
+        self._confidences = self._detection_confidence
         self._populate_diag_final()
         self._timing["correction"] = _time.perf_counter() - t0
-        if corr_timing.get("re_ocr", 0) > 0:
-            logger.info("重OCR 耗时: %.2fs", corr_timing["re_ocr"])
 
-    def finalize(self, output_path: str | Path) -> None:
-        """最终检查后写入 CSV：积分距离 + 写 CSV + 诊断日志。"""
+    def finalize(self, output_path: str | Path) -> Path:
+        """Write CSV, stage report, diagnostics."""
+        out_path = Path(output_path)
         self._integrate_distance()
-        self._write_csv(self._rows, Path(output_path))
-        self._write_diagnostics(Path(output_path))
+        self._write_csv(self._rows, out_path)
+        self._write_stage_report(out_path)
+        self._write_diagnostics(out_path)
+        self.last_output_path = out_path
+        return out_path
 
     def _run_correction(self, output_path: Path, skip_fill: bool, reocr_only: bool = False) -> None:
         """自动纠错模式的完整纠错 + 写 CSV（调用 _correct 后继续）。"""
@@ -424,6 +441,58 @@ class ProcessingPipeline:
                 self._diag[i]["final_value"] = row[2]
                 self._diag[i]["flag"] = int(row[3])
                 self._diag[i]["correction_note"] = notes.get(i, "")
+
+    def _write_stage_report(self, output_path: Path) -> None:
+        """Write per-frame stage report with signal breakdowns + summary JSON."""
+        if not self._detection_confidence or not self._rows:
+            return
+        import json as _json
+        report_path = output_path.with_suffix("")
+        report_path = report_path.with_name(report_path.name + "_stage_report.csv")
+        with report_path.open("w", newline="", encoding="utf-8-sig") as fh:
+            fields = ["frame", "raw_text", "raw_val",
+                "sig_ocr_conf", "sig_physics", "sig_linearity",
+                "sig_reocr_agree", "sig_text_len", "sig_accel", "sig_sg_dev",
+                "combined_conf", "conf_tier",
+                "old_flag", "new_flag", "old_val", "new_val", "correction_note"]
+            w = csv.DictWriter(fh, fieldnames=fields, extrasaction="ignore")
+            w.writeheader()
+            notes = self._diag_notes
+            for i, row in enumerate(self._rows):
+                conf = self._detection_confidence[i] if i < len(self._detection_confidence) else {}
+                sigs = conf.get("signals", {})
+                obs = self._observations[i] if i < len(self._observations) else None
+                w.writerow({"frame": int(row[0]),
+                    "raw_text": obs.raw_text if obs else "",
+                    "raw_val": obs.raw_speed_kmh if obs else -1,
+                    "sig_ocr_conf": sigs.get("ocr_conf", ""),
+                    "sig_physics": sigs.get("physics", ""),
+                    "sig_linearity": sigs.get("linearity", ""),
+                    "sig_reocr_agree": sigs.get("reocr_agree", ""),
+                    "sig_text_len": sigs.get("text_len", ""),
+                    "sig_accel": sigs.get("accel", ""),
+                    "sig_sg_dev": sigs.get("sg_dev", ""),
+                    "combined_conf": conf.get("score", ""),
+                    "conf_tier": conf.get("tier", ""),
+                    "old_flag": row[3], "new_flag": row[3],
+                    "old_val": row[2], "new_val": row[2],
+                    "correction_note": notes.get(i, "")})
+        summary_path = output_path.with_suffix("")
+        summary_path = summary_path.with_name(summary_path.name + "_summary.json")
+        n_low = sum(1 for c in self._detection_confidence if c.get('score', 100) < 30)
+        n_med = sum(1 for c in self._detection_confidence if 30 <= c.get('score', 100) < 70)
+        n_high = sum(1 for c in self._detection_confidence if c.get('score', 100) >= 70)
+        n_corr = sum(1 for row in self._rows if Flag.is_corrected(row[3]))
+        n_trust = sum(1 for row in self._rows if Flag.is_trusted(row[3]))
+        summary = {"video": self._video_path.name,
+            "params": {"max_speed": self._max_speed, "max_accel": self._max_accel,
+                "frame_div": self._frame_div, "fps": round(self._fps, 2)},
+            "stats": {"total_frames": len(self._rows), "corrected": n_corr, "trusted": n_trust},
+            "confidence_distribution": {"low": n_low, "medium": n_med, "high": n_high},
+            "timing": self._timing}
+        with summary_path.open("w", encoding="utf-8") as fh:
+            _json.dump(summary, fh, indent=2, ensure_ascii=False)
+        logger.info("Stage report saved: %s", report_path)
 
     def _write_diagnostics(self, output_path: Path) -> None:
         """Write per-frame diagnostics CSV (log_level=debug only)."""

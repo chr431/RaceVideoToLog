@@ -67,24 +67,31 @@ LCS_CONFIDENCE_MIN_SCORE: float = 30.0  # find_problem_segments 默认 min_score
 LCS_INTERP_WEIGHT: float = 0.25        # 插值接近度权重 (加性)
 LCS_NOVELTY_WEIGHT: float = 0.10       # 新颖性权重（非原始OCR加分）
 
-# ═══════════════════ 中值滤波参考剖面验证 ═══════════════════
-# 在 HIGH_TRUST 标记前，用中值滤波剖面检测"一致性孤岛"
-# ——局部物理自洽但偏离全局趋势的 OCR 误读
-PROFILE_TIME_WINDOW: float = 0.5       # 中值滤波时间窗口 (秒)，根据实际帧间隔折算帧数
-PROFILE_MIN_WINDOW: int = 5            # 最小滤波窗口 (帧数)，确保低帧率下仍有效
-PROFILE_ABS_TOLERANCE: float = 4.0     # 绝对偏差容许 (km/h)
-PROFILE_PCT_TOLERANCE: float = 0.02    # 相对偏差容许 (比例, 0.02=2%)
+# ═══════════════════ 错误检测：多信号置信度评分 ═══════════════════
+ERROR_DETECT_OCR_CONF_WEIGHT: float = 0.01   # OCR 模型内部置信度（几乎不可靠）
+ERROR_DETECT_PHYSICS_WEIGHT: float = 0.20    # 物理可达性（仅可靠邻居）
+ERROR_DETECT_LINEARITY_WEIGHT: float = 0.20  # 局部线性度
+ERROR_DETECT_REOCR_AGREE_WEIGHT: float = 0.20 # OCR 读数自洽
+ERROR_DETECT_TEXT_LEN_WEIGHT: float = 0.14   # 文本长度信号
+ERROR_DETECT_ACCEL_SPIKE_WEIGHT: float = 0.40 # 加速度尖峰对检测（一致性孤岛）
+ERROR_DETECT_SG_DEVIATION_WEIGHT: float = 0.15 # 中值滤波偏离度（辅助）
+ERROR_DETECT_CANDIDATE_THRESHOLD: int = 65
 
-# ═══════════════════ 纠错迭代参数 ═══════════════════
-CORRECTION_MAX_ROUNDS: int = 4         # Stage 4 最大迭代轮数
-FILL_MAX_PASSES: int = 10              # Stage 5 最大填充轮数
-CORRECTION_ACCEPT_MIN_SCORE: float = 0.35  # 接受修正的最低 LCS 分数
-CORRECTION_MIN_DIFF: float = 0.5       # 接受修正的最小速度差 (km/h)
+# ═══════════════════ Viterbi DP ═══════════════════
+VITERBI_OBS_WEIGHT: float = 0.3
+VITERBI_ACCEL_WEIGHT: float = 1.0
+VITERBI_SOFT_ANCHOR_CONFIDENCE: int = 78
+VITERBI_MAX_CANDIDATES: int = 40
 
-# ═══════════════════ 候选评分参数 ═══════════════════
-INTERP_PROX_ABS: float = 15.0          # 插值接近度绝对带宽 (km/h)
-INTERP_PROX_PCT: float = 0.07          # 插值接近度相对带宽 (比例)
-REOCR_HEIGHTS: tuple = (24, 32, 48)    # 重 OCR 尝试的预处理高度 (px)
+# ═══════════════════ 纠错参数 ═══════════════════
+MANUAL_CORRECT_THRESHOLD: int = 40
+AUTO_CORRECT_THRESHOLD: int = 75
+CORRECTION_MAX_ROUNDS: int = 10        # Viterbi 多轮迭代
+FILL_MAX_PASSES: int = 50
+CORRECTION_MIN_DIFF: float = 0.5
+AUTO_SMOOTH_CLUSTER_MAX: int = 5
+AUTO_SMOOTH_DEVIATION_MULT: float = 5.0
+REOCR_HEIGHTS: tuple = (24, 32, 48)
 
 # ═══════════════════ 问题段检测参数 ═══════════════════
 ACCEL_ANOMALY_THRESHOLD: float = 10.0  # 邻帧加速度异常阈值 (km/h)
