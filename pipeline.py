@@ -226,7 +226,9 @@ class ProcessingPipeline:
         self._write_csv(self._rows, out_path)
         self._write_stage_report(out_path)
         self._write_diagnostics(out_path)
-        self._raw_frames.clear()
+        # Note: _raw_frames NOT cleared here — GUI review dialog
+        # needs them after finalize. Cleanup happens in GUI's
+        # _finish_export() or when pipeline goes out of scope.
         if self._diag:
             self._diag.clear()
         import gc; gc.collect()
