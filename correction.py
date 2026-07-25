@@ -360,15 +360,19 @@ def _auto_align_pass(rows: list, observations: list, times: list,
         sg = sigs.get('sg_dev', 50)
         # Target moderate SG deviation: not too high (already correct),
         # not too low (island interior, needs stronger correction)
-        if sg > 80 or sg < 15:
+        if sg > 70 or sg < 20:
             continue
 
         cur_v = rows[i][2]
         interp = _local_interp(i, rows, observations, times, max_speed_kmh, fps=fps)
         if interp is None:
+            # Try trusted-neighbor interpolation as fallback
+            pinned_set = {j for j in range(n) if Flag.is_trusted(rows[j][3])}
+            interp = _interp_candidate(i, rows, pinned_set, times, max_speed_kmh, fps=fps)
+        if interp is None:
             continue
         diff = interp - cur_v
-        if abs(diff) < 4 or abs(diff) > 30:
+        if abs(diff) < 5 or abs(diff) > 25:
             continue
 
         # Acceleration-constrained nudge toward interpolation
@@ -388,7 +392,7 @@ def _auto_align_pass(rows: list, observations: list, times: list,
                 hi = min(hi, rows[j][2] + dv_limit)
                 break
 
-        # Nudge toward interpolation (max 80% of the gap to stay conservative)
+        # Nudge toward interpolation (80% to stay somewhat conservative)
         target = cur_v + diff * 0.8
         new_val = round(max(lo, min(hi, target)))
         if abs(new_val - cur_v) < 3:
