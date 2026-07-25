@@ -64,16 +64,20 @@ def _interp_candidate(i: int, rows: list, pinned_set: set, times: list,
 
 
 def _local_interp(i: int, rows: list, observations: list, times: list,
-                  max_speed_kmh: float, fps: float = 1.0) -> float | None:
-    """Interpolation using nearest 3+ digit neighbors (no trust required)."""
+                  max_speed_kmh: float, fps: float = 1.0,
+                  min_distance: int = 0) -> float | None:
+    """Interpolation using nearest 3+ digit neighbors (no trust required).
+
+    If min_distance > 0, skips past neighbors within that many frames
+    to find anchors outside a consistency island."""
     n = len(rows)
     la = None
-    for j in range(i - 1, -1, -1):
+    for j in range(i - 1 - min_distance, -1, -1):
         rt = observations[j].raw_text if j < len(observations) and observations[j] else ""
         if len(rt) >= 3 and rows[j][2] > 0:
             la = j; break
     ra = None
-    for j in range(i + 1, n):
+    for j in range(i + 1 + min_distance, n):
         rt = observations[j].raw_text if j < len(observations) and observations[j] else ""
         if len(rt) >= 3 and rows[j][2] > 0:
             ra = j; break
@@ -459,14 +463,33 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
             continue
         if mode == "auto":
             score = conf_by_idx.get(i, 50)
+            raw_v = rows[i][2]
             ref = _local_interp(i, rows, observations, times, max_speed_kmh, fps=fps)
+            # For suspected island interiors (sg_dev <= 20), the nearest
+            # 3-digit neighbors may also be wrong. Try distant interpolation
+            # that skips past the island to reach correct anchor frames.
+            # Also add the distant interpolation as a candidate so Viterbi
+            # has a correct option to choose from.
+            if sg <= 20 and raw_v > 0:
+                distant = _local_interp(i, rows, observations, times, max_speed_kmh,
+                                        fps=fps, min_distance=30)
+                if distant is not None and abs(distant - raw_v) > 30:
+                    # Island detected: local cluster differs from distant anchors
+                    ref = distant
+                    # Add distant interp as candidate if not already present
+                    if i in candidates_by_frame:
+                        if distant not in candidates_by_frame[i]:
+                            candidates_by_frame[i].append(distant)
+                    elif distant != raw_v:
+                        candidates_by_frame[i] = [raw_v, distant]
             if ref is None:
                 ref = _interp_candidate(i, rows, pinned_set, times, max_speed_kmh, fps=fps)
             # Safety: if interpolation is far from raw OCR (>50 km/h), the
             # interpolation likely crosses a real speed change. Skip it to
             # prevent false corrections (e.g., 168→68 across a speed jump).
-            raw_v = rows[i][2]
-            if ref is not None and raw_v > 0 and abs(ref - raw_v) > 50:
+            # Exception: island interiors (sg <= 20) where large discrepancies
+            # are expected and indicate the raw value is wrong.
+            if ref is not None and raw_v > 0 and abs(ref - raw_v) > 50 and sg > 20:
                 ref = None
             if ref is not None: reference_values[i] = ref
         elif conf_by_idx.get(i, 50) < 40:
