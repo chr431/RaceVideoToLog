@@ -424,6 +424,7 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
     # Example: raw=168 (3-digit), physics=100, linearity=100 →
     #   remove candidate 68 (168-100) to prevent false correction.
     n_filtered = 0
+    n_island_cands = 0  # Track frames with distant-interp candidates
     for fi in list(candidates_by_frame.keys()):
         sigs = confidence_scores[fi].get('signals', {}) if fi < len(confidence_scores) else {}
         p = sigs.get('physics', 50)
@@ -437,6 +438,10 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
             if len(new_cands) < len(old_cands):
                 n_filtered += 1
                 candidates_by_frame[fi] = new_cands if len(new_cands) >= 1 else [raw_v]
+        # Track frames where distant interpolation was added
+        sg = sigs.get('sg_dev', 50)
+        if sg <= 20 and raw_digits >= 3 and p >= 90:
+            n_island_cands += 1
     if log_fn and n_filtered > 0:
         log_fn(f"  Filtered hundreds variants from {n_filtered} consistent 3-digit frames")
 
@@ -506,7 +511,14 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
     total_fixed, total_trusted = 0, 0
     viterbi_conf: dict[int, float] = {}
 
-    for round_num in range(CORRECTION_MAX_ROUNDS):
+    # ── When island candidates are present, limit to 1 round ──
+    # Multi-round Viterbi can undo island corrections (r1 fixes 113→213,
+    # r2 sees transition tension with uncorrected neighbors & reverts).
+    max_rounds = 1 if n_island_cands > 0 else CORRECTION_MAX_ROUNDS
+    if log_fn and n_island_cands > 0:
+        log_fn(f"  Island mode: {n_island_cands} frames with distant-interp, max {max_rounds} round(s)")
+
+    for round_num in range(max_rounds):
         viterbi_result = viterbi_correct(rows, candidates_by_frame, confidence_scores,
             times, max_speed_kmh, max_accel_mps2, trusted_indices=trusted_set,
             reference_values=reference_values)
