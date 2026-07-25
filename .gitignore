@@ -43,3 +43,6 @@ __pycache__/
 444_*.csv
 111.csv
 _patch_*.py
+*_stage_report.csv
+*_summary.json
+*_diagnostics.csv
