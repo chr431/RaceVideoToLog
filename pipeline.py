@@ -172,20 +172,6 @@ class ProcessingPipeline:
                 self._reocr = self._ocr
         return self._ocr
 
-    def _get_crop(self, fi: int):
-        """Lazy crop accessor: reads from VideoReader on demand."""
-        if isinstance(self._raw_frames, dict) and fi in self._raw_frames:
-            return self._raw_frames[fi]
-        vr = getattr(self, '_vr', None)
-        if vr is None:
-            return None
-        r = self._roi
-        frame = vr[fi].asnumpy()
-        crop = frame[r[1]:r[3] + 1, r[0]:r[2] + 1].copy()
-        if isinstance(self._raw_frames, dict):
-            self._raw_frames[fi] = crop
-        return crop
-
     def _correct(self, progress_base: float, progress_span: float,
                     skip_fill: bool,
                     corrections: dict[int, float] | None = None,
@@ -228,7 +214,6 @@ class ProcessingPipeline:
             fps=self._fps, progress_fn=_prog,
             notes=self._diag_notes if self._diag else None)
         self._confidences = self._detection_confidence
-        self._raw_frames = {}  # free cached crops after correction
         self._populate_diag_final()
         self._timing["correction"] = _time.perf_counter() - t0
 
@@ -239,6 +224,10 @@ class ProcessingPipeline:
         self._write_csv(self._rows, out_path)
         self._write_stage_report(out_path)
         self._write_diagnostics(out_path)
+        self._raw_frames.clear()
+        if self._diag:
+            self._diag.clear()
+        import gc; gc.collect()
         self.last_output_path = out_path
         return out_path
 
@@ -307,8 +296,9 @@ class ProcessingPipeline:
                         _frame = _vr[_fi].asnumpy()
                         _ts = _fi / fps if fps > 0 else 0.0
                         _crop = _frame[y1:y2 + 1, x1:x2 + 1].copy()
+                        self._raw_frames.append((_fi, _crop))
                         _proc = _preprocess_standard(_crop, target_h, pad)
-                        q.put((_fi, _proc, _crop))
+                        q.put((_fi, _proc))
                 else:
                     fi = 0
                     while fi < total_video_frames:
@@ -326,8 +316,9 @@ class ProcessingPipeline:
                         if not ok or frame is None:
                             break
                         crop = frame[y1:y2 + 1, x1:x2 + 1].copy()
+                        self._raw_frames.append((fi, crop))
                         proc = _preprocess_standard(crop, target_h, pad)
-                        q.put((fi, proc, crop))
+                        q.put((fi, proc))
                         fi += 1
                 q.put(None)
             except Exception as e:
@@ -349,7 +340,7 @@ class ProcessingPipeline:
             item = q.get()
             if item is None:
                 break
-            fi, proc, crop = item
+            fi, proc = item
             t_ocr0 = _time.perf_counter()
             ocr_result = ocr(proc)
             t_ocr = (_time.perf_counter() - t_ocr0) * 1000.0
@@ -361,12 +352,13 @@ class ProcessingPipeline:
                     raw_text=rt))
                 # 短文本缺位检测：OCR 读到 1-2 位时，用三等分分割 OCR 尝试恢复
                 if len(rt) < 3:
-                    _h, _w = crop.shape[:2]
+                    _crop = self._raw_frames[done][1]
+                    _h, _w = _crop.shape[:2]
                     if _w > 12:
                         _w3 = _w // 3
                         _parts = []
                         for _j in range(3):
-                            _sp = crop[:, _j*_w3:((_j+1)*_w3 if _j<2 else _w)]
+                            _sp = _crop[:, _j*_w3:((_j+1)*_w3 if _j<2 else _w)]
                             if _sp.shape[1] <= 4:
                                 _parts.append('?'); continue
                             _proc = _preprocess_standard(_sp, target_h, pad)
@@ -392,11 +384,15 @@ class ProcessingPipeline:
         t.join()
         if errors:
             raise errors[0]
-        self._vr = _vr  # keep alive for lazy frame access during correction
         self._observations = observations
         self._diag = diag
         self._diag_notes: dict[int, str] = {}
         self._raw_frames = {}  # clear list, use lazy dict for re-OCR
+        # Release decoder to free full-frame cache
+        if _vr is not None:
+            del _vr
+        if _cap is not None:
+            _cap.release()
         self._timing["ocr"] = _time.perf_counter() - t_start
         logger.info("OCR 完成: %d 帧, 耗时 %.1fs",
                         len(observations), self._timing["ocr"])
