@@ -463,8 +463,11 @@ class ProcessingPipeline:
                 self._diag[i]["correction_note"] = notes.get(i, "")
 
     def _write_stage_report(self, output_path: Path) -> None:
-        """Write per-frame stage report with signal breakdowns + summary JSON."""
+        """Write per-frame stage report with signal breakdowns + summary JSON.
+        Only on detailed/debug log level."""
         if not self._detection_confidence or not self._rows:
+            return
+        if self._log_level not in ("detailed", "debug"):
             return
         import json as _json
         report_path = output_path.with_suffix("")

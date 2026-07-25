@@ -338,6 +338,70 @@ def _smoothness_pass(rows: list, times: list, max_speed_kmh: float,
     return smoothed
 
 
+# ═══════════════════ Auto-mode SG alignment ═══════════════════
+
+def _auto_align_pass(rows: list, observations: list, times: list,
+                     max_speed_kmh: float, max_accel_mps2: float,
+                     fps: float, confidence_scores: list,
+                     notes: dict[int, str] | None = None) -> int:
+    """Auto mode only: nudge frames with moderate SG deviation toward
+    local interpolation. Catches systematic small OCR offsets (5-15 km/h)
+    that are too small for Viterbi but still meaningful for curve quality."""
+    n = len(rows)
+    if n < 3:
+        return 0
+    max_dv_per_frame = max_accel_mps2 * (times[1] - times[0]) * MPS_TO_KMH if n >= 2 else 4.0
+    corrected = 0
+
+    for i in range(n):
+        if Flag.is_trusted(rows[i][3]) or rows[i][2] < 0:
+            continue
+        sigs = confidence_scores[i].get('signals', {}) if i < len(confidence_scores) else {}
+        sg = sigs.get('sg_dev', 50)
+        # Target moderate SG deviation: not too high (already correct),
+        # not too low (island interior, needs stronger correction)
+        if sg > 80 or sg < 15:
+            continue
+
+        cur_v = rows[i][2]
+        interp = _local_interp(i, rows, observations, times, max_speed_kmh, fps=fps)
+        if interp is None:
+            continue
+        diff = interp - cur_v
+        if abs(diff) < 4 or abs(diff) > 30:
+            continue
+
+        # Acceleration-constrained nudge toward interpolation
+        lo, hi = 0.0, max_speed_kmh
+        for j in range(i - 1, -1, -1):
+            if rows[j][2] >= 0:
+                dt = max(times[i] - times[j], 1e-3)
+                dv_limit = max_accel_mps2 * dt * MPS_TO_KMH
+                lo = max(lo, rows[j][2] - dv_limit)
+                hi = min(hi, rows[j][2] + dv_limit)
+                break
+        for j in range(i + 1, n):
+            if rows[j][2] >= 0:
+                dt = max(times[j] - times[i], 1e-3)
+                dv_limit = max_accel_mps2 * dt * MPS_TO_KMH
+                lo = max(lo, rows[j][2] - dv_limit)
+                hi = min(hi, rows[j][2] + dv_limit)
+                break
+
+        # Nudge toward interpolation (max 80% of the gap to stay conservative)
+        target = cur_v + diff * 0.8
+        new_val = round(max(lo, min(hi, target)))
+        if abs(new_val - cur_v) < 3:
+            continue  # Too small a change, skip
+
+        rows[i][2] = int(new_val)
+        if notes is not None:
+            notes[i] = (notes.get(i, '') + f" align: {cur_v:.0f}→{new_val:.0f}").strip()
+        corrected += 1
+
+    return corrected
+
+
 # ═══════════════════ Main correction pipeline ═══════════════════
 
 def correct_errors(rows: list, observations: list, raw_frames: list,
@@ -588,6 +652,16 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
     if not skip_fill:
         n_smoothed = _smoothness_pass(rows, times, max_speed_kmh, max_accel_mps2, fps, notes)
         if log_fn and n_smoothed > 0: log_fn(f"  Smoothness: {n_smoothed} spikes smoothed")
+
+    # ── Auto mode: gentle SG-guided alignment ──
+    # For frames with moderate SG deviation, nudge toward local
+    # interpolation to fix systematic small OCR errors (5-15 km/h).
+    # Manual mode skips this — it's designed to be conservative.
+    if mode == "auto":
+        n_aligned = _auto_align_pass(rows, observations, times, max_speed_kmh,
+                                     max_accel_mps2, fps, confidence_scores, notes)
+        if log_fn and n_aligned > 0:
+            log_fn(f"  Auto-align: {n_aligned} frames nudged")
 
     for c in confidence_scores:
         i = c['index']
