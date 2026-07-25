@@ -57,11 +57,11 @@ def set_gpu_backend(backend: str) -> None:
     global _gpu_backend
     _gpu_backend = backend
 
-# ═══════════════════ LCS 评分（GUI 人工修正 + 内部校验）═══════════════════
-LCS_TIME_WINDOW: float = 0.5         # 时间窗 (秒)
-LCS_TAU: float = 0.06                 # 指数衰减常数 exp(-dt/tau)
-LCS_HIGH_WEIGHT: float = 3.0         # pinned 帧权重倍率
-LCS_WARNING_THRESHOLD: float = 0.5   # 人工修正加速度警告阈值
+# ═══════════════════ 邻帧一致性评分（GUI 人工修正校验）═══════════════════
+CONSISTENCY_TIME_WINDOW: float = 0.5    # 时间窗 (秒)
+CONSISTENCY_DECAY_TAU: float = 0.06     # 指数衰减常数 exp(-dt/tau)
+CONSISTENCY_PINNED_WEIGHT: float = 3.0  # 已固定帧权重倍率
+MANUAL_EDIT_ACCEL_WARNING: float = 0.5  # 人工修正加速度警告阈值
 
 # ═══════════════════ 错误检测：多信号置信度评分 ═══════════════════
 ERROR_DETECT_OCR_CONF_WEIGHT: float = 0.01   # OCR 模型内部置信度（几乎不可靠）
@@ -76,7 +76,7 @@ ERROR_DETECT_CANDIDATE_THRESHOLD: int = 65
 # ═══════════════════ Viterbi DP ═══════════════════
 VITERBI_OBS_WEIGHT: float = 0.3
 VITERBI_ACCEL_WEIGHT: float = 1.0
-VITERBI_SOFT_ANCHOR_CONFIDENCE: int = 85
+VITERBI_TRUSTED_BOUNDARY_CONFIDENCE: int = 85
 VITERBI_MAX_CANDIDATES: int = 40
 
 # ═══════════════════ 纠错参数 ═══════════════════

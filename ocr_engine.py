@@ -1,6 +1,6 @@
 """OCR engine for RaceVideoToLog.
 
-SpeedObservation, preprocessing, LCS scoring, Flag enum,
+SpeedObservation, preprocessing, neighbor consistency scoring, Flag enum,
 candidate generation, SG filtering, and OCR/parsing utilities.
 """
 from __future__ import annotations
@@ -14,7 +14,7 @@ import numpy as np
 
 import config
 from config import (MPS_TO_KMH, SOURCE_TO_KMH,
-    LCS_TIME_WINDOW, LCS_TAU, LCS_HIGH_WEIGHT)
+    CONSISTENCY_TIME_WINDOW, CONSISTENCY_DECAY_TAU, CONSISTENCY_PINNED_WEIGHT)
 
 # Lazy matplotlib font config (no import-time side effects)
 _matplotlib_configured = False
@@ -45,7 +45,7 @@ __all__ = [
     "normalize_ocr_text", "format_duration", "codec_from_fourcc",
     "safe_int", "safe_float", "SOURCE_TO_KMH", "OCR_NUMBER_RE",
     "compute_video_hash",
-    "_lcs_score_for_value", "_lcs_score_lr",
+    "_neighbor_consistency_score", "_neighbor_consistency_score_lr",
     "_reset_backend", "_select_backend", "_get_model_params",
     "_CancelExport",
     "_parse_int_or_none", "parse_csv_header", "_savgol_filter_np",
@@ -86,7 +86,7 @@ class Flag:
 
     @classmethod
     def is_anchor(cls, flag: int) -> bool:
-        """Backward-compat: 等价于 is_trusted()。"""
+        """[Deprecated] Backward-compat alias for is_trusted()."""
         return cls.is_trusted(flag)
 
 
@@ -531,15 +531,15 @@ def compute_video_hash(video_path: str | Path, chunk_size: int = 1_048_576) -> s
 
 
 
-def _lcs_score_lr(i: int, v: float, rows: list, times: list[float],
+def _neighbor_consistency_score_lr(i: int, v: float, rows: list, times: list[float],
                     max_speed_kmh: float, max_accel_mps2: float,
-                    time_window: float = LCS_TIME_WINDOW, tau: float = LCS_TAU,
+                    time_window: float = CONSISTENCY_TIME_WINDOW, tau: float = CONSISTENCY_DECAY_TAU,
                     high_weight: set[int] | None = None) -> tuple[float, float]:
-    """LCS 左右分侧评分。权重 = exp(-dt/tau)。
+    """邻域左右分侧一致性评分。权重 = exp(-dt/tau)。
 
     Returns: (left_score, right_score)
     - 单侧无邻居时默认 1.0（不惩罚边界帧）
-    - high_weight 中的帧额外 ×LCS_HIGH_WEIGHT 权重
+    - high_weight 中的帧额外 ×CONSISTENCY_PINNED_WEIGHT 权重
     """
     import math
     n = len(rows)
@@ -560,7 +560,7 @@ def _lcs_score_lr(i: int, v: float, rows: list, times: list[float],
                 continue
             max_dv = max_accel_mps2 * dt * MPS_TO_KMH
             exp_w = math.exp(-dt / tau)
-            pin_w = LCS_HIGH_WEIGHT if j in hw else 1.0
+            pin_w = CONSISTENCY_PINNED_WEIGHT if j in hw else 1.0
             total += exp_w * pin_w
             if abs(v - v_j) <= max_dv:
                 votes += exp_w * pin_w
@@ -571,12 +571,12 @@ def _lcs_score_lr(i: int, v: float, rows: list, times: list[float],
     return left, right
 
 
-def _lcs_score_for_value(i: int, v: float, rows: list, times: list[float],
+def _neighbor_consistency_score(i: int, v: float, rows: list, times: list[float],
                             max_speed_kmh: float, max_accel_mps2: float,
-                            time_window: float = LCS_TIME_WINDOW, tau: float = LCS_TAU,
+                            time_window: float = CONSISTENCY_TIME_WINDOW, tau: float = CONSISTENCY_DECAY_TAU,
                             high_weight: set[int] | None = None) -> float:
-    """LCS 合并分数（向后兼容）。左右侧权重合并后的单值分数。"""
-    left, right = _lcs_score_lr(i, v, rows, times, max_speed_kmh, max_accel_mps2,
+    """邻域一致性合并分数（向后兼容）。左右侧权重合并后的单值分数。"""
+    left, right = _neighbor_consistency_score_lr(i, v, rows, times, max_speed_kmh, max_accel_mps2,
                                     time_window, tau, high_weight)
     return (left + right) / 2.0
 

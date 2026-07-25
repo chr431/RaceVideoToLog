@@ -22,7 +22,7 @@ from config import (
     FILL_MAX_PASSES, CORRECTION_MIN_DIFF, REOCR_HEIGHTS,
     MANUAL_CORRECT_THRESHOLD, AUTO_CORRECT_THRESHOLD,
     AUTO_SMOOTH_CLUSTER_MAX, AUTO_SMOOTH_DEVIATION_MULT,
-    VITERBI_SOFT_ANCHOR_CONFIDENCE, CORRECTION_MAX_ROUNDS,
+    VITERBI_TRUSTED_BOUNDARY_CONFIDENCE, CORRECTION_MAX_ROUNDS,
     MAX_PARTIAL_WILDCARDS, VITERBI_MAX_CANDIDATES,
 )
 
@@ -522,7 +522,7 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
     for i in range(n):
         if i in pinned_set or Flag.is_trusted(rows[i][3]) or i in candidates_by_frame: continue
         conf = conf_by_idx.get(i, 50)
-        if conf >= VITERBI_SOFT_ANCHOR_CONFIDENCE: continue
+        if conf >= VITERBI_TRUSTED_BOUNDARY_CONFIDENCE: continue
         raw_val = rows[i][2]
         obs = observations[min(i, len(observations) - 1)]
         cands: list[float] = []; cands_set: set[float] = set()

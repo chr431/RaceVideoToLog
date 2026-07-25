@@ -8,7 +8,7 @@ Key design:
   For island-interior frames, the reference is interpolation (not raw OCR),
   so Viterbi prefers physics-based candidates over wrong raw values.
 - Transition cost: quadratic penalty beyond max_accel × dt.
-- Soft anchors: high-confidence frames reduce to single-candidate.
+- Soft boundaries: high-confidence frames reduce to single-candidate.
 - Trusted indices: PINNED/HIGH_TRUST frames as hard segment boundaries.
 """
 from __future__ import annotations
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 from config import (
     MPS_TO_KMH,
     VITERBI_OBS_WEIGHT, VITERBI_ACCEL_WEIGHT,
-    VITERBI_MAX_CANDIDATES, VITERBI_SOFT_ANCHOR_CONFIDENCE,
+    VITERBI_MAX_CANDIDATES, VITERBI_TRUSTED_BOUNDARY_CONFIDENCE,
 )
 from ocr_engine import Flag
 
@@ -35,7 +35,7 @@ def viterbi_correct(
     max_accel_mps2: float,
     obs_weight: float = VITERBI_OBS_WEIGHT,
     accel_weight: float = VITERBI_ACCEL_WEIGHT,
-    soft_anchor_threshold: int = VITERBI_SOFT_ANCHOR_CONFIDENCE,
+    trusted_boundary_threshold: int = VITERBI_TRUSTED_BOUNDARY_CONFIDENCE,
     trusted_indices: set[int] | None = None,
     reference_values: dict[int, float] | None = None,
 ) -> dict:
@@ -47,7 +47,7 @@ def viterbi_correct(
     for c in confidence_scores:
         conf_by_idx[c['index']] = c['score']
 
-    segments = _split_segments(n, conf_by_idx, soft_anchor_threshold, trusted_indices)
+    segments = _split_segments(n, conf_by_idx, trusted_boundary_threshold, trusted_indices)
 
     corrected: dict[int, float] = {}
     error_set: set[int] = set()
@@ -57,7 +57,7 @@ def viterbi_correct(
     for seg_start, seg_end in segments:
         _viterbi_segment(seg_start, seg_end, rows, candidates_by_frame, conf_by_idx,
             times, max_speed_kmh, max_accel_mps2, obs_weight, accel_weight,
-            soft_anchor_threshold, corrected, error_set, dp_cost, path_values,
+            trusted_boundary_threshold, corrected, error_set, dp_cost, path_values,
             reference_values=reference_values)
 
     confidence = _compute_confidence_scores(n, dp_cost, path_values, rows, conf_by_idx)
@@ -67,11 +67,11 @@ def viterbi_correct(
 
 
 def _split_segments(n: int, conf_by_idx: dict[int, float],
-                    soft_anchor_threshold: int,
+                    trusted_boundary_threshold: int,
                     trusted_indices: set[int] | None = None) -> list[tuple[int, int]]:
     boundary_set: set[int] = set()
     for i in range(n):
-        if conf_by_idx.get(i, 50) >= soft_anchor_threshold:
+        if conf_by_idx.get(i, 50) >= trusted_boundary_threshold:
             boundary_set.add(i)
     if trusted_indices:
         boundary_set.update(trusted_indices)
@@ -96,7 +96,7 @@ def _viterbi_segment(
     seg_start: int, seg_end: int, rows: list,
     candidates_by_frame: dict[int, list[float]], conf_by_idx: dict[int, float],
     times: list[float], max_speed_kmh: float, max_accel_mps2: float,
-    obs_weight: float, accel_weight: float, soft_anchor_threshold: int,
+    obs_weight: float, accel_weight: float, trusted_boundary_threshold: int,
     corrected: dict[int, float], error_set: set[int],
     dp_cost: list[float], path_values: list[float | None],
     reference_values: dict[int, float] | None = None,
@@ -109,7 +109,7 @@ def _viterbi_segment(
     for k in range(n_seg):
         fi = seg_start + k
         conf = conf_by_idx.get(fi, 50)
-        if conf >= soft_anchor_threshold:
+        if conf >= trusted_boundary_threshold:
             v = rows[fi][2]
             if 0 <= v <= max_speed_kmh:
                 seg_cands.append([(v, "anchor")])
@@ -145,7 +145,7 @@ def _viterbi_segment(
     for idx, (v, tag) in enumerate(seg_cands[0]):
         fi = seg_start
         conf = conf_by_idx.get(fi, 50)
-        if conf >= soft_anchor_threshold:
+        if conf >= trusted_boundary_threshold:
             cost = 0.1
         else:
             ref = reference_values.get(fi) if reference_values else None
@@ -168,7 +168,7 @@ def _viterbi_segment(
                     best_cost = total
                     best_prev = idx_v
             conf = conf_by_idx.get(fi, 50)
-            if conf >= soft_anchor_threshold:
+            if conf >= trusted_boundary_threshold:
                 obs = 0.1
             else:
                 ref = reference_values.get(fi) if reference_values else None

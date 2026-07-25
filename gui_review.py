@@ -16,7 +16,7 @@ from theme_manager import ThemeManager
 from widget_utils import make_static_card, setup_chart_zoom_pan
 from config import (COLOR_RED, COLOR_ORANGE, COLOR_BLUE,
     COLOR_LIGHT_GRAY, COLOR_LIGHTER_GRAY, chart_colors,
-    LCS_WARNING_THRESHOLD)
+    MANUAL_EDIT_ACCEL_WARNING)
 
 import cv2
 import numpy as np
@@ -496,13 +496,13 @@ class ReviewDialog(QDialog):
     # ═══════════════ 修正操作 ═══════════════
 
     def _check_accel(self, fi: int, v: float) -> tuple[bool, str]:
-        from ocr_engine import _lcs_score_for_value
+        from ocr_engine import _neighbor_consistency_score
         times = [r[0] / self._fps for r in self._rows]
-        score = _lcs_score_for_value(fi, v, self._rows, times,
-                                        self._max_speed, self._max_accel)
-        if score < LCS_WARNING_THRESHOLD:
+        score = _neighbor_consistency_score(fi, v, self._rows, times,
+                                               self._max_speed, self._max_accel)
+        if score < MANUAL_EDIT_ACCEL_WARNING:
             msg = (f"帧 #{fi} 输入值 {v:.0f} km/h 与周围邻居物理不一致\n\n"
-                    f"LCS 一致性分数: {score:.2f} / 1.00\n"
+                    f"邻域一致性分数: {score:.2f} / 1.00\n"
                     f"该值在 {self._max_accel:.0f} m/s² 约束下与邻近帧矛盾。\n\n"
                     f"确定要使用此值吗？")
             return False, msg

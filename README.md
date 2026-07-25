@@ -76,7 +76,7 @@ RaceVideoToLog/
 ├── analysis.py          # 数据分析业务逻辑
 ├── pipeline.py          # 统一处理流水线 (GUI/CLI 共用)
 ├── correction.py        # 物理约束纠错流水线
-├── ocr_engine.py        # OCR 引擎、预处理、Flag 枚举、LCS 一致性评分
+├── ocr_engine.py        # OCR 引擎、预处理、Flag 枚举、邻域一致性评分
 ├── config.py            # 集中配置（常量、颜色、默认值）
 ├── gpu_setup.py         # GPU DLL 加载 + TensorRT/CPU 后端选择
 ├── theme_manager.py     # 主题回调管理器
@@ -151,14 +151,17 @@ python RaceVideoToLog.py [video] [options]
   --frame-end N              结束帧号
   --analysis CSV1 CSV2       分析模式：比较两个 CSV
   --analysis-out PREFIX      分析输出前缀
+  --mode {auto,manual}       纠错模式 (默认: auto)
+  --video-backend {cv2,decord} 视频解码器 (默认: cv2)
+  --log-level {normal,detailed,debug} 日志级别 (默认: normal)
 ```
 
 ## 性能
 
-- TensorRT 10.x FP16 + CUDA 12.x，PP-OCRv6_small 模型
-- 单帧推理 ~2.5ms（~400 fps）
-- 可选 `v6_tiny` 模型：推理 ~1.2ms（~850 fps）
-- decord NVDEC 硬件解码 + TensorRT 推理流水线并行
+- TensorRT 10.x FP16 + CUDA 12.x，PP-OCRv6 模型
+- `v6_tiny`：单帧推理 ~1.2ms（~850 fps）
+- `v6_small`：单帧推理 ~2.5ms（~400 fps）
+- 默认 cv2 视频解码，可选 decord (NVDEC) 硬件解码
 
 ## 打包
 

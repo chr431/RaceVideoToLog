@@ -818,10 +818,10 @@ class RaceVideoToLogApp(QMainWindow):
                             (self._fmt_mph, "mile/h")]:
                 if key == fmt:
                     rb.setChecked(True); break
-        if "pinned" in settings or "manual_anchor" in settings:
+        if "pinned" in settings or "manual_anchor" in settings or "manual_correction" in settings:
             self.mode_auto.setChecked(False)
             self.mode_baseline.setChecked(True)
-        elif "auto_anchor" in settings:
+        elif "auto_anchor" in settings or "auto_correction" in settings:
             self.mode_baseline.setChecked(False)
             self.mode_auto.setChecked(True)
         self._status_label.setText(f"已导入设置: {Path(path).name}")
