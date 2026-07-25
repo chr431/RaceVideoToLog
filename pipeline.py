@@ -18,7 +18,8 @@ from ocr_engine import (
     _reset_backend, _select_backend, _get_model_params,
 )
 from config import MPS_TO_KMH
-from correction import correct_with_trust, compute_confidence, find_problem_segments
+from error_detection import detect_errors
+from correction import correct_errors, compute_confidence, find_problem_segments
 from gpu_setup import get_gpu_backend, get_engine_params, get_engine_type
 
 logger = logging.getLogger("RaceVideoToLog.pipeline")
