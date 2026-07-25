@@ -17,15 +17,14 @@ if not exist ".venv\Scripts\python.exe" (
     )
 )
 
-REM Activate venv
-call .venv\Scripts\activate.bat
+set PY=.venv\Scripts\python
 
 REM Ensure PyInstaller is installed
 echo [1/4] Checking PyInstaller...
-.venv\Scripts\python -c "import PyInstaller" 2>nul
+%PY% -c "import PyInstaller" 2>nul
 if %ERRORLEVEL% neq 0 (
     echo   Installing PyInstaller...
-    .venv\Scripts\python -m pip install pyinstaller -q
+    %PY% -m pip install pyinstaller -q
     if %ERRORLEVEL% neq 0 (
         echo [ERROR] Failed to install PyInstaller
         pause
@@ -45,7 +44,7 @@ if exist "dist" (
 
 REM Build
 echo [3/4] Building with PyInstaller...
-python -m PyInstaller RaceVideoToLog.spec --noconfirm
+%PY% -m PyInstaller RaceVideoToLog.spec --noconfirm
 
 if %ERRORLEVEL% neq 0 (
     echo.
