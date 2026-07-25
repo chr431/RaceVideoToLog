@@ -81,12 +81,12 @@ ERROR_DETECT_CANDIDATE_THRESHOLD: int = 65
 # ═══════════════════ Viterbi DP ═══════════════════
 VITERBI_OBS_WEIGHT: float = 0.3
 VITERBI_ACCEL_WEIGHT: float = 1.0
-VITERBI_SOFT_ANCHOR_CONFIDENCE: int = 78
+VITERBI_SOFT_ANCHOR_CONFIDENCE: int = 85
 VITERBI_MAX_CANDIDATES: int = 40
 
 # ═══════════════════ 纠错参数 ═══════════════════
 MANUAL_CORRECT_THRESHOLD: int = 40
-AUTO_CORRECT_THRESHOLD: int = 75
+AUTO_CORRECT_THRESHOLD: int = 80
 CORRECTION_MAX_ROUNDS: int = 10        # Viterbi 多轮迭代
 FILL_MAX_PASSES: int = 50
 CORRECTION_MIN_DIFF: float = 0.5
