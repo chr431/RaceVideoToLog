@@ -39,6 +39,8 @@ def main() -> None:
     parser.add_argument("--pad", type=int, default=config.DEFAULT_PAD)
     parser.add_argument("--buffer", type=int, default=config.DEFAULT_BUFFER_SIZE)
     parser.add_argument("--backend", choices=["auto","tensorrt","cpu"], default=config.DEFAULT_BACKEND)
+    parser.add_argument("--video-backend", choices=["cv2","decord"], default=config.DEFAULT_VIDEO_BACKEND,
+        help="视频解码器 (默认 cv2，decord 更快但内存占用更大)")
     parser.add_argument("--ocr-model", choices=["v6_tiny", "v6_small"], default=config.DEFAULT_OCR_MODEL,
         help="主 OCR 模型 (默认 tiny)")
     parser.add_argument("--reocr-model", choices=["v6_tiny", "v6_small"], default=config.DEFAULT_REOCR_MODEL,
@@ -71,6 +73,7 @@ def main() -> None:
                 "frame_start": "frame_start", "frame_end": "frame_end",
                 "model": "ocr_model",
                 "reocr_model": "reocr_model",
+                "video_backend": "video_backend",
             }.get(key)
             if _dest is None:
                 continue

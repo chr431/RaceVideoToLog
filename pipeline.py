@@ -436,7 +436,8 @@ class ProcessingPipeline:
                         f", pad={self._pad}, buffer={self._buffer_size}\n")
             fh.write(f"# backend={self._backend_actual}, model={self._ocr_model}")
             reocr_info = f", reocr_model={self._reocr_model}" if self._reocr_model and self._reocr_model != self._ocr_model else ""
-            fh.write(f"{reocr_info}\n")
+            fh.write(f"{reocr_info}")
+            fh.write(f", video_backend={self._video_backend}\n")
             if n_pinned > 0:
                 fh.write(f"# pinned={n_pinned}\n")
             fh.write(f"# stats: total={n_total}, trusted={n_trusted},"

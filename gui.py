@@ -52,6 +52,7 @@ class _ExportThread(QThread):
             region: tuple, max_speed_kmh: float, max_accel_mps2: float,
             frame_div: int, target_h: int, pad_px: int, buffer_size: int,
             backend: str = "auto", log_level: str = "normal",
+            video_backend: str = "cv2",
             parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.app = app
@@ -65,6 +66,7 @@ class _ExportThread(QThread):
         self._buffer_size = buffer_size
         self._backend = backend
         self._log_level = log_level
+        self._video_backend = video_backend
         self._cancel_flag = False
 
 
@@ -98,6 +100,7 @@ class _ExportThread(QThread):
                     progress_cb=self._emit_progress,
                     cancel_check=self._check_cancel,
                     log_level=self._log_level,
+                    video_backend=self._video_backend,
                 )
                 if mode == "auto":
                     pipeline.run_auto(self._output_path)
@@ -324,12 +327,12 @@ class RaceVideoToLogApp(QMainWindow):
         self.backend_combo = ComboBox()
         self.backend_combo.addItems(["自动", "TensorRT", "CPU"]); self.backend_combo.setCurrentIndex(0)
         pl.addWidget(self.backend_combo, 3, 1)
-        pl.addWidget(BodyLabel("日志级别"), 3, 2)
-        self.log_level_combo = ComboBox()
-        self.log_level_combo.addItems(["正常", "详细", "调试"])
-        self.log_level_combo.setCurrentIndex(0)
-        self.log_level_combo.setFixedWidth(80)
-        pl.addWidget(self.log_level_combo, 3, 3)
+        pl.addWidget(BodyLabel("视频解码"), 3, 2)
+        self.video_backend_combo = ComboBox()
+        self.video_backend_combo.addItems(["cv2 (稳定)", "decord (快速)"])
+        self.video_backend_combo.setCurrentIndex(0)
+        self.video_backend_combo.setFixedWidth(120)
+        pl.addWidget(self.video_backend_combo, 3, 3)
         pl.addWidget(BodyLabel("OCR 模型"), 4, 0)
         self.model_combo = ComboBox()
         self.model_combo.addItems(["v6_tiny", "v6_small"])
@@ -342,6 +345,12 @@ class RaceVideoToLogApp(QMainWindow):
         self.reocr_model_combo.setCurrentIndex(2)  # default: v6_small
         self.reocr_model_combo.setFixedWidth(120)
         pl.addWidget(self.reocr_model_combo, 4, 3)
+        pl.addWidget(BodyLabel("日志级别"), 5, 0)
+        self.log_level_combo = ComboBox()
+        self.log_level_combo.addItems(["正常", "详细", "调试"])
+        self.log_level_combo.setCurrentIndex(0)
+        self.log_level_combo.setFixedWidth(120)
+        pl.addWidget(self.log_level_combo, 5, 1)
         ll.addWidget(perf_card)
 
         # 纠错模式 Card
@@ -835,6 +844,7 @@ class RaceVideoToLogApp(QMainWindow):
             pp = self.pad_spin.value(); nw = self.buffer_spin.value()
             be = ["auto", "tensorrt", "cpu"][self.backend_combo.currentIndex()]
             log_level = ["normal", "detailed", "debug"][self.log_level_combo.currentIndex()]
+            vb = ["cv2", "decord"][self.video_backend_combo.currentIndex()]
         except ValueError:
             QMessageBox.warning(self, "参数错误", "请检查数值参数。"); return
 
@@ -847,7 +857,7 @@ class RaceVideoToLogApp(QMainWindow):
             self._export_thread = None
 
         self._export_btn.setEnabled(False); self._cancel_btn.setEnabled(True)
-        self._export_thread = _ExportThread(self, Path(out), roi, ms, ma, fd, th, pp, nw, be, log_level)
+        self._export_thread = _ExportThread(self, Path(out), roi, ms, ma, fd, th, pp, nw, be, log_level, vb)
         self._export_thread._progress.connect(self._on_progress)
         self._export_thread._finished.connect(self._on_done)
         self._export_thread._error.connect(self._on_error)
