@@ -13,7 +13,8 @@ dist/
 *.spec.bak
 
 # IDE
-.vscode/
+.vscode/*
+!.vscode/launch.json
 .idea/
 
 # OS
