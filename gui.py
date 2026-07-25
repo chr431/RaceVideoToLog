@@ -916,6 +916,14 @@ class RaceVideoToLogApp(QMainWindow):
             except (TypeError, RuntimeError):
                 pass
             self._export_thread = None
+        # Release pipeline memory (raw_frames etc.) on cancel/error
+        pipeline = getattr(self, "_pipeline", None)
+        if pipeline is not None:
+            pipeline._raw_frames.clear()
+            if getattr(pipeline, '_diag', None):
+                pipeline._diag.clear()
+            import gc; gc.collect()
+            self._pipeline = None
         self._release_engines()
     def _on_pivot(self, key: str) -> None:
         if key == "analysis":

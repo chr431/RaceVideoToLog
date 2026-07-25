@@ -60,7 +60,8 @@ class ProcessingPipeline:
                     reocr_model: str | None = None,
                     cancel_check: "Callable[[], None] | None" = None,
                     log_level: str = "normal",
-                final_check: bool = False):
+                final_check: bool = False,
+                video_backend: str = "cv2"):
         if target_h < 8:
             raise ValueError(f"target_h 必须 >= 8，当前为 {target_h}")
         if pad < 0:
@@ -83,6 +84,7 @@ class ProcessingPipeline:
         self._frame_end = frame_end
         self._progress = progress_cb
         self._final_check = final_check
+        self._video_backend = video_backend  # "decord" or "cv2"
 
         # 状态
         self._ocr: "RapidOCR | None" = None
@@ -253,27 +255,31 @@ class ProcessingPipeline:
         frame_step = max(1, self._frame_div)
         t_start = _time.perf_counter()
 
-        # ── 视频源：decord (GPU/NVDEC) 优先，cv2 (CPU) 回退 ──
-        _src_type = "cv2"  # fallback
+        # ── 视频源：按 video_backend 配置选择解码器 ──
+        _src_type = "cv2"
         _vr = None
         _cap: "cv2.VideoCapture | None" = None
 
-        try:
-            from decord import VideoReader as _VR, cpu as _decord_cpu
-            _vr = _VR(str(self._video_path), ctx=_decord_cpu(0))
-            total_video_frames = len(_vr)
-            fps = _vr.get_avg_fps(); self._fps = fps
-            _first = _vr[0].asnumpy()
-            h, w = _first.shape[:2]
-            _src_type = "decord"
-            logger.info("Video source: decord (NVDEC)")
-        except Exception as _e:
-            logger.info("Video source: cv2 (CPU fallback — %s)", _e)
+        if self._video_backend == "decord":
+            try:
+                from decord import VideoReader as _VR, cpu as _decord_cpu
+                _vr = _VR(str(self._video_path), ctx=_decord_cpu(0))
+                total_video_frames = len(_vr)
+                fps = _vr.get_avg_fps(); self._fps = fps
+                _first = _vr[0].asnumpy()
+                h, w = _first.shape[:2]
+                _src_type = "decord"
+                logger.info("Video source: decord (NVDEC)")
+            except Exception as _e:
+                logger.info("Video source: decord failed (%s), falling back to cv2", _e)
+
+        if _src_type != "decord":
             _cap = cv2.VideoCapture(str(self._video_path))
             total_video_frames = int(_cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
             fps = float(_cap.get(cv2.CAP_PROP_FPS) or 0.0); self._fps = fps
             w = int(_cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
             h = int(_cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+            logger.info("Video source: cv2 (CPU)")
 
         x1, y1, x2, y2 = clamp_region(*self._roi, w, h)
         f_start = _parse_int_or_none(self._frame_start)

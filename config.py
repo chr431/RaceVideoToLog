@@ -7,6 +7,7 @@ KMH_TO_MPS: float = 1.0 / 3.6    # km/h → m/s 转换因子
 
 # ═══════════════════ 用户可配置默认值 ═══════════════════
 DEFAULT_BACKEND: str = "auto"           # GPU 后端 (auto / tensorrt / cpu)
+DEFAULT_VIDEO_BACKEND: str = "cv2"     # 视频解码器 (cv2 / decord)，cv2 兼容性好且内存低
 DEFAULT_OCR_MODEL: str = "v6_tiny"     # 主 OCR 模型
 DEFAULT_REOCR_MODEL: str = "v6_small"  # 重 OCR 模型
 DEFAULT_SPEED_FORMAT: str = "km/h"     # 速度单位 (km/h / m/s / mile/h)
