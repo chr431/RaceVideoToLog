@@ -173,8 +173,14 @@ def _generate_candidates(fi: int, rows: list, observations: list, raw_frames: li
 
 	obs = observations[min(fi, len(observations) - 1)]
 
-	if fi < len(raw_frames):
-		reocr_set = _re_ocr_frame(raw_frames[fi][1], ocr, max_speed_kmh, cache=reocr_cache)
+	# Get crop: supports list[(fi,crop)] or dict{fi:crop}
+	crop = None
+	if isinstance(raw_frames, dict):
+		crop = raw_frames.get(fi)
+	elif fi < len(raw_frames):
+		crop = raw_frames[fi][1]
+	if crop is not None:
+		reocr_set = _re_ocr_frame(crop, ocr, max_speed_kmh, cache=reocr_cache)
 		for cv in sorted(reocr_set):
 			if 0 <= cv <= max_speed_kmh and cv not in protected_set:
 				protected.append(cv); protected_set.add(cv)
