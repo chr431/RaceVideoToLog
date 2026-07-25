@@ -411,15 +411,65 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
         total_c = sum(len(c) for c in candidates_by_frame.values())
         log_fn(f"  Candidates: {n_with} frames ({n_cheap} cheap), {total_c} total")
 
+    # ── Post-filter: remove dangerous hundreds-digit variants ──
+    # For frames that are internally consistent (physics>=90 AND
+    # linearity>=90), a hundreds-digit variant that differs by >=100
+    # from the raw value is almost certainly wrong. Removing it
+    # prevents Viterbi from choosing a path that looks "cheaper"
+    # due to lower transition cost from nearby wrong frames.
+    # Example: raw=168 (3-digit), physics=100, linearity=100 →
+    #   remove candidate 68 (168-100) to prevent false correction.
+    n_filtered = 0
+    for fi in list(candidates_by_frame.keys()):
+        sigs = confidence_scores[fi].get('signals', {}) if fi < len(confidence_scores) else {}
+        p = sigs.get('physics', 50)
+        l = sigs.get('linearity', 50)
+        raw_v = rows[fi][2]
+        if raw_v <= 0: continue
+        raw_digits = len(str(int(raw_v)))
+        if p >= 90 and l >= 90 and raw_digits >= 3:
+            old_cands = candidates_by_frame[fi]
+            new_cands = [c for c in old_cands if abs(c - raw_v) < 100]
+            if len(new_cands) < len(old_cands):
+                n_filtered += 1
+                candidates_by_frame[fi] = new_cands if len(new_cands) >= 1 else [raw_v]
+    if log_fn and n_filtered > 0:
+        log_fn(f"  Filtered hundreds variants from {n_filtered} consistent 3-digit frames")
+
     # Auto mode: build reference values for ALL non-trusted frames.
     # Makes Viterbi prefer physics-based interpolation, catching more
     # errors at the cost of potentially small over-corrections.
     # Manual mode: only for very low confidence (conservative).
+    #
+    # Guard: skip internally consistent frames (physics>=90 AND linearity>=90
+    # AND sg_dev>=80). These frames agree with both their immediate neighbors
+    # AND the global SG profile — the raw OCR is almost certainly correct.
+    # Applying interpolation references to them causes false positives like
+    # 168→68 (subtract 100) across real speed jumps.
     reference_values: dict[int, float] = {}
     for i in range(n):
         if i in pinned_set or Flag.is_trusted(rows[i][3]): continue
-        # Auto mode: all non-trusted frames. Manual mode: only < 40
-        if mode == "auto" or conf_by_idx.get(i, 50) < 40:
+        sigs = confidence_scores[i].get('signals', {}) if i < len(confidence_scores) else {}
+        p = sigs.get('physics', 50)
+        l = sigs.get('linearity', 50)
+        a = sigs.get('accel', 100)
+        sg = sigs.get('sg_dev', 50)
+        if p >= 90 and l >= 90 and sg >= 80:
+            # Internally consistent + global trend match → trust OCR, skip interpolation
+            continue
+        if mode == "auto":
+            score = conf_by_idx.get(i, 50)
+            ref = _local_interp(i, rows, observations, times, max_speed_kmh, fps=fps)
+            if ref is None:
+                ref = _interp_candidate(i, rows, pinned_set, times, max_speed_kmh, fps=fps)
+            # Safety: if interpolation is far from raw OCR (>50 km/h), the
+            # interpolation likely crosses a real speed change. Skip it to
+            # prevent false corrections (e.g., 168→68 across a speed jump).
+            raw_v = rows[i][2]
+            if ref is not None and raw_v > 0 and abs(ref - raw_v) > 50:
+                ref = None
+            if ref is not None: reference_values[i] = ref
+        elif conf_by_idx.get(i, 50) < 40:
             ref = _local_interp(i, rows, observations, times, max_speed_kmh, fps=fps)
             if ref is None:
                 ref = _interp_candidate(i, rows, pinned_set, times, max_speed_kmh, fps=fps)

@@ -200,7 +200,7 @@ class ProcessingPipeline:
         n_low = sum(1 for c in self._detection_confidence if c['score'] < 30)
         n_med = sum(1 for c in self._detection_confidence if 30 <= c['score'] < 70)
         n_high = sum(1 for c in self._detection_confidence if c['score'] >= 70)
-        logger.info("Phase 1: %%d frames high=%%d medium=%%d low=%%d", n, n_high, n_med, n_low)
+        logger.info("Phase 1: %d frames high=%d medium=%d low=%d", n, n_high, n_med, n_low)
         mode = "manual" if skip_fill else "auto"
         self._emit(f"Phase 2: correction ({mode})...", progress_base + 2.0)
         def _prog(done, total):
@@ -378,6 +378,7 @@ class ProcessingPipeline:
                 observations.append(SpeedObservation(fi, -1, ""))
             if _collect_diag:
                 diag.append({
+                    "frame": fi,
                     "raw_text": rt or "",
                     "raw_value": sv,
                     "confidence": round(conf, 4),
@@ -393,7 +394,6 @@ class ProcessingPipeline:
         self._observations = observations
         self._diag = diag
         self._diag_notes: dict[int, str] = {}
-        self._raw_frames = {}  # clear list, use lazy dict for re-OCR
         # Release decoder to free full-frame cache
         if _vr is not None:
             del _vr
@@ -527,6 +527,8 @@ class ProcessingPipeline:
             w = csv.DictWriter(fh, fieldnames=fields, extrasaction="ignore")
             w.writeheader()
             for i, d in enumerate(self._diag):
-                d["frame"] = i
+                # Use stored frame number if available, fall back to index
+                if "frame" not in d:
+                    d["frame"] = i
                 w.writerow(d)
         logger.info("诊断日志已保存: %s (%d 帧)", diag_path, len(self._diag))
