@@ -137,6 +137,101 @@ python RaceVideoToLog.py test.mp4 --roi 877 935 961 986 --mode manual -o out.csv
 # 指定解码器和后端
 python RaceVideoToLog.py test.mp4 --roi ... --video-backend decord --backend tensorrt -o out.csv
 
+# 从 CSV 导入设置
+python RaceVideoToLog.py test.mp4 --from-csv existing.csv -o out.csv
+
+# 数据分析对比
+python RaceVideoToLog.py --analysis csv1.csv csv2.csv --analysis-out prefix
+
 # 打包
 build_exe.bat
 ```
+
+## 性能基准
+
+### OCR 推理 (TensorRT FP16 + PP-OCRv6)
+
+| 模型 | 推理速度 | 说明 |
+|------|---------|------|
+| v6_tiny | ~850 fps (~1.2ms) | 默认主 OCR |
+| v6_small | ~400 fps (~2.5ms) | 默认重 OCR，更高准确率 |
+
+双模型策略 (tiny 主 + small 重)：比全程 small 快 ~28%，99.6% 帧差异 <2 km/h。
+
+### 视频解码
+
+| 方案 | 纯解码速度 (1080p) | 说明 |
+|------|-------------------|------|
+| cv2 (CPU) | ~457-497 fps | 默认，兼容性好，内存低 |
+| decord (NVDEC) | ~734-767 fps | GPU 硬件解码，内存占用 ~2.6GB |
+
+decord 解码 HEVC 比 cv2 快 ~63%，H264 快 ~57%。但管线瓶颈在 OCR 推理而非解码，实际端到端提升有限。
+
+### 全管线吞吐量
+
+- 瓶颈在 OCR TensorRT 推理，非视频解码
+- Producer-consumer Queue 缓冲已掩盖解码延迟
+- 已排除的无效优化：多 consumer 并行 (cuDNN crash)、子进程隔离 (IPC 开销 25%+)、CUDA Graph (需绕过 RapidOCR)
+
+### 已实施的优化
+
+| 优化 | 效果 |
+|------|------|
+| v6_tiny 默认主 OCR | 推理 ~2.2x 提速 |
+| skip det + cls 模型加载 | 初始化 -200ms，显存 -10MB |
+| 默认 tiny+small 双模型 | 整体 ~28% 提速 |
+| buffer 8→16 | 管线 ~7% 提速 |
+
+## OCR 细节
+
+- RapidOCR + PP-OCRv6 ONNX 模型，**只用 rec 模型**（ROI 已紧密裁剪，`use_det=False` + `use_cls=False`）
+- Monkey-patch `RapidOCR._initialize`：跳过 det/cls 模型加载，减少 2 个 CUDA session
+- 预处理：BGR resize 到 target_h (默认 48px) + copyMakeBorder 填充。⚠️ PP-OCRv6 需要 BGR 输入
+- 重 OCR 使用不同模型 (v6_small) 产生不同读数，约 10% 概率与主 OCR 不同
+- 候选生成：原始值 + 重OCR + 百位变体 + 缺位扩展 + 插值
+- 已移除：OCR 原生置信度、多重预处理变体 (OTSU/CLAHE/反转)
+
+## GUI 细节
+
+- PySide6 + PySide6-Fluent-Widgets Fluent Design
+- 亮/暗双主题，`ThemeManager` 回调系统自动同步 matplotlib 图表颜色
+- 视频预览支持拖拽框选 ROI，纵向三等分参考线
+- `_ExportThread`：在原生 threading.Thread 中运行 Pipeline（避免 QThread GPU 性能损失）
+- 最终检查对话框：全帧速度散点图（橙色=低置信度，蓝色=已修正，红色=当前帧），点击选帧查看 ROI 图像，手动输入修正值后加速度校验
+
+## 打包系统
+
+- PyInstaller onedir 模式 (`RaceVideoToLog.spec`)
+- CUDA/TensorRT DLL 不打包（用户系统提供），构建时从 PATH 移除 CUDA 目录
+- Qt6 精简：仅 Widgets/Core/Gui/Xml/Svg，排除 Quick/Qml/WebEngine
+- scipy/tkinter 完全排除（SG 滤波已用纯 numpy 替代）
+- EXE 输出 `dist/RaceVideoToLog/`
+
+## 测试与验证
+
+### Ground Truth 文件
+
+`ground_truth_csv/` 包含人工校对的真值 CSV：
+- `test_truth.csv`、`test3_truth.csv`、`test4_truth.csv`
+- 每个 CSV 头包含对应 mp4 的哈希、ROI、参数
+- 测试时必须使用 truth 文件中的 ROI、frame_start、frame_end
+
+### 验证方法
+
+```bash
+# 运行后与 ground truth 对比
+python RaceVideoToLog.py test.mp4 --roi ... --frame-start ... --frame-end ... -o out.csv
+# 用脚本计算 diff 分布
+```
+
+## 已知局限
+
+1. **一致性孤岛**：连续多帧 OCR 误读相同错误值时，内部 physics=100、linearity=100，仅 sg_dev 信号可检测。超过 50 帧的孤岛可能无法完全修正
+2. **边界帧**：视频范围首尾几帧只有单向邻居，可靠度低，偶尔被误修
+3. **极端加速度**：test4.mp4 包含已知的加速度飞跃（max_accel=50→70 折中），超过物理极限的真实速度变化可能被过度平滑
+4. **解码器兼容性**：decord 需 NVDEC 硬件且与 ORT 有 DLL 加载顺序依赖（ORT 先于 decord 导入）
+
+## 历史演进
+
+- **v2.5**：从 LCS 5 阶段纠错迁移到 Viterbi DP 两阶段架构，新增 error_detection.py + viterbi.py
+- **v2.6**：一致性孤岛检测与修正（远距离插值、候选过滤、孤岛轮次限制）；手动模式升级为完整管线；自动模式新增 Force-SG 平滑；移除旧 anchor 命名；默认视频后端 cv2 替代 decord（降低内存占用）
