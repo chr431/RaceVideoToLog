@@ -31,13 +31,31 @@ from config import COLOR_BLUE, COLOR_ORANGE, COLOR_GRAY
 # ═══════════════════════════════════════════════════════════════
 
 def parse_csv(path: str | Path) -> tuple[list[float], list[float], list[float], list[int]]:
-    """解析 CSV 文件，返回 (times, dists, speeds, flags)。
+    """解析 CSV 文件，返回 (times_s, dists, speeds, flags)。
 
-    每行格式: timestamp,distance,speed_kmh,flag
+    每行格式: frame_index,distance,speed_kmh,flag
+    - 从 # 注释头读取 fps，将帧号转换为实际时间（秒）
     - 跳过以 # 开头的注释行和空行
     - try/except 保护浮点转换
     - 裁剪起始零速帧，距离和时间归零
     """
+    import re
+    # ── 解析 CSV 头，提取 fps ──
+    fps = 0.0
+    with open(str(path), "r", encoding="utf-8-sig") as f:
+        for line in f:
+            line = line.strip()
+            if not line.startswith("#"):
+                break
+            m = re.search(r"\bfps=([\d.]+)", line)
+            if m:
+                try:
+                    fps = float(m.group(1))
+                except ValueError:
+                    pass
+    if fps <= 0:
+        fps = 1.0  # fallback: treat frame index as-is
+
     times, dists, speeds, flags = [], [], [], []
     with open(str(path), "r", encoding="utf-8-sig") as f:
         for line in f:
@@ -47,7 +65,8 @@ def parse_csv(path: str | Path) -> tuple[list[float], list[float], list[float], 
             parts = line.split(",")
             if len(parts) >= 3:
                 try:
-                    times.append(float(parts[0]))
+                    frame_idx = float(parts[0])
+                    times.append(frame_idx / fps)  # frame → seconds
                     dists.append(float(parts[1]))
                     speeds.append(float(parts[2]))
                     flags.append(int(parts[3]) if len(parts) > 3 else 0)

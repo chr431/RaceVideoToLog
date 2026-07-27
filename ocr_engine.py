@@ -93,34 +93,47 @@ class Flag:
 # ═══════════════════ GPU 加速：由 gpu_setup.py 延迟初始化 ═══════════════════
 from gpu_setup import select_backend as _select_backend, reset_backend as _reset_backend
 
-# rapidocr 延迟导入，确保 gpu_setup 先加载 CUDA DLL
-_RapidOCR = None
-_EngineType = None
-_ModelType = None
-_OCRVersion = None
+# ── rapidocr 延迟导入缓存 ──
+# 必须在 gpu_setup 注册 CUDA/TensorRT DLL 之后才能 import rapidocr，
+# 否则 tensorrt find_lib() 找不到 DLL 会导致初始化失败。
+# _init_rapidocr() 在首次调用时完成导入 + monkey-patch，后续调用直接返回缓存。
+_rapidocr_imported = False
+_RapidOCR: "type | None" = None       # rapidocr.RapidOCR 类
+_EngineType: "type | None" = None     # rapidocr.EngineType 枚举
+_ModelType: "type | None" = None      # rapidocr.ModelType 枚举
+_OCRVersion: "type | None" = None     # rapidocr.OCRVersion 枚举
 
-def _ensure_rapidocr_imported():
-    global _RapidOCR, _EngineType, _ModelType, _OCRVersion
-    if _RapidOCR is None:
-        from rapidocr import RapidOCR as _R, EngineType as _ET, ModelType as _MT, OCRVersion as _OV
-        _RapidOCR = _R; _EngineType = _ET; _ModelType = _MT; _OCRVersion = _OV
-        _patch_rapidocr_init()
 
-# ── Monkey-patch: 避免加载不需要的 det/cls 模型 ──
-_RAPIDOCR_PATCHED = False
+def _init_rapidocr() -> None:
+    """初始化 rapidocr：导入 + monkey-patch det/cls 跳过。
 
-def _patch_rapidocr_init():
+    幂等 — 第二次及后续调用立即返回。gpu_setup 的 DLL 注册
+    必须在此函数调用之前完成（通常由 gui._create_ocr 或
+    pipeline._ensure_ocr 中的 _select_backend() 触发）。
+    """
+    global _rapidocr_imported, _RapidOCR, _EngineType, _ModelType, _OCRVersion
+    if _rapidocr_imported:
+        return
+    _rapidocr_imported = True
+
+    from rapidocr import RapidOCR as _R, EngineType as _ET, ModelType as _MT, OCRVersion as _OV
+    _RapidOCR = _R
+    _EngineType = _ET
+    _ModelType = _MT
+    _OCRVersion = _OV
+
+    # ── Monkey-patch: 条件加载 det/cls 模型，跳过未使用的 ONNX 模型加载 ──
+    _patch_rapidocr_init()
+
+
+def _patch_rapidocr_init() -> None:
     """Monkey-patch RapidOCR._initialize 以跳过未使用的 det/cls 模型加载。
 
-    rapidocr 3.9.1 在 _initialize 中无条件创建 TextDetector 和 TextClassifier，
-    即使 use_det=False / use_cls=False 也会加载对应的 ONNX 模型（浪费 GPU 显存和初始化时间）。
+    rapidocr 3.9.x 在 _initialize 中无条件创建 TextDetector 和 TextClassifier，
+    即使 use_det=False / use_cls=False 也会加载对应的 ONNX 模型
+    （浪费 GPU 显存 ~200MB 和初始化时间 ~2s）。
     """
-    global _RAPIDOCR_PATCHED
-    if _RAPIDOCR_PATCHED:
-        return
-    _RAPIDOCR_PATCHED = True
-
-    _ensure_rapidocr_imported()
+    assert _RapidOCR is not None, "call _init_rapidocr() first"
 
     from rapidocr.ch_ppocr_det import TextDetector
     from rapidocr.ch_ppocr_cls import TextClassifier
@@ -164,7 +177,7 @@ def _patch_rapidocr_init():
 
         self.cfg = cfg
 
-    _RapidOCR._initialize = _patched_initialize
+    _RapidOCR._initialize = _patched_initialize  # type: ignore[method-assign]
     logger.info("RapidOCR patched: det/cls model loading conditional on use_det/use_cls")
 # ═══════════════════════════════════════════════════════════
 
@@ -241,6 +254,64 @@ def _parse_int_or_none(s: str) -> int | None:
         return None
 
 
+# ═══════════════════ CSV 头字段定义（CLI/GUI 共用） ═══════════════════
+# CSV key → (argparse_dest, value_type)
+# value_type: "roi" | "int" | "float" | "str"
+# 新增字段时在此添加即可，CLI 和 GUI 自动同步。
+_CSV_FIELD_MAP: dict[str, tuple[str, str]] = {
+    "roi":           ("roi",           "roi"),
+    "format":        ("format",        "str"),
+    "max_speed":     ("max_speed",     "float"),
+    "max_accel":     ("max_accel",     "float"),
+    "div":           ("div",           "int"),
+    "target_h":      ("target_h",      "int"),
+    "pad":           ("pad",           "int"),
+    "backend":       ("backend",       "str"),
+    "buffer":        ("buffer",        "int"),
+    "frame_start":   ("frame_start",   "int"),
+    "frame_end":     ("frame_end",     "int"),
+    "model":         ("ocr_model",     "str"),
+    "reocr_model":   ("reocr_model",   "str"),
+    "video_backend": ("video_backend", "str"),
+}
+
+
+def parse_csv_setting(key: str, raw_value: str):
+    """Parse a single CSV header value according to its declared type.
+
+    Returns the parsed value, or None if parsing fails silently.
+    CLI and GUI both call this to avoid duplicating type-cast logic.
+    """
+    field = _CSV_FIELD_MAP.get(key)
+    if field is None:
+        return None  # unknown key — caller should skip
+    vtype = field[1]
+    if vtype == "roi":
+        try:
+            parts = [int(x.strip()) for x in raw_value.split(",")]
+            return parts if len(parts) == 4 else None
+        except ValueError:
+            return None
+    elif vtype == "int":
+        try:
+            return int(raw_value)
+        except ValueError:
+            return None
+    elif vtype == "float":
+        try:
+            return float(raw_value)
+        except ValueError:
+            return None
+    else:
+        return raw_value
+
+
+def csv_field_dest(key: str) -> str | None:
+    """Return the argparse dest name for a CSV header key, or None if unknown."""
+    field = _CSV_FIELD_MAP.get(key)
+    return field[0] if field else None
+
+
 def parse_csv_header(path: str) -> dict[str, str]:
     """从 CSV 文件头中提取所有 # 注释行的 key=value 参数。
 
@@ -289,7 +360,7 @@ def normalize_ocr_text(text: str) -> str:
     return text.translate(translation)
 
 
-def extract_speed_value(ocr_result) -> tuple[float | None, str | None, float]:
+def extract_speed_value(ocr_result: "object | None") -> tuple[float | None, str | None, float]:
     """从 RapidOCR 3.x 结果中提取速度值和置信度。
 
     Returns: (speed_value, raw_text, confidence)
@@ -300,7 +371,7 @@ def extract_speed_value(ocr_result) -> tuple[float | None, str | None, float]:
 
     # RapidOCR 3.x TextRecOutput (use_det=False 时返回)
     if hasattr(ocr_result, "txts"):
-        txts = ocr_result.txts
+        txts = ocr_result.txts  # type: ignore[attr-defined]
         if not txts or not txts[0]:
             return None, None, 0.0
         scores = getattr(ocr_result, "scores", [])
@@ -331,8 +402,8 @@ def extract_speed_value(ocr_result) -> tuple[float | None, str | None, float]:
                 if isinstance(item, (list, tuple)) and len(item) >= 2:
                     text = str(item[1]).strip()
                 elif hasattr(item, "txts"):
-                    if item.txts and item.txts[0]:
-                        text = str(item.txts[0]).strip()
+                    if item.txts and item.txts[0]:  # type: ignore[attr-defined]
+                        text = str(item.txts[0]).strip()  # type: ignore[attr-defined]
                     else:
                         continue
                 elif hasattr(item, "text"):
@@ -342,10 +413,10 @@ def extract_speed_value(ocr_result) -> tuple[float | None, str | None, float]:
                 if text:
                     candidates.append(text)
         elif hasattr(rec, "txts"):
-            if rec.txts and rec.txts[0]:
-                candidates.append(str(rec.txts[0]).strip())
+            if rec.txts and rec.txts[0]:  # type: ignore[attr-defined]
+                candidates.append(str(rec.txts[0]).strip())  # type: ignore[attr-defined]
         elif hasattr(rec, "text"):
-            candidates.append(str(rec.text).strip())
+            candidates.append(str(rec.text).strip())  # type: ignore[attr-defined]
         elif isinstance(rec, str):
             candidates.append(rec.strip())
 
@@ -487,7 +558,8 @@ def _get_model_params(variant: str, engine_type: str = "onnxruntime") -> dict | 
     variant: "v6_tiny" | "v6_small"
     engine_type: "onnxruntime" | "tensorrt"
     """
-    _ensure_rapidocr_imported()
+    _init_rapidocr()
+    assert _ModelType is not None and _EngineType is not None and _OCRVersion is not None
     size = variant.replace("v6_", "")
     model_map = {"tiny": _ModelType.TINY, "small": _ModelType.SMALL}
     model_type = model_map.get(size)
@@ -548,7 +620,7 @@ def _neighbor_consistency_score_lr(i: int, v: float, rows: list, times: list[flo
     t_i = times[i]
     hw = high_weight or set()
 
-    def _scan(start: int, stop: int, step: int) -> tuple[float, float]:
+    def _scan(start: int, stop: int, step: int) -> float:
         votes = 0.0
         total = 0.0
         for j in range(start, stop, step):

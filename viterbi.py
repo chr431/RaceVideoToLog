@@ -22,6 +22,11 @@ from config import (
     MPS_TO_KMH,
     VITERBI_OBS_WEIGHT, VITERBI_ACCEL_WEIGHT,
     VITERBI_MAX_CANDIDATES, VITERBI_TRUSTED_BOUNDARY_CONFIDENCE,
+    VITERBI_FALLBACK_DT, VITERBI_ANCHOR_COST,
+    VITERBI_CHANGE_THRESHOLD_KMH, VITERBI_OBS_COST_FALLBACK_MULT,
+    VITERBI_MIN_MAX_COST, VITERBI_COST_NORM_CONF_EXCLUDE,
+    VITERBI_ANCHOR_CONF_THRESHOLD,
+    VITERBI_CONF_NORMAL_MIN, VITERBI_CONF_MARGINAL_MIN,
 )
 from ocr_engine import Flag
 
@@ -60,7 +65,7 @@ def viterbi_correct(
             trusted_boundary_threshold, corrected, error_set, dp_cost, path_values,
             reference_values=reference_values)
 
-    confidence = _compute_confidence_scores(n, dp_cost, path_values, rows, conf_by_idx)
+    confidence = _compute_confidence_scores(n, dp_cost, path_values, rows, conf_by_idx, max_speed_kmh)
 
     return {'corrected': corrected, 'confidence': confidence,
             'error_set': error_set, 'dp_cost': dp_cost}
@@ -146,7 +151,7 @@ def _viterbi_segment(
         fi = seg_start
         conf = conf_by_idx.get(fi, 50)
         if conf >= trusted_boundary_threshold:
-            cost = 0.1
+            cost = VITERBI_ANCHOR_COST
         else:
             ref = reference_values.get(fi) if reference_values else None
             cost = _obs_cost(fi, v, rows, obs_weight, ref_val=ref)
@@ -156,7 +161,7 @@ def _viterbi_segment(
     for k in range(1, n_seg):
         fi = seg_start + k
         dt = times[fi] - times[fi - 1] if fi > 0 and fi - 1 >= 0 else 1.0
-        if dt <= 0: dt = 1.0 / 30.0
+        if dt <= 0: dt = VITERBI_FALLBACK_DT
         dpk: list[tuple[float, int]] = []
         for idx_w, (w, tag_w) in enumerate(seg_cands[k]):
             best_cost = float('inf')
@@ -169,7 +174,7 @@ def _viterbi_segment(
                     best_prev = idx_v
             conf = conf_by_idx.get(fi, 50)
             if conf >= trusted_boundary_threshold:
-                obs = 0.1
+                obs = VITERBI_ANCHOR_COST
             else:
                 ref = reference_values.get(fi) if reference_values else None
                 obs = _obs_cost(fi, w, rows, obs_weight, ref_val=ref)
@@ -191,7 +196,7 @@ def _viterbi_segment(
         path_values[fi] = optimal_val
         raw_cost = dp[k][min(range(len(dp[k])), key=lambda idx: dp[k][idx][0])][0]
         dp_cost[fi] = raw_cost if isinstance(raw_cost, (int, float)) and raw_cost >= 0 else 0.0
-        if abs(optimal_val - raw_val) > 0.5:
+        if abs(optimal_val - raw_val) > VITERBI_CHANGE_THRESHOLD_KMH:
             corrected[fi] = optimal_val
             error_set.add(fi)
 
@@ -209,13 +214,13 @@ def _obs_cost(fi: int, v: float, rows: list, obs_weight: float,
     if effective_raw > 0:
         raw_ratio = abs(v - effective_raw) / max(1.0, abs(effective_raw))
     else:
-        raw_ratio = abs(v - effective_raw) * 0.1
+        raw_ratio = abs(v - effective_raw) * VITERBI_OBS_COST_FALLBACK_MULT
     return obs_weight * min(1.0, raw_ratio)
 
 
 def _trans_cost(v: float, w: float, dt: float, max_accel_mps2: float,
                 accel_weight: float) -> float:
-    if dt <= 0: dt = 1.0 / 30.0
+    if dt <= 0: dt = VITERBI_FALLBACK_DT
     max_dv = max_accel_mps2 * dt * MPS_TO_KMH
     dv = abs(w - v)
     excess = dv - max_dv
@@ -225,15 +230,16 @@ def _trans_cost(v: float, w: float, dt: float, max_accel_mps2: float,
 
 def _compute_confidence_scores(n: int, dp_cost: list[float],
                                path_values: list[float | None], rows: list,
-                               conf_by_idx: dict[int, float]) -> list[dict]:
-    max_cost = 0.01
+                               conf_by_idx: dict[int, float],
+                               max_speed_kmh: float) -> list[dict]:
+    max_cost = VITERBI_MIN_MAX_COST
     for i in range(n):
-        if i not in conf_by_idx or conf_by_idx[i] < 80:
+        if i not in conf_by_idx or conf_by_idx[i] < VITERBI_COST_NORM_CONF_EXCLUDE:
             if dp_cost[i] > max_cost:
                 max_cost = dp_cost[i]
     confidence = []
     for i in range(n):
-        if i in conf_by_idx and conf_by_idx[i] >= 90:
+        if i in conf_by_idx and conf_by_idx[i] >= VITERBI_ANCHOR_CONF_THRESHOLD:
             confidence.append({'index': i, 'score': conf_by_idx[i],
                 'is_corrected': Flag.is_corrected(rows[i][3]),
                 'speed': rows[i][2], 'reason': '锚点帧(高置信)'})
@@ -247,10 +253,10 @@ def _compute_confidence_scores(n: int, dp_cost: list[float],
         normalized = cost / max_cost
         score = 100.0 * math.exp(-normalized)
         cur = rows[i][2]
-        if cur < 0 or cur > 400:
+        if cur < 0 or cur > max_speed_kmh:  # use function parameter instead of hardcoded 400
             score = 0.0; reason = '速度超出范围'
-        elif score >= 80: reason = '正常'
-        elif score >= 40: reason = 'Viterbi存疑(临界的)'
+        elif score >= VITERBI_CONF_NORMAL_MIN: reason = '正常'
+        elif score >= VITERBI_CONF_MARGINAL_MIN: reason = 'Viterbi存疑(临界的)'
         else: reason = 'Viterbi错误(代价高)'
         confidence.append({'index': i, 'score': round(score, 1),
             'is_corrected': Flag.is_corrected(rows[i][3]),

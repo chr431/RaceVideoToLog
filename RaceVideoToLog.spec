@@ -27,10 +27,14 @@ hiddenimports = [
     'yaml',
     # decord
     'decord',
-    # Project modules (force inclusion)
+    # Project modules (force inclusion; auto-discovered but explicit is safer)
     'pipeline', 'correction', 'config', 'gpu_setup', 'ocr_engine',
     'headless', 'analysis', 'gui_analysis', 'gui_review',
+    'gui_export', 'gui_settings', 'viterbi', 'error_detection',
     'widget_utils', 'theme_manager',
+    # rapidocr transitive deps (may not be auto-discovered)
+    'shapely', 'pyclipper', 'colorlog', 'omegaconf',
+    'cv2',  # opencv (headless)
 ]
 
 # rapidocr（OCR 引擎，含 ONNX 后端）
@@ -45,9 +49,20 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('qfluentwidgets')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
-# cuda-python (tensorrt engine 需要 cuda.bindings)
-tmp_ret = collect_all('cuda')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+# cuda-python + tensorrt: Python bindings only (actual .dll from system PATH)
+# Using hiddenimports only — NOT collect_all which would bundle ~500MB+ of native libs
+try:
+    import cuda  # noqa: F401
+    hiddenimports += ['cuda', 'cuda.bindings', 'cuda.bindings.runtime',
+                      'cuda.bindings.driver', 'cuda.core', 'cuda.pathfinder']
+except Exception:
+    pass  # cuda-python not installed
+
+try:
+    import tensorrt  # noqa: F401
+    hiddenimports += ['tensorrt']
+except Exception:
+    pass  # tensorrt not installed
 
 # decord（NVDEC 硬件加速视频解码）
 tmp_ret = collect_all('decord')
@@ -123,9 +138,11 @@ binaries = [
 ]
 
 
+# NOTE: Run PyInstaller from repo root: pyinstaller RaceVideoToLog.spec
+_PROJECT_ROOT = os.path.abspath('.')
 a = Analysis(
-    ['D:\\Repo\\RaceVideoToLog\\RaceVideoToLog.py'],
-    pathex=['D:\\Repo\\RaceVideoToLog'],
+    [os.path.join(_PROJECT_ROOT, 'RaceVideoToLog.py')],
+    pathex=[_PROJECT_ROOT],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,

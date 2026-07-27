@@ -1,6 +1,6 @@
 """Viterbi v2 evaluation tool — in-process pipeline + ground truth comparison.
 
-Usage: python tools/eval_viterbi.py [--baseline] [--sweep-obs] [--sweep-accel] [--video NAME] [--manual]
+Usage: python tools/eval_viterbi.py [--baseline] [--video NAME] [--manual]
 """
 from __future__ import annotations
 import sys, time, os, shutil
@@ -13,6 +13,7 @@ sys.path.insert(0, str(PROJECT))
 
 from ocr_engine import parse_csv_header, Flag
 from pipeline import ProcessingPipeline
+from analysis import parse_csv
 import config
 
 
@@ -94,7 +95,10 @@ def run_pipeline(video: str, truth_csv: str, max_speed: float, max_accel: float,
 	)
 	pipeline.run_auto(output, reocr_only=reocr_only, mode=mode)
 	actual_output = str(pipeline.last_output_path) if pipeline.last_output_path else output
-	return pipeline._rows, actual_output
+	# Use public parse_csv API instead of private _rows attribute
+	_, _, speeds, flags = parse_csv(actual_output)
+	rows = [[float(i), 0.0, speeds[i], flags[i]] for i in range(len(speeds))]
+	return rows, actual_output
 
 
 def print_result(label: str, r: dict) -> None:

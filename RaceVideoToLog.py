@@ -1,4 +1,4 @@
-"""RaceVideoToLog — 赛车视频速度 OCR 提取工具。
+"""RaceVideoToLog v2.6.0 — 赛车视频速度 OCR 提取工具。
 
 从车载视频中实时 OCR 识别速度数字，支持 TensorRT / CPU 两种后端（自动选择），
 输出时间-速度-距离 CSV 文件。
@@ -60,48 +60,20 @@ def main() -> None:
 
     # ── 从 CSV 导入设置 ──
     if args.from_csv:
-        from ocr_engine import parse_csv_header
+        from ocr_engine import parse_csv_header, parse_csv_setting, csv_field_dest
         csv_settings = parse_csv_header(args.from_csv)
-        # 仅填充用户未显式指定的参数
-        # argparse defaults (action.default) vs user-specified
         _defaults = {a.dest: a.default
                         for a in parser._actions if a.dest != "help"}
         for key, val in csv_settings.items():
-            # Map CSV keys to argparse dest names
-            _dest = {
-                "roi": "roi", "format": "format", "max_speed": "max_speed",
-                "max_accel": "max_accel", "div": "div", "target_h": "target_h",
-                "pad": "pad", "backend": "backend", "buffer": "buffer",
-                "frame_start": "frame_start", "frame_end": "frame_end",
-                "model": "ocr_model",
-                "reocr_model": "reocr_model",
-                "video_backend": "video_backend",
-            }.get(key)
-            if _dest is None:
+            dest = csv_field_dest(key)
+            if dest is None:
                 continue
-            # Only apply if arg still has its default value
-            cur = getattr(args, _dest)
-            if cur == _defaults.get(_dest):
-                if _dest == "roi":
-                    try:
-                        parts = [int(x.strip()) for x in val.split(",")]
-                        if len(parts) == 4:
-                            setattr(args, _dest, parts)
-                    except ValueError:
-                        pass
-                elif _dest in ("frame_start", "frame_end", "div", "target_h",
-                                "pad", "buffer"):
-                    try:
-                        setattr(args, _dest, int(val))
-                    except ValueError:
-                        pass
-                elif _dest in ("max_speed", "max_accel"):
-                    try:
-                        setattr(args, _dest, float(val))
-                    except ValueError:
-                        pass
-                else:
-                    setattr(args, _dest, val)
+            cur = getattr(args, dest)
+            if cur != _defaults.get(dest):
+                continue  # user explicitly overrode — skip
+            parsed = parse_csv_setting(key, val)
+            if parsed is not None:
+                setattr(args, dest, parsed)
 
     if args.video:
         from headless import run_headless

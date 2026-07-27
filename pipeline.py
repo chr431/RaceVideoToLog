@@ -17,7 +17,7 @@ from ocr_engine import (
     SOURCE_TO_KMH, _parse_int_or_none,
     _reset_backend, _select_backend, _get_model_params,
 )
-from config import MPS_TO_KMH
+import config
 from error_detection import detect_errors
 from correction import correct_errors
 from gpu_setup import get_gpu_backend, get_engine_params, get_engine_type
@@ -84,7 +84,8 @@ class ProcessingPipeline:
         self._frame_end = frame_end
         self._progress = progress_cb
         self._final_check = final_check
-        self._video_backend = video_backend  # "decord" or "cv2"
+        self._video_backend = video_backend  # user-requested: "decord" or "cv2"
+        self._video_backend_actual: str = ""  # set by _run_ocr after fallback
 
         # 状态
         self._ocr: "RapidOCR | None" = None
@@ -275,11 +276,19 @@ class ProcessingPipeline:
                 _first = _vr[0].asnumpy()
                 h, w = _first.shape[:2]
                 _src_type = "decord"
+                self._video_backend_actual = "decord"
                 logger.info("Video source: decord (NVDEC)")
+            except ModuleNotFoundError:
+                self._video_backend_actual = "cv2"
+                logger.warning("decord not installed; falling back to cv2. "
+                               "Install with: pip install decord")
             except Exception as _e:
-                logger.info("Video source: decord failed (%s), falling back to cv2", _e)
+                self._video_backend_actual = "cv2"
+                logger.warning("decord failed (%s); falling back to cv2. "
+                               "decord requires an NVIDIA GPU with NVDEC support.", _e)
 
         if _src_type != "decord":
+            self._video_backend_actual = "cv2"
             _cap = cv2.VideoCapture(str(self._video_path))
             total_video_frames = int(_cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
             fps = float(_cap.get(cv2.CAP_PROP_FPS) or 0.0); self._fps = fps
@@ -413,7 +422,7 @@ class ProcessingPipeline:
         fps = self._fps if self._fps > 0 else 1.0
         dist = 0.0; prev_fi = prev_v = None
         for r in self._rows:
-            v = r[2] / MPS_TO_KMH if r[2] >= 0 else 0.0
+            v = r[2] / config.MPS_TO_KMH if r[2] >= 0 else 0.0
             fi = r[0]
             if prev_fi is not None and prev_v is not None:
                 dt = (fi - prev_fi) / fps
@@ -432,18 +441,19 @@ class ProcessingPipeline:
         n_corrected = sum(1 for row in rows if Flag.is_corrected(row[3]))
         timing_str = ", ".join(f"{k}={v:.1f}s" for k, v in self._timing.items())
         with output_path.open("w", newline="", encoding="utf-8-sig") as fh:
-            fh.write("# RaceVideoToLog v2.5.0\n")
+            fh.write(f"# RaceVideoToLog v{config.__version__}\n")
             fh.write(f"# video_hash={vhash}, video={self._video_path.name}\n")
             fh.write(f"# roi={r[0]},{r[1]},{r[2]},{r[3]}, format={self._speed_format}"
                         f", frame_start={self._frame_start or ''}"
                         f", frame_end={self._frame_end or ''}\n")
             fh.write(f"# max_speed={self._max_speed}, max_accel={self._max_accel}"
                         f", div={self._frame_div}, target_h={self._target_h}"
-                        f", pad={self._pad}, buffer={self._buffer_size}\n")
+                        f", pad={self._pad}, buffer={self._buffer_size}"
+                        f", fps={self._fps:.3f}\n")
             fh.write(f"# backend={self._backend_actual}, model={self._ocr_model}")
             reocr_info = f", reocr_model={self._reocr_model}" if self._reocr_model and self._reocr_model != self._ocr_model else ""
             fh.write(f"{reocr_info}")
-            fh.write(f", video_backend={self._video_backend}\n")
+            fh.write(f", video_backend={self._video_backend_actual or self._video_backend}\n")
             if n_pinned > 0:
                 fh.write(f"# pinned={n_pinned}\n")
             fh.write(f"# stats: total={n_total}, trusted={n_trusted},"

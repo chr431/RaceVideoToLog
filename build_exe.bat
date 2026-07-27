@@ -6,63 +6,76 @@ echo   RaceVideoToLog - Build EXE
 echo ========================================
 echo.
 
-REM Check / create venv
+REM [1/5] Check / create venv
 if not exist ".venv\Scripts\python.exe" (
-    echo [0/4] Creating .venv...
-    python -m venv .venv
-    if %ERRORLEVEL% neq 0 (
-        echo [ERROR] Failed to create .venv
+    echo [1/5] .venv not found, running setup_venv.bat ...
+    call "%~dp0setup_venv.bat"
+    if errorlevel 1 (
+        echo [ERROR] venv setup failed.
         pause
         exit /b 1
     )
+) else (
+    echo [1/5] Using existing .venv.
 )
-
 set PY=.venv\Scripts\python
 
-REM Ensure PyInstaller is installed
-echo [1/4] Checking PyInstaller...
-%PY% -c "import PyInstaller" 2>nul
-if %ERRORLEVEL% neq 0 (
-    echo   Installing PyInstaller...
-    %PY% -m pip install pyinstaller -q
-    if %ERRORLEVEL% neq 0 (
-        echo [ERROR] Failed to install PyInstaller
+REM [2/5] Verify key deps + PyInstaller
+echo [2/5] Checking dependencies ...
+%PY% -c "import rapidocr, onnxruntime, cv2, numpy, PySide6, matplotlib, decord, qfluentwidgets, shapely, pyclipper, tensorrt, cuda"
+if errorlevel 1 (
+    echo   Some deps missing, reinstalling ...
+    %PY% -m pip install -e .
+    if errorlevel 1 (
+        echo [ERROR] Dependency installation failed.
         pause
         exit /b 1
     )
 )
 
-REM Clean old builds
-if exist "build" (
-    echo [2/4] Cleaning old build...
-    rmdir /s /q "build"
-)
-if exist "dist" (
-    echo [2/4] Cleaning old dist...
-    rmdir /s /q "dist"
+
+%PY% -c "import PyInstaller" 2>nul
+if errorlevel 1 (
+    echo   Installing PyInstaller ...
+    %PY% -m pip install pyinstaller
+    if errorlevel 1 (
+        echo [ERROR] Failed to install PyInstaller.
+        pause
+        exit /b 1
+    )
 )
 
-REM Build
-echo [3/4] Building with PyInstaller...
-%PY% -m PyInstaller RaceVideoToLog.spec --noconfirm
-
-if %ERRORLEVEL% neq 0 (
-    echo.
-    echo [ERROR] Build failed!
+REM [3/5] Verify spec exists
+if not exist "RaceVideoToLog.spec" (
+    echo [ERROR] RaceVideoToLog.spec not found.
+    echo   Run this script from the repository root.
     pause
     exit /b 1
 )
 
-REM Show result
+REM [4/5] Clean + Build
+echo [4/5] Cleaning old builds ...
+if exist "build" rmdir /s /q "build"
+if exist "dist"  rmdir /s /q "dist"
+
+echo [4/5] Building with PyInstaller ...
+%PY% -m PyInstaller RaceVideoToLog.spec --noconfirm
+if errorlevel 1 (
+    echo.
+    echo [ERROR] Build failed.
+    pause
+    exit /b 1
+)
+
+REM [5/5] Show result
 echo.
-echo [4/4] Build complete!
-echo.
+echo [5/5] Build complete.
 for /d %%d in (dist\*) do (
     echo   Output: %%d
     dir /s "%%d\RaceVideoToLog.exe" 2>nul
 )
 echo.
 echo ========================================
-echo   Done - press any key to exit
+echo   Done
 echo ========================================
 pause

@@ -1,6 +1,6 @@
-"""RaceVideoToLog PySide6 GUI — 主窗口 + 导出线程。
+"""RaceVideoToLog PySide6 GUI — 主窗口。
 
-分离自 RaceVideoToLog.py，包含所有 GUI 相关逻辑。
+Import 自 gui_export、gui_settings 等子模块，保持 gui.py 作为对外入口。
 """
 from __future__ import annotations
 
@@ -15,9 +15,8 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QStackedWidget,
     QDialog, QFileDialog, QMessageBox, QHBoxLayout, QVBoxLayout, QGridLayout,
 )
-from PySide6.QtCore import Qt, Signal, QTimer, QThread
-from widget_utils import make_static_card, make_int_spinbox
-from pipeline import ProcessingPipeline
+from PySide6.QtCore import Qt, QTimer
+from widget_utils import make_static_card
 from PySide6.QtGui import (
     QPixmap, QImage, QPainter, QPen, QColor, QKeySequence, QShortcut,
 )
@@ -26,121 +25,17 @@ from ocr_engine import (
     VideoMetadata, Flag,
     codec_from_fourcc, format_duration,
     _reset_backend, _select_backend, _get_model_params,
-    _CancelExport,
 )
 from gui_analysis import AnalysisTab
 from gui_review import ReviewDialog
+from gui_export import ExportThread
+from gui_settings import build_settings_panel
 from theme_manager import ThemeManager
 
 from qfluentwidgets import (setTheme, Theme, isDarkTheme,
-    PushButton, PrimaryPushButton, LineEdit, ComboBox, RadioButton,
-    BodyLabel, StrongBodyLabel, CaptionLabel, CardWidget, Slider, ProgressBar, CompactSpinBox, Pivot)
+    PushButton, PrimaryPushButton,
+    BodyLabel, StrongBodyLabel, CaptionLabel, Slider, ProgressBar, CompactSpinBox, Pivot)
 
-
-class _ExportThread(QThread):
-    """后台导出线程：在原生线程中运行 Pipeline，通过信号与 GUI 通信。
-
-    避免 QThread 导致的 GPU 推理性能损失。
-    """
-
-    _progress = Signal(str, float)
-    _finished = Signal(str)
-    _error = Signal(str)
-    _cancelled = Signal()
-
-    def __init__(self, app: "RaceVideoToLogApp", output_path: Path,
-            region: tuple, max_speed_kmh: float, max_accel_mps2: float,
-            frame_div: int, target_h: int, pad_px: int, buffer_size: int,
-            backend: str = "auto", log_level: str = "normal",
-            video_backend: str = "cv2",
-            parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.app = app
-        self._output_path = output_path
-        self._region = region
-        self._max_speed_kmh = max_speed_kmh
-        self._max_accel_mps2 = max_accel_mps2
-        self._frame_div = frame_div
-        self._target_h = target_h
-        self._pad_px = pad_px
-        self._buffer_size = buffer_size
-        self._backend = backend
-        self._log_level = log_level
-        self._video_backend = video_backend
-        self._cancel_flag = False
-
-
-    def run(self) -> None:
-        """Run Pipeline in a native threading.Thread, wait for completion."""
-        import threading
-        done = threading.Event()
-        error_container: list[Exception] = []
-        result_container: dict = {}
-
-        def _worker() -> None:
-            try:
-                self._check_cancel()
-                mode = self.app.correction_mode
-                assert self.app.video_path is not None
-                pipeline = ProcessingPipeline(
-                    video_path=self.app.video_path,
-                    roi=self._region,
-                    max_speed=self._max_speed_kmh,
-                    max_accel=self._max_accel_mps2,
-                    frame_div=self._frame_div,
-                    target_h=self._target_h,
-                    pad=self._pad_px,
-                    buffer_size=self._buffer_size,
-                    backend=self._backend,
-                    ocr_model=self.app.model_combo.currentText(),
-                    reocr_model=self.app._reocr_model(),
-                    speed_format=self.app.speed_format,
-                    frame_start=self.app.frame_start_edit.text(),
-                    frame_end=self.app.frame_end_edit.text(),
-                    progress_cb=self._emit_progress,
-                    cancel_check=self._check_cancel,
-                    log_level=self._log_level,
-                    video_backend=self._video_backend,
-                )
-                if mode == "auto":
-                    pipeline.run_auto(self._output_path, mode="auto")
-                    result_container["mode"] = "auto"
-                else:
-                    pipeline.run_auto(self._output_path, mode="manual")
-                    result_container["mode"] = "review"
-                self.app._pipeline = pipeline
-                self.app._review_output_path = self._output_path
-            except _CancelExport:
-                result_container["cancelled"] = True
-            except Exception as exc:
-                import traceback
-                traceback.print_exc()
-                error_container.append(exc)
-            finally:
-                done.set()
-
-        t = threading.Thread(target=_worker, daemon=True)
-        t.start()
-        while not done.wait(1.0):
-            if self._cancel_flag:
-                done.set()
-                t.join(2.0)
-                result_container["cancelled"] = True
-                break
-        t.join(2.0)
-
-        if error_container:
-            self._error.emit(str(error_container[0]))
-        elif result_container.get("cancelled"):
-            self._cancelled.emit()
-        else:
-            self._finished.emit(result_container["mode"])
-    def _check_cancel(self) -> None:
-        if self._cancel_flag:
-            raise _CancelExport()
-
-    def _emit_progress(self, msg: str, pct: float) -> None:
-        self._progress.emit(msg, pct)
 
 class RaceVideoToLogApp(QMainWindow):
     """RaceVideoToLog PySide6 主窗口。"""
@@ -163,11 +58,14 @@ class RaceVideoToLogApp(QMainWindow):
         self.ocr_engine: "RapidOCR | None" = None
         self.ocr_engines: list = []
 
-        self._export_thread: _ExportThread | None = None
+        self._export_thread: ExportThread | None = None
         self.correction_mode: str = config.DEFAULT_CORRECTION_MODE
         self.speed_format: str = config.DEFAULT_SPEED_FORMAT
 
         self._review_output_path: Path | None = None
+
+        # ── Settings widgets dict (populated by _build_ocr_tab) ──
+        self._settings: dict = {}
 
         # 预览
         self._preview_pm: QPixmap | None = None
@@ -270,10 +168,9 @@ class RaceVideoToLogApp(QMainWindow):
         # 主内容
         main_w = QHBoxLayout(); main_w.setSpacing(12)
 
-        # 左侧面板
+        # 左侧面板 — 使用 gui_settings.build_settings_panel
         left = QWidget(); left.setFixedWidth(450)
-        ll = QVBoxLayout(left); ll.setContentsMargins(0, 0, 0, 0); ll.setSpacing(6)
-        self._build_left_panel(ll)
+        self._settings = build_settings_panel(left)
         main_w.addWidget(left)
 
         # 右侧 = 识别范围 + 预览
@@ -283,117 +180,24 @@ class RaceVideoToLogApp(QMainWindow):
 
         layout.addLayout(main_w, 1)
 
-    def _build_left_panel(self, ll: QVBoxLayout) -> None:
-        # 速度格式 Card
-        fmt_card = make_static_card()
-        gl = QVBoxLayout(fmt_card)
-        gl.addWidget(StrongBodyLabel("速度格式"))
-        r = QHBoxLayout()
-        self._fmt_ms = RadioButton("m/s"); self._fmt_kmh = RadioButton("km/h")
-        self._fmt_kmh.setChecked(True); self._fmt_mph = RadioButton("mile/h")
-        r.addWidget(self._fmt_ms); r.addWidget(self._fmt_kmh)
-        r.addWidget(self._fmt_mph); r.addStretch()
-        gl.addLayout(r)
-        gl.addWidget(CaptionLabel("输出统一转换为 km/h。"))
-
-        cg = make_static_card()
-        cl = QGridLayout(cg)
-        cl.addWidget(BodyLabel("最大速度 (km/h)"), 0, 0)
-        self.max_speed_edit = LineEdit(); self.max_speed_edit.setText(str(int(config.DEFAULT_MAX_SPEED))); self.max_speed_edit.setFixedWidth(50)
-        cl.addWidget(self.max_speed_edit, 0, 1)
-        cl.addWidget(BodyLabel("最大加速度 (m/s²)"), 0, 2)
-        self.max_accel_edit = LineEdit(); self.max_accel_edit.setText(str(int(config.DEFAULT_MAX_ACCEL))); self.max_accel_edit.setFixedWidth(50)
-        cl.addWidget(self.max_accel_edit, 0, 3)
-        gl.addWidget(cg)
-        ll.addWidget(fmt_card)
-
-        # 性能 Card
-        perf_card = make_static_card()
-        pl = QGridLayout(perf_card)
-        pl.addWidget(StrongBodyLabel("性能"), 0, 0, 1, 4)
-        pl.addWidget(BodyLabel("采样率 1/"), 1, 0)
-        self.div_spin = make_int_spinbox(1, 10, 2, 70)
-        pl.addWidget(self.div_spin, 1, 1)
-        pl.addWidget(BodyLabel("并行线程数"), 1, 2)
-        self.buffer_spin = make_int_spinbox(1, 64, 16, 70)
-        pl.addWidget(self.buffer_spin, 1, 3)
-        pl.addWidget(BodyLabel("OCR 高度 (px)"), 2, 0)
-        self.target_h_spin = make_int_spinbox(8, 256, 48, 70)
-        pl.addWidget(self.target_h_spin, 2, 1)
-        pl.addWidget(BodyLabel("边缘填充 (px)"), 2, 2)
-        self.pad_spin = make_int_spinbox(0, 64, 0, 70)
-        pl.addWidget(self.pad_spin, 2, 3)
-        pl.addWidget(BodyLabel("OCR 后端"), 3, 0)
-        self.backend_combo = ComboBox()
-        self.backend_combo.addItems(["自动", "TensorRT", "CPU"]); self.backend_combo.setCurrentIndex(0)
-        pl.addWidget(self.backend_combo, 3, 1)
-        pl.addWidget(BodyLabel("视频解码"), 3, 2)
-        self.video_backend_combo = ComboBox()
-        self.video_backend_combo.addItems(["cv2 (稳定)", "decord (快速)"])
-        self.video_backend_combo.setCurrentIndex(0)
-        self.video_backend_combo.setFixedWidth(120)
-        pl.addWidget(self.video_backend_combo, 3, 3)
-        pl.addWidget(BodyLabel("OCR 模型"), 4, 0)
-        self.model_combo = ComboBox()
-        self.model_combo.addItems(["v6_tiny", "v6_small"])
-        self.model_combo.setCurrentIndex(0)  # default: tiny
-        self.model_combo.setFixedWidth(95)
-        pl.addWidget(self.model_combo, 4, 1)
-        pl.addWidget(BodyLabel("重OCR"), 4, 2)
-        self.reocr_model_combo = ComboBox()
-        self.reocr_model_combo.addItems(["同主模型", "v6_tiny", "v6_small"])
-        self.reocr_model_combo.setCurrentIndex(2)  # default: v6_small
-        self.reocr_model_combo.setFixedWidth(120)
-        pl.addWidget(self.reocr_model_combo, 4, 3)
-        pl.addWidget(BodyLabel("日志级别"), 5, 0)
-        self.log_level_combo = ComboBox()
-        self.log_level_combo.addItems(["正常", "详细", "调试"])
-        self.log_level_combo.setCurrentIndex(0)
-        self.log_level_combo.setFixedWidth(120)
-        pl.addWidget(self.log_level_combo, 5, 1)
-        ll.addWidget(perf_card)
-
-        # 纠错模式 Card
-        mode_card = make_static_card()
-        ml = QVBoxLayout(mode_card)
-        ml.addWidget(StrongBodyLabel("纠错模式"))
-        self.mode_auto = RadioButton("自动纠错（全自动，推荐）")
-        self.mode_auto.setChecked(True)
-        self.mode_baseline = RadioButton("人工辅助纠错")
-        ml.addWidget(self.mode_auto); ml.addWidget(self.mode_baseline)
-        ll.addWidget(mode_card)
-
-        # 时间轴范围 Card
-        time_card = make_static_card()
-        tl = QGridLayout(time_card)
-        tl.addWidget(StrongBodyLabel("时间轴范围"), 0, 0, 1, 6)
-        tl.addWidget(BodyLabel("起始帧"), 1, 0)
-        self.frame_start_edit = LineEdit(); self.frame_start_edit.setFixedWidth(72)
-        tl.addWidget(self.frame_start_edit, 1, 1)
-        bfs = PushButton("设为当前"); bfs.setFixedWidth(90)
-        bfs.clicked.connect(lambda: self.frame_start_edit.setText(str(self._slider.value())))
-        tl.addWidget(bfs, 1, 2)
-        tl.addWidget(BodyLabel("结束帧"), 1, 3)
-        self.frame_end_edit = LineEdit(); self.frame_end_edit.setFixedWidth(72)
-        tl.addWidget(self.frame_end_edit, 1, 4)
-        bfe = PushButton("设为当前"); bfe.setFixedWidth(90)
-        bfe.clicked.connect(lambda: self.frame_end_edit.setText(str(self._slider.value())))
-        tl.addWidget(bfe, 1, 5)
-        ll.addWidget(time_card)
-
-        ll.addStretch()
-
     def _build_right_panel(self, rl: QVBoxLayout) -> None:
         # 识别范围 Card
         roi_card = make_static_card()
         rgl = QGridLayout(roi_card)
         rgl.addWidget(StrongBodyLabel("识别范围（像素）"), 0, 0, 1, 4)
-        self.roi_x1 = CompactSpinBox(); self.roi_y1 = CompactSpinBox()
-        self.roi_x2 = CompactSpinBox(); self.roi_y2 = CompactSpinBox()
+        self.roi_x1 = CompactSpinBox()
+        self.roi_y1 = CompactSpinBox()
+        self.roi_x2 = CompactSpinBox()
+        self.roi_y2 = CompactSpinBox()
         for s in [self.roi_x1, self.roi_y1, self.roi_x2, self.roi_y2]:
             s.setRange(0, 9999); s.setFixedWidth(80)
             s.valueChanged.connect(lambda v, spin=s: self._on_roi_spin(spin))
-            self._disable_spin_flyout(s)
+            # Use shared utility for flyout disable
+            try:
+                s.compactSpinButton.clicked.disconnect()
+            except Exception:
+                pass
+            s._showFlyout = lambda: None
         rgl.addWidget(CaptionLabel("左上 X"), 1, 0); rgl.addWidget(self.roi_x1, 2, 0)
         rgl.addWidget(CaptionLabel("左上 Y"), 1, 1); rgl.addWidget(self.roi_y1, 2, 1)
         rgl.addWidget(CaptionLabel("右下 X"), 1, 2); rgl.addWidget(self.roi_x2, 2, 2)
@@ -432,12 +236,16 @@ class RaceVideoToLogApp(QMainWindow):
         self._import_video_btn.clicked.connect(self._import_video)
         self._export_btn.clicked.connect(self._export_csv)
         self._cancel_btn.clicked.connect(self._cancel_export)
-        self._fmt_ms.clicked.connect(lambda: self._on_fmt("m/s"))
-        self._fmt_kmh.clicked.connect(lambda: self._on_fmt("km/h"))
-        self._fmt_mph.clicked.connect(lambda: self._on_fmt("mile/h"))
-        self.mode_auto.toggled.connect(lambda checked: checked and self._on_mode("auto"))
-        self.mode_baseline.toggled.connect(lambda checked: checked and self._on_mode("baseline"))
-        self.backend_combo.currentIndexChanged.connect(self._on_backend)
+        s = self._settings
+        s["format_ms"].clicked.connect(lambda: self._on_fmt("m/s"))
+        s["format_kmh"].clicked.connect(lambda: self._on_fmt("km/h"))
+        s["format_mph"].clicked.connect(lambda: self._on_fmt("mile/h"))
+        s["mode_auto"].toggled.connect(lambda checked: checked and self._on_mode("auto"))
+        s["mode_baseline"].toggled.connect(lambda checked: checked and self._on_mode("baseline"))
+        s["backend_combo"].currentIndexChanged.connect(self._on_backend)
+        # Timeline set-to-current buttons
+        s["_set_start_btn"].clicked.connect(lambda: s["frame_start_edit"].setText(str(self._slider.value())))
+        s["_set_end_btn"].clicked.connect(lambda: s["frame_end_edit"].setText(str(self._slider.value())))
 
     def _add_shortcuts(self) -> None:
         QShortcut(QKeySequence(Qt.Key.Key_Left), self, lambda: self._step(-1))
@@ -447,15 +255,8 @@ class RaceVideoToLogApp(QMainWindow):
 
     def _on_fmt(self, fmt: str) -> None: self.speed_format = fmt
     def _on_mode(self, mode: str) -> None: self.correction_mode = mode
+
     # ═══════════════════ 主题切换 ═══════════════════
-
-    def _disable_spin_flyout(self, spin) -> None:
-        try:
-            spin.compactSpinButton.clicked.disconnect()
-        except Exception:
-            pass
-        spin._showFlyout = lambda: None
-
 
     def _register_theme_callbacks(self) -> None:
         # 主窗口背景色
@@ -493,20 +294,13 @@ class RaceVideoToLogApp(QMainWindow):
             tab = self._analysis_tab
             ThemeManager.register(lambda dark: tab._sync_figure_theme())
 
-    def _apply_theme(self) -> None:
-        from qfluentwidgets import qconfig, Theme, isDarkTheme
+    def _toggle_theme(self) -> None:
+        from qfluentwidgets import qconfig
         if qconfig.theme == Theme.DARK:
             setTheme(Theme.LIGHT)
         else:
             setTheme(Theme.DARK)
         ThemeManager.refresh()
-
-
-
-
-
-    def _toggle_theme(self) -> None:
-        self._apply_theme()
 
     # ═══════════════════ 视频导入 ═══════════════════
 
@@ -642,11 +436,11 @@ class RaceVideoToLogApp(QMainWindow):
     def _schedule_redraw(self) -> None:
         """节流重绘：16ms 单次定时器，避免拖拽时过度调用 _redraw。"""
         if self._redraw_timer is not None:
-            return  # 定时器已在运行，跳过
+            return
         self._redraw_timer = QTimer(self)
         self._redraw_timer.setSingleShot(True)
         self._redraw_timer.timeout.connect(self._do_throttled_redraw)
-        self._redraw_timer.start(16)  # ~60fps
+        self._redraw_timer.start(16)
 
     def _do_throttled_redraw(self) -> None:
         self._redraw_timer = None
@@ -713,7 +507,8 @@ class RaceVideoToLogApp(QMainWindow):
 
     def _on_backend(self, _idx: int) -> None:
         _reset_backend(); self._release_engines()
-        keys = ["auto", "tensorrt", "cpu"]; key = keys[self.backend_combo.currentIndex()]
+        keys = ["auto", "tensorrt", "cpu"]
+        key = keys[self._settings["backend_combo"].currentIndex()]
         actual = _select_backend(key)
         _backend_labels = {"TensorRT": "TensorRT (GPU)", "CUDA": "CUDA (GPU)", "CPU": "CPU"}
         self._status_label.setText(f"OCR 后端: {_backend_labels.get(actual, actual)}")
@@ -724,24 +519,24 @@ class RaceVideoToLogApp(QMainWindow):
 
     def _reocr_model(self) -> str | None:
         """解析重 OCR 模型选择：'同主模型' → None，否则返回模型名。"""
-        text = self.reocr_model_combo.currentText()
+        text = self._settings["reocr_model_combo"].currentText()
         return None if text == "同主模型" else text
 
     def _create_ocr(self) -> "RapidOCR":
         from rapidocr import RapidOCR
         _reset_backend()
-        keys = ["auto", "tensorrt", "cpu"]; key = keys[self.backend_combo.currentIndex()]
+        keys = ["auto", "tensorrt", "cpu"]
+        key = keys[self._settings["backend_combo"].currentIndex()]
         _select_backend(key)
         from gpu_setup import get_engine_params, get_engine_type, get_setup_advice
         engine_params = get_engine_params()
         _et = get_engine_type()
 
-        # 若回退到 CPU 且有 NVIDIA 显卡，给出安装建议
         _advice = get_setup_advice()
         if _advice:
             self._status_label.setText(_advice.split("\n")[0])
 
-        model_params = _get_model_params(self.model_combo.currentText(), _et)
+        model_params = _get_model_params(self._settings["model_combo"].currentText(), _et)
         all_params = {**(model_params or {}), **engine_params}
         if _et == "tensorrt":
             self._status_label.setText("正在加载 TensorRT 引擎（首次使用可能需要几分钟）...")
@@ -762,68 +557,68 @@ class RaceVideoToLogApp(QMainWindow):
             "CSV 文件 (*.csv);;所有文件 (*.*)")
         if not path:
             return
-        from ocr_engine import parse_csv_header
+        from ocr_engine import parse_csv_header, parse_csv_setting
         settings = parse_csv_header(path)
         if not settings:
             QMessageBox.warning(self, "导入失败", "无法解析 CSV 文件头。")
             return
+        s = self._settings
+
+        # ── ROI（特殊：4 个 spinbox）──
         if "roi" in settings:
-            try:
-                parts = [int(x.strip()) for x in settings["roi"].split(",")]
-                if len(parts) == 4:
-                    # Block signals to prevent _on_roi_spin clamping during bulk set
-                    for s in [self.roi_x1, self.roi_y1, self.roi_x2, self.roi_y2]:
-                        s.blockSignals(True)
-                    self.roi_x2.setValue(parts[2]); self.roi_y2.setValue(parts[3])
-                    self.roi_x1.setValue(parts[0]); self.roi_y1.setValue(parts[1])
-                    for s in [self.roi_x1, self.roi_y1, self.roi_x2, self.roi_y2]:
-                        s.blockSignals(False)
-                    self._redraw()
-            except ValueError:
-                pass
-        for key, widget, cast in [
-            ("max_speed", self.max_speed_edit, str),
-            ("max_accel", self.max_accel_edit, str),
-            ("div", self.div_spin, lambda v: int(float(v))),
-            ("target_h", self.target_h_spin, lambda v: int(float(v))),
-            ("pad", self.pad_spin, lambda v: int(float(v))),
-            ("buffer", self.buffer_spin, lambda v: int(float(v))),
-            ("frame_start", self.frame_start_edit, str),
-            ("frame_end", self.frame_end_edit, str),
-        ]:
-            if key in settings:
-                try:
-                    val = cast(settings[key])
-                    if hasattr(widget, "setValue"):
-                        widget.setValue(val)
-                    else:
-                        widget.setText(str(val))
-                except Exception:
-                    pass
-        if "backend" in settings:
-            be = settings["backend"].lower()
-            idx = {"auto": 0, "tensorrt": 1, "cpu": 2}.get(be, 0)
-            self.backend_combo.setCurrentIndex(idx)
-        if "model" in settings:
-            model = settings["model"]
-            idx = {"v6_tiny": 0, "v6_small": 1}.get(model, 1)
-            self.model_combo.setCurrentIndex(idx)
-        if "reocr_model" in settings:
-            rmodel = settings["reocr_model"]
-            idx = {"v6_tiny": 1, "v6_small": 2}.get(rmodel, 0)
-            self.reocr_model_combo.setCurrentIndex(idx)
+            parts = parse_csv_setting("roi", settings["roi"])
+            if parts is not None and len(parts) == 4:
+                for spin in [self.roi_x1, self.roi_y1, self.roi_x2, self.roi_y2]:
+                    spin.blockSignals(True)
+                self.roi_x2.setValue(parts[2]); self.roi_y2.setValue(parts[3])
+                self.roi_x1.setValue(parts[0]); self.roi_y1.setValue(parts[1])
+                for spin in [self.roi_x1, self.roi_y1, self.roi_x2, self.roi_y2]:
+                    spin.blockSignals(False)
+                self._redraw()
+
+        # ── 数值字段（统一使用共享解析器）──
+        _num_fields = {
+            "max_speed": s["max_speed_edit"], "max_accel": s["max_accel_edit"],
+            "frame_start": s["frame_start_edit"], "frame_end": s["frame_end_edit"],
+        }
+        for key, widget in _num_fields.items():
+            val = parse_csv_setting(key, settings.get(key, ""))
+            if val is not None:
+                widget.setText(str(val))
+
+        _spin_fields = {
+            "div": s["div_spin"], "target_h": s["target_h_spin"],
+            "pad": s["pad_spin"], "buffer": s["buffer_spin"],
+        }
+        for key, widget in _spin_fields.items():
+            val = parse_csv_setting(key, settings.get(key, ""))
+            if val is not None:
+                widget.setValue(val)
+
+        # ── 下拉框字段 ──
+        _combo_map = {
+            "backend":      (s["backend_combo"],      {"auto": 0, "tensorrt": 1, "cpu": 2}),
+            "video_backend":(s["video_backend_combo"], {"cv2": 0, "decord": 1}),
+            "model":        (s["model_combo"],         {"v6_tiny": 0, "v6_small": 1}),
+            "reocr_model":  (s["reocr_model_combo"],   {"v6_tiny": 1, "v6_small": 2}),
+        }
+        for key, (combo, mapping) in _combo_map.items():
+            val = parse_csv_setting(key, settings.get(key, ""))
+            if val is not None:
+                idx = mapping.get(str(val).lower(), 0)
+                combo.setCurrentIndex(idx)
         if "format" in settings:
             fmt = settings["format"].lower()
-            for rb, key in [(self._fmt_ms, "m/s"), (self._fmt_kmh, "km/h"),
-                            (self._fmt_mph, "mile/h")]:
+            for rb, key in [(s["format_ms"], "m/s"), (s["format_kmh"], "km/h"),
+                            (s["format_mph"], "mile/h")]:
                 if key == fmt:
                     rb.setChecked(True); break
         if "pinned" in settings or "manual_anchor" in settings or "manual_correction" in settings:
-            self.mode_auto.setChecked(False)
-            self.mode_baseline.setChecked(True)
+            s["mode_auto"].setChecked(False)
+            s["mode_baseline"].setChecked(True)
         elif "auto_anchor" in settings or "auto_correction" in settings:
-            self.mode_baseline.setChecked(False)
-            self.mode_auto.setChecked(True)
+            s["mode_baseline"].setChecked(False)
+            s["mode_auto"].setChecked(True)
         self._status_label.setText(f"已导入设置: {Path(path).name}")
 
     def _export_csv(self) -> None:
@@ -838,31 +633,77 @@ class RaceVideoToLogApp(QMainWindow):
             "CSV 文件 (*.csv)")
         if not out: return
 
+        s = self._settings
         try:
-            ms = float(self.max_speed_edit.text()); ma = float(self.max_accel_edit.text())
-            fd = self.div_spin.value(); th = self.target_h_spin.value()
-            pp = self.pad_spin.value(); nw = self.buffer_spin.value()
-            be = ["auto", "tensorrt", "cpu"][self.backend_combo.currentIndex()]
-            log_level = ["normal", "detailed", "debug"][self.log_level_combo.currentIndex()]
-            vb = ["cv2", "decord"][self.video_backend_combo.currentIndex()]
+            ms = float(s["max_speed_edit"].text())
+            ma = float(s["max_accel_edit"].text())
+            fd = s["div_spin"].value(); th = s["target_h_spin"].value()
+            pp = s["pad_spin"].value(); nw = s["buffer_spin"].value()
+            be = ["auto", "tensorrt", "cpu"][s["backend_combo"].currentIndex()]
+            log_level = ["normal", "detailed", "debug"][s["log_level_combo"].currentIndex()]
+            vb = ["cv2", "decord"][s["video_backend_combo"].currentIndex()]
         except ValueError:
             QMessageBox.warning(self, "参数错误", "请检查数值参数。"); return
 
         # 断开旧线程信号，防止泄漏到新线程
         if self._export_thread is not None:
-            self._export_thread._progress.disconnect()
-            self._export_thread._finished.disconnect()
-            self._export_thread._error.disconnect()
-            self._export_thread._cancelled.disconnect()
+            try:
+                self._export_thread.progress_updated.disconnect()
+                self._export_thread.finished.disconnect()
+                self._export_thread.error_occurred.disconnect()
+                self._export_thread.cancelled.disconnect()
+                self._export_thread.pipeline_ready.disconnect()
+            except (TypeError, RuntimeError):
+                pass
             self._export_thread = None
 
         self._export_btn.setEnabled(False); self._cancel_btn.setEnabled(True)
-        self._export_thread = _ExportThread(self, Path(out), roi, ms, ma, fd, th, pp, nw, be, log_level, vb)
-        self._export_thread._progress.connect(self._on_progress)
-        self._export_thread._finished.connect(self._on_done)
-        self._export_thread._error.connect(self._on_error)
-        self._export_thread._cancelled.connect(self._on_cancel)
+
+        # ── 检查可选依赖可用性 ──
+        if be == "tensorrt":
+            try:
+                import tensorrt  # noqa: F401
+            except ModuleNotFoundError:
+                QMessageBox.warning(self, "TensorRT 未安装",
+                    "你选择了 TensorRT 后端，但 venv 中未安装 tensorrt。\n"
+                    "将自动回退到 CPU 推理。\n\n"
+                    "启用 GPU 加速（需先安装 CUDA Toolkit 12.x + TensorRT 10.x）：\n"
+                    "  .venv\\Scripts\\pip install cuda-python tensorrt")
+        if vb == "decord":
+            try:
+                import decord  # noqa: F401
+            except ModuleNotFoundError:
+                QMessageBox.warning(self, "decord 未安装",
+                    "你选择了 decord 解码器，但 decord 未安装。\n"
+                    "将自动回退到 cv2 (CPU 解码)。\n\n"
+                    "如需 GPU 加速：pip install decord")
+        self._export_thread = ExportThread(
+            video_path=self.video_path,
+            roi=roi,
+            max_speed_kmh=ms, max_accel_mps2=ma,
+            frame_div=fd, target_h=th, pad_px=pp, buffer_size=nw,
+            backend=be,
+            ocr_model=s["model_combo"].currentText(),
+            reocr_model=self._reocr_model(),
+            speed_format=self.speed_format,
+            frame_start=s["frame_start_edit"].text(),
+            frame_end=s["frame_end_edit"].text(),
+            log_level=log_level,
+            video_backend=vb,
+            correction_mode=self.correction_mode,
+            output_path=Path(out),
+            parent=self,
+        )
+        self._export_thread.progress_updated.connect(self._on_progress)
+        self._export_thread.finished.connect(self._on_done)
+        self._export_thread.error_occurred.connect(self._on_error)
+        self._export_thread.cancelled.connect(self._on_cancel)
+        self._export_thread.pipeline_ready.connect(self._on_pipeline_ready)
         self._export_thread.start()
+
+    def _on_pipeline_ready(self, pipeline, output_path) -> None:
+        self._pipeline = pipeline
+        self._review_output_path = output_path
 
     def _cancel_export(self) -> None:
         if self._export_thread: self._export_thread._cancel_flag = True
@@ -870,7 +711,6 @@ class RaceVideoToLogApp(QMainWindow):
 
     def _on_progress(self, msg: str, pct: float) -> None:
         self._status_label.setText(msg); self._progress_bar.setValue(int(pct))
-
 
     def _on_done(self, mode: str) -> None:
         if self.sender() is not self._export_thread:
@@ -914,15 +754,15 @@ class RaceVideoToLogApp(QMainWindow):
             return
         self._finish_export(); self._status_label.setText("已取消。")
 
-
     def _finish_export(self) -> None:
         self._export_btn.setEnabled(True); self._cancel_btn.setEnabled(False)
         if self._export_thread is not None:
             try:
-                self._export_thread._progress.disconnect()
-                self._export_thread._finished.disconnect()
-                self._export_thread._error.disconnect()
-                self._export_thread._cancelled.disconnect()
+                self._export_thread.progress_updated.disconnect()
+                self._export_thread.finished.disconnect()
+                self._export_thread.error_occurred.disconnect()
+                self._export_thread.cancelled.disconnect()
+                self._export_thread.pipeline_ready.disconnect()
             except (TypeError, RuntimeError):
                 pass
             self._export_thread = None
@@ -935,6 +775,7 @@ class RaceVideoToLogApp(QMainWindow):
             import gc; gc.collect()
             self._pipeline = None
         self._release_engines()
+
     def _on_pivot(self, key: str) -> None:
         if key == "analysis":
             self._footer.hide()

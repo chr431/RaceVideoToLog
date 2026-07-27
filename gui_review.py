@@ -183,7 +183,7 @@ class ReviewDialog(QDialog):
         from matplotlib.figure import Figure
         from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 
-        fig = Figure(figsize=(8, 3.5), dpi=100, layout='none')
+        fig = Figure(figsize=(8, 3.5), dpi=100, layout='constrained')
         fig.subplots_adjust(left=0.08, right=0.98, top=0.95, bottom=0.15)
         ax = fig.add_subplot(111)
         dark = isDarkTheme()
@@ -217,6 +217,8 @@ class ReviewDialog(QDialog):
 
         user_zoomed = (hasattr(self, '_user_zoomed_ref')
                         and self._user_zoomed_ref[0])
+        saved_xlim = None
+        saved_ylim = None
         if user_zoomed:
             saved_xlim = self._saved_limits["xlim"]
             saved_ylim = self._saved_limits["ylim"]
@@ -347,7 +349,7 @@ class ReviewDialog(QDialog):
                 else:
                     cur_hl.set_offsets(np.empty((0, 2)))
 
-        if user_zoomed:
+        if user_zoomed and saved_xlim is not None and saved_ylim is not None:
             ax.set_xlim(saved_xlim)
             ax.set_ylim(saved_ylim)
 

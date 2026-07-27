@@ -25,8 +25,9 @@ def load_speeds(path):
     speeds = {}
     with open(path, 'r', encoding='utf-8-sig') as f:
         for line in f:
-            if line.startswith('#'): continue
-            parts = line.strip().split(',')
+            line = line.strip()
+            if not line or line.startswith('#'): continue
+            parts = line.split(',')
             if len(parts) >= 4:
                 speeds[int(float(parts[0]))] = (float(parts[2]), int(parts[3]))
     return speeds
@@ -111,12 +112,14 @@ if __name__ == "__main__":
     elif len(sys.argv) > 1 and sys.argv[1] == "--sweep":
         # Example: python tools/tune_params.py --sweep
         param_sets = [
-            {"LCS_ERROR_LOW": "float = 0.25", "LCS_TRUST_HIGH": "float = 0.75"},
-            {"LCS_ERROR_LOW": "float = 0.35", "LCS_TRUST_HIGH": "float = 0.65"},
-            {"LCS_TRUST_HIGH": "float = 0.80"},
-            {"LCS_CANDIDATE_ACCEPT": "float = 0.80"},
-            {"LCS_TIME_WINDOW": "float = 0.3"},
-            {"LCS_TAU": "float = 0.04"},
+            {"VITERBI_OBS_WEIGHT": "float = 0.2", "VITERBI_ACCEL_WEIGHT": "float = 0.8"},
+            {"VITERBI_OBS_WEIGHT": "float = 0.4", "VITERBI_ACCEL_WEIGHT": "float = 1.2"},
+            {"ERROR_DETECT_ACCEL_SPIKE_WEIGHT": "float = 0.30"},
+            {"ERROR_DETECT_ACCEL_SPIKE_WEIGHT": "float = 0.50"},
+            {"ERROR_DETECT_SG_DEVIATION_WEIGHT": "float = 0.10"},
+            {"ERROR_DETECT_SG_DEVIATION_WEIGHT": "float = 0.20"},
+            {"AUTO_CORRECT_THRESHOLD": "int = 70"},
+            {"AUTO_CORRECT_THRESHOLD": "int = 90"},
         ]
         for i, params in enumerate(param_sets):
             print(f"\n=== Sweep {i+1}: {params} ===")

@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [master, feature/*]
+  pull_request:
+    branches: [master]
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -e .
+      - name: Install test runner
+        run: pip install pytest
+      - name: Run unit tests
+        run: python -m pytest tests/ -v
+
+  version-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify version consistency
+        run: |
+          PY_VER=$(grep '__version__' config.py | grep -oP '"\d+\.\d+\.\d+"' | tr -d '"')
+          TOML_VER=$(grep '^version' pyproject.toml | grep -oP '"\d+\.\d+\.\d+"' | tr -d '"')
+          echo "config.py: $PY_VER"
+          echo "pyproject.toml: $TOML_VER"
+          if [ "$PY_VER" != "$TOML_VER" ]; then
+            echo "ERROR: Version mismatch!"
+            exit 1
+          fi
+          echo "OK: Versions match ($PY_VER)"

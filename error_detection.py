@@ -30,6 +30,19 @@ from config import (
     ERROR_DETECT_ACCEL_SPIKE_WEIGHT,
     ERROR_DETECT_SG_DEVIATION_WEIGHT,
     ERROR_DETECT_CANDIDATE_THRESHOLD,
+    PHYSICS_FALLBACK_DT, LINEARITY_NEIGHBOR_MAX_LOOK,
+    LINEARITY_DECAY_FACTOR,
+    ACCEL_SPIKE_VIOLATION_MULT, ACCEL_SPIKE_SEARCH_WINDOW,
+    SG_WINDOW_HALF_MIN, SG_WINDOW_HALF_FPS_MULT, SG_WINDOW_HALF_FALLBACK,
+    SG_DEV_REL_THRESHOLD, SG_DEV_ABS_THRESHOLD_KMH,
+    REOCR_CLUSTER_GAP_KMH,
+    CONF_TIER_LOW_MAX, CONF_TIER_MEDIUM_MAX,
+    TEXTLEN_SCORE_3PLUS, TEXTLEN_SCORE_2, TEXTLEN_SCORE_1, TEXTLEN_SCORE_0,
+    ACCEL_SCORE_NORMAL, ACCEL_SCORE_NEAR_ONE, ACCEL_SCORE_SAME_DIR,
+    ACCEL_SCORE_VIOLATION, ACCEL_SCORE_ISLAND_INTERIOR,
+    SG_CLUSTER_SCORE_1, SG_CLUSTER_SCORE_3, SG_CLUSTER_SCORE_5,
+    SG_CLUSTER_SCORE_10, SG_CLUSTER_SCORE_MANY,
+    REOCR_AGREE_1CLUSTER, REOCR_AGREE_2CLUSTER, REOCR_AGREE_3PLUS,
 )
 
 if TYPE_CHECKING:
@@ -87,7 +100,7 @@ def _signal_physics(rows: list, observations: list, times: list[float],
                     total += 1
                     dt = abs(times[i] - times[ni])
                     if dt <= 0:
-                        dt = 0.02
+                        dt = PHYSICS_FALLBACK_DT
                     max_dv = max_accel_mps2 * dt * MPS_TO_KMH
                     if abs(v - nv) <= max_dv:
                         reachable += 1
@@ -106,7 +119,7 @@ def _signal_physics(rows: list, observations: list, times: list[float],
 
 def _find_reliable_neighbor(i: int, direction: int, rows: list, observations: list,
                             times: list[float], max_accel_mps2: float,
-                            max_look: int = 120) -> int | None:
+                            max_look: int = LINEARITY_NEIGHBOR_MAX_LOOK) -> int | None:
     step = 1 if direction > 0 else -1
     j = i + step
     v = rows[i][2]
@@ -151,7 +164,7 @@ def _signal_linearity(rows: list, observations: list, times: list[float],
         if expected <= 0:
             scores.append(50.0); continue
         deviation = abs(v - expected) / expected
-        scores.append(max(0.0, min(100.0, 100.0 * math.exp(-deviation * 3.0))))
+        scores.append(max(0.0, min(100.0, 100.0 * math.exp(-deviation * LINEARITY_DECAY_FACTOR))))
     return scores
 
 
@@ -163,10 +176,10 @@ def _signal_text_len(observations: list, n: int) -> list[float]:
         if i < len(observations) and observations[i] is not None:
             rt = observations[i].raw_text or ""
             digits = sum(1 for ch in rt if ch.isdigit())
-            if digits >= 3: scores.append(100.0)
-            elif digits == 2: scores.append(50.0)
-            elif digits == 1: scores.append(20.0)
-            else: scores.append(10.0)
+            if digits >= 3: scores.append(TEXTLEN_SCORE_3PLUS)
+            elif digits == 2: scores.append(TEXTLEN_SCORE_2)
+            elif digits == 1: scores.append(TEXTLEN_SCORE_1)
+            else: scores.append(TEXTLEN_SCORE_0)
         else:
             scores.append(10.0)
     return scores
@@ -197,17 +210,17 @@ def _signal_accel_spikes(rows: list, times: list[float], fps: float,
 
     violation = [False] * n
     violation_sign = [0] * n
-    threshold = max_dv_frame * 2.0
+    threshold = max_dv_frame * ACCEL_SPIKE_VIOLATION_MULT
     for i in range(n):
         if abs(diffs[i]) > threshold:
             violation[i] = True
             violation_sign[i] = 1 if diffs[i] > 0 else -1
 
-    look = 15
+    look = ACCEL_SPIKE_SEARCH_WINDOW
     scores = []
     for i in range(n):
         if violation[i]:
-            scores.append(20.0); continue
+            scores.append(ACCEL_SCORE_VIOLATION); continue
 
         left_start = max(0, i - look)
         right_end = min(n, i + look + 1)
@@ -217,13 +230,13 @@ def _signal_accel_spikes(rows: list, times: list[float], fps: float,
 
         if has_left and has_right:
             if left_v[-1] != right_v[0]:
-                scores.append(10.0)  # opposing spikes → island interior
+                scores.append(ACCEL_SCORE_ISLAND_INTERIOR)  # opposing spikes → island interior
             else:
-                scores.append(60.0)
+                scores.append(ACCEL_SCORE_SAME_DIR)
         elif has_left or has_right:
-            scores.append(50.0)  # near one spike
+            scores.append(ACCEL_SCORE_NEAR_ONE)  # near one spike
         else:
-            scores.append(100.0)  # normal
+            scores.append(ACCEL_SCORE_NORMAL)  # normal
     return scores
 
 
@@ -244,7 +257,7 @@ def _signal_sg_deviation(rows: list, observations: list, times: list[float],
             if len(rt) >= 3:
                 reliable_mask[i] = True
 
-    wide_half = max(31, int(fps * 2.5) if fps > 0 else 150)
+    wide_half = max(SG_WINDOW_HALF_MIN, int(fps * SG_WINDOW_HALF_FPS_MULT) if fps > 0 else SG_WINDOW_HALF_FALLBACK)
     wide_median = np.zeros(n, dtype=float)
     for i in range(n):
         lo = max(0, i - wide_half)
@@ -256,7 +269,7 @@ def _signal_sg_deviation(rows: list, observations: list, times: list[float],
         elif np.any(wv > 0):
             wide_median[i] = float(np.median(wv[wv > 0]))
 
-    rel_threshold, abs_threshold = 0.03, 5.0
+    rel_threshold, abs_threshold = SG_DEV_REL_THRESHOLD, SG_DEV_ABS_THRESHOLD_KMH
     scores = []
     for i in range(n):
         v, mp = speeds[i], wide_median[i]
@@ -281,11 +294,11 @@ def _signal_sg_deviation(rows: list, observations: list, times: list[float],
                 cluster_size += 1
             else: break
 
-        if cluster_size <= 1: score = 70.0
-        elif cluster_size <= 3: score = 40.0
-        elif cluster_size <= 5: score = 30.0
-        elif cluster_size <= 10: score = 15.0
-        else: score = 5.0
+        if cluster_size <= 1: score = SG_CLUSTER_SCORE_1
+        elif cluster_size <= 3: score = SG_CLUSTER_SCORE_3
+        elif cluster_size <= 5: score = SG_CLUSTER_SCORE_5
+        elif cluster_size <= 10: score = SG_CLUSTER_SCORE_10
+        else: score = SG_CLUSTER_SCORE_MANY
         scores.append(score)
     return scores
 
@@ -310,11 +323,11 @@ def _signal_reocr_agree(rows: list, reocr_values_by_frame: dict[int, set[float]]
         sorted_vals = sorted(all_readings)
         clusters = 1
         for j in range(1, len(sorted_vals)):
-            if sorted_vals[j] - sorted_vals[j - 1] > 2:
+            if sorted_vals[j] - sorted_vals[j - 1] > REOCR_CLUSTER_GAP_KMH:
                 clusters += 1
-        if clusters == 1: scores.append(100.0)
-        elif clusters == 2: scores.append(60.0)
-        else: scores.append(20.0)
+        if clusters == 1: scores.append(REOCR_AGREE_1CLUSTER)
+        elif clusters == 2: scores.append(REOCR_AGREE_2CLUSTER)
+        else: scores.append(REOCR_AGREE_3PLUS)
     return scores
 
 
@@ -364,8 +377,8 @@ def detect_errors(rows: list, observations: list, times: list[float],
                  w_sg * sg_scores[i])
         score = round(max(0.0, min(100.0, score)), 1)
 
-        if score < 30: tier = "low"; n_low += 1
-        elif score < 70: tier = "medium"; n_medium += 1
+        if score < CONF_TIER_LOW_MAX: tier = "low"; n_low += 1
+        elif score < CONF_TIER_MEDIUM_MAX: tier = "medium"; n_medium += 1
         else: tier = "high"; n_high += 1
 
         signals_sorted = sorted(

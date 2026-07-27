@@ -5,6 +5,7 @@ __pycache__/
 
 # Virtual environment
 .venv/
+.venv_legacy/
 venv/
 
 # PyInstaller
@@ -34,6 +35,7 @@ ort_dml_bundle/
 __pycache__/
 
 # Test outputs
+outputs/
 *_output.csv
 *_headless.csv
 *_threaded.csv

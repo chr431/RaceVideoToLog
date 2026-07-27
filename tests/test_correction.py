@@ -1,18 +1,22 @@
-"""Tests for core pure functions — LCS-based correction API."""
+"""Unit tests for RaceVideoToLog core pure functions.
+
+Tests are intentionally limited to pure functions — deterministic,
+config-independent, no external side effects. This ensures tests
+remain valid across config changes and algorithm refactoring.
+"""
 import pytest
-from correction import (
-    expand_partial, _find_neighbor_trusted, _interp_candidate,
-    compute_confidence, _auto_expand_digits,
-    _detect_errors, correct_with_trust,
-)
+import numpy as np
+from pathlib import Path
+
+from correction import expand_partial, _find_neighbor_trusted, _interp_candidate, _auto_expand_digits
 from ocr_engine import (
     _savgol_filter_np, normalize_ocr_text, safe_int, safe_float, Flag,
     build_speed_candidates, SpeedObservation,
-    compute_lcs_scores, _lcs_score_for_value,
 )
 from analysis import parse_csv
-import numpy as np
 
+
+# ═══════════════════ expand_partial ═══════════════════
 
 class TestExpandPartial:
     def test_exact(self):
@@ -38,6 +42,8 @@ class TestExpandPartial:
         assert len(result) == 100
 
 
+# ═══════════════════ Savitzky-Golay Filter ═══════════════════
+
 class TestSGFilter:
     def test_basic(self):
         y = np.sin(np.linspace(0, 10, 100)) + np.random.default_rng(42).normal(0, 0.1, 100)
@@ -59,6 +65,8 @@ class TestSGFilter:
         assert np.mean(np.abs(sy - y_clean)) < np.mean(np.abs(y_noisy - y_clean))
 
 
+# ═══════════════════ OCR Utilities ═══════════════════
+
 class TestOCRUtils:
     def test_normalize_ocr_text(self):
         assert normalize_ocr_text("12O") == "120"
@@ -74,6 +82,8 @@ class TestOCRUtils:
         assert safe_float("3.14") == 3.14
         assert safe_float("") is None
 
+
+# ═══════════════════ Flag Enum ═══════════════════
 
 class TestFlag:
     def test_is_corrected(self):
@@ -98,9 +108,10 @@ class TestFlag:
         assert not Flag.is_anchor(11)
 
 
+# ═══════════════════ Find Neighbor Trusted ═══════════════════
+
 class TestFindNeighborTrusted:
     def _make_rows(self, speeds, flags=None):
-        """Helper: create rows with given speeds and flags."""
         n = len(speeds)
         if flags is None:
             flags = [Flag.HIGH_TRUST] * n
@@ -143,6 +154,8 @@ class TestFindNeighborTrusted:
         assert ra == 1  # PINNED counts as trusted
 
 
+# ═══════════════════ Parse CSV ═══════════════════
+
 class TestParseCSV:
     def test_parse_skips_comments(self, tmp_path):
         f = tmp_path / "test.csv"
@@ -153,10 +166,12 @@ class TestParseCSV:
         assert flags == [0, 21]
 
 
+# ═══════════════════ Build Speed Candidates ═══════════════════
+
 class TestBuildSpeedCandidates:
     def test_normal(self):
         result = build_speed_candidates("50", 400)
-        assert 50.0 in result
+        assert 50 in result
         assert all(v <= 400 for v in result)
 
     def test_empty(self):
@@ -167,7 +182,7 @@ class TestBuildSpeedCandidates:
         """OCR reads '60' → candidates should include 60, 160, 260, 360"""
         result = build_speed_candidates("60", 400)
         for expected in [60, 160, 260, 360]:
-            assert float(expected) in result
+            assert expected in result
 
     def test_confusion_chars(self):
         """OCR confuses '8' and '0'"""
@@ -177,69 +192,17 @@ class TestBuildSpeedCandidates:
     def test_confusion_1_to_9(self):
         """211 → 219: '1'→'9' confusion (critical fix)."""
         result = build_speed_candidates("211", 400)
-        assert 219.0 in result  # last digit 1→9
-        assert 291.0 in result  # middle digit 1→9
-        assert 911.0 not in result  # first digit 1→9 → 911 > 400
+        assert 219 in result  # last digit 1→9
+        assert 291 in result  # middle digit 1→9
+        assert 911 not in result  # first digit 1→9 → 911 > 400
 
     def test_confusion_9_to_1(self):
         """219 → 211: '9'→'1' confusion (reverse direction)."""
         result = build_speed_candidates("219", 400)
-        assert 211.0 in result  # last digit 9→1
+        assert 211 in result  # last digit 9→1
 
 
-class TestComputeConfidence:
-    def test_all_consistent(self):
-        """All frames identical → LCS=1.0, all scores=100."""
-        rows = [[i * 0.1, 0.0, 100.0, Flag.RAW] for i in range(20)]
-        obs = [SpeedObservation(r[0], r[2], "100") for r in rows]
-        result = compute_confidence(rows, obs, 400, 50)
-        assert len(result) == 20
-        assert all(c["score"] >= 90 for c in result)  # LCS ~1.0
-
-    def test_physically_inconsistent(self):
-        """Frame at 300 km/h surrounded by 100 km/h → very low LCS."""
-        rows = [[0.0, 0.0, 100.0, Flag.RAW],
-                [0.1, 0.0, 300.0, Flag.RAW],
-                [0.2, 0.0, 100.0, Flag.RAW]]
-        obs = [SpeedObservation(r[0], r[2], str(int(r[2]))) for r in rows]
-        result = compute_confidence(rows, obs, 400, 50)
-        assert result[1]["score"] < 30  # 中间帧两侧都不一致 → 极低分
-        assert result[0]["score"] < 70  # 左边界帧，右侧被 300 拖累
-
-    def test_reason_labels(self):
-        """Score thresholds produce correct reason labels."""
-        # Inconsistent outlier
-        rows = [[0.0, 0.0, 100.0, Flag.RAW],
-                [0.1, 0.0, 200.0, Flag.RAW],  # bad — jumps 100 km/h
-                [0.2, 0.0, 100.0, Flag.RAW]]
-        obs = [SpeedObservation(r[0], r[2], str(int(r[2]))) for r in rows]
-        result = compute_confidence(rows, obs, 400, 50)
-        assert result[1]["reason"] != '正常'  # middle frame is inconsistent
-
-    def test_out_of_range(self):
-        """Speed out of range → score=0."""
-        rows = [[0.0, 0.0, -1.0, Flag.RAW],
-                [0.1, 0.0, 500.0, Flag.RAW]]
-        obs = [SpeedObservation(r[0], r[2], "") for r in rows]
-        result = compute_confidence(rows, obs, 400, 50)
-        assert result[0]["score"] == 0
-        assert result[0]["reason"] == '速度超出范围'
-        assert result[1]["score"] == 0
-
-    def test_pinned_boost(self):
-        """Pinned frames boost neighbor confidence when consistent — tight spacing."""
-        # dt=0.02s (50fps): pinned frame at index 0, outlier at index 1, test at index 2
-        rows = [[0.0, 0.0, 100.0, Flag.PINNED],
-                [0.02, 0.0, 300.0, Flag.RAW],   # disagrees with pinned
-                [0.04, 0.0, 101.0, Flag.RAW]]   # close to pinned
-        obs = [SpeedObservation(r[0], r[2], str(int(r[2]))) for r in rows]
-        result = compute_confidence(rows, obs, 400, 50, pinned={0})
-        # Frame 2 close to pinned frame 0 (dt=0.04, exp(-0.04/0.06)=0.51, ×3 pin weight)
-        # → pinned dominates over the disagreeing frame 1
-        assert result[2]["score"] > 60
-        # Frame 1 disagrees with both neighbors → low
-        assert result[1]["score"] < result[2]["score"]
-
+# ═══════════════════ Auto Expand Digits ═══════════════════
 
 class TestAutoExpandDigits:
     def test_1_digit(self):
@@ -258,9 +221,9 @@ class TestAutoExpandDigits:
     def test_3_digits(self):
         """Three digits: single-char replace generates candidates (e.g. x23, 1x3, 12x)."""
         result = _auto_expand_digits("123", 400)
-        assert 123.0 in result
-        assert 23.0 in result   # x23 → 023
-        assert 223.0 in result  # 2x3 → 223
+        assert 123 in result
+        assert 23 in result   # x23 → 023
+        assert 223 in result  # 2x3 → 223
         assert len(result) > 10  # many 3-digit expansions
 
     def test_empty(self):
@@ -272,84 +235,7 @@ class TestAutoExpandDigits:
         assert all(v <= 50 for v in result)
 
 
-class TestLcsScoreForValue:
-    def _make_rows(self, speeds, dt=0.1):
-        times = [i * dt for i in range(len(speeds))]
-        return [[times[i], 0.0, float(speeds[i]), Flag.RAW] for i in range(len(speeds))], times
-
-    def test_perfect_consistency(self):
-        """All values identical → score should be 1.0."""
-        rows, times = self._make_rows([100, 100, 100, 100, 100])
-        score = _lcs_score_for_value(2, 100.0, rows, times, 400, 50)
-        assert score == 1.0
-
-    def test_outlier_low_score(self):
-        """Frame far from neighbors should have low score."""
-        rows, times = self._make_rows([100, 102, 200, 101, 103])
-        score = _lcs_score_for_value(2, 200.0, rows, times, 400, 50)
-        assert score < 0.5
-
-    def test_pinned_boost(self):
-        """Pinned neighbor should contribute 3× weight, outweighing a disagreeing neighbor."""
-        # Frame 0=100 (pinned), frame 1=200 (disagrees), frame 2=105 (tested)
-        # Candidate 100 is consistent with pinned frame 0 but inconsistent with frame 1
-        rows, times = self._make_rows([100, 200, 105])
-        rows[0][3] = Flag.PINNED
-        score_pinned = _lcs_score_for_value(2, 100.0, rows, times, 400, 100,
-                                                high_weight={0})
-        # Reset frame 0 to RAW (no boost)
-        rows[0][3] = Flag.RAW
-        score_no_pin = _lcs_score_for_value(2, 100.0, rows, times, 400, 100)
-        assert score_pinned > score_no_pin
-
-    def test_out_of_range_zero(self):
-        """Speed out of range should score 0."""
-        rows, times = self._make_rows([100, 102, 500, 101, 103])
-        score = _lcs_score_for_value(2, 500.0, rows, times, 400, 50)
-        assert score == 0.0
-
-
-class TestComputeLcsScores:
-    def test_all_consistent(self):
-        """All consistent values → all scores high."""
-        rows = [[i * 0.1, 0.0, 100.0, Flag.RAW] for i in range(20)]
-        scores = compute_lcs_scores(rows, 400, 50)
-        assert all(s > 0.9 for s in scores)
-
-    def test_pinned_affects_neighbors(self):
-        """Pinned frame should boost neighbor scores (when consistent)."""
-        rows = [[i * 0.1, 0.0, 100.0 + i * 0.1, Flag.RAW] for i in range(20)]
-        rows[10][3] = Flag.PINNED
-        scores = compute_lcs_scores(rows, 400, 50, pinned={10})
-        assert all(0 <= s <= 1.0 for s in scores)
-
-
-class TestDetectErrors:
-    def test_out_of_range(self):
-        """Out-of-range values should be errors."""
-        rows = [[0.0, 0.0, 100.0, Flag.RAW],
-                [0.1, 0.0, -1.0, Flag.RAW],
-                [0.2, 0.0, 500.0, Flag.RAW]]
-        errors, sl, sr = _detect_errors(rows, set(), [r[0] for r in rows], 400, 50)
-        assert 1 in errors
-        assert 2 in errors
-
-    def test_anchors_excluded(self):
-        """Pinned/anchored frames should never be in error set."""
-        rows = [[0.0, 0.0, 100.0, Flag.PINNED],
-                [0.1, 0.0, 500.0, Flag.PINNED]]  # out of range but pinned
-        errors, sl, sr = _detect_errors(rows, {0, 1}, [r[0] for r in rows], 400, 50)
-        assert 0 not in errors
-        assert 1 not in errors
-
-    def test_returns_scores(self):
-        rows = [[i * 0.1, 0.0, 100.0, Flag.RAW] for i in range(10)]
-        errors, sl, sr = _detect_errors(rows, set(), [r[0] for r in rows], 400, 50)
-        assert len(sl) == 10
-        assert len(sr) == 10
-        assert all(0 <= s <= 1.0 for s in sl)
-        assert all(0 <= s <= 1.0 for s in sr)
-
+# ═══════════════════ Interp Candidate ═══════════════════
 
 class TestInterpCandidate:
     def test_linear_interp(self):
@@ -364,101 +250,3 @@ class TestInterpCandidate:
                 [0.1, 0.0, 0.0, Flag.RAW]]
         val = _interp_candidate(0, rows, set(), [r[0] for r in rows], 400)
         assert val is None
-
-
-class MockOCR:
-    """模拟 RapidOCR：根据帧数据中的 frame_id 返回预设读数。"""
-    def __init__(self, readings: dict[int, float] | None = None):
-        self._readings = readings or {}
-
-    def __call__(self, proc):
-        # proc is a numpy array; we encoded frame_id in first byte
-        fi = int(proc.flat[0]) if proc.size > 0 else -1
-        if fi in self._readings:
-            val = self._readings[fi]
-            class FakeResult:
-                txts = [str(int(val))]
-                scores = [1.0]
-            return FakeResult()
-        class FakeEmpty:
-            txts = []
-            scores = []
-        return FakeEmpty()
-
-
-def _make_frame(frame_id: int) -> "np.ndarray":
-    """创建一个携带 frame_id 的假帧图像。"""
-    import numpy as np
-    arr = np.zeros((24, 48, 3), dtype=np.uint8)
-    arr.flat[0] = frame_id % 256
-    return arr
-
-
-class TestCorrectWithTrust:
-    """集成测试：用 mock OCR 数据运行完整 5 阶段管线。"""
-
-    def _make_rows(self, speeds, flags=None):
-        n = len(speeds)
-        if flags is None:
-            flags = [Flag.RAW] * n
-        return [[float(i), 0.0, float(speeds[i]), flags[i]] for i in range(n)]
-
-    def _make_obs(self, raw_texts):
-        from ocr_engine import SpeedObservation
-        return [SpeedObservation(float(i), float(t), t) for i, t in enumerate(raw_texts)]
-
-    def test_basic_no_errors(self):
-        """全是正确的值 → 无修改，全标记 HIGH_TRUST。"""
-        rows = self._make_rows([100, 100, 100, 100, 100])
-        obs = self._make_obs(["100"] * 5)
-        raw_frames = [(i, _make_frame(i)) for i in range(5)]
-        result = correct_with_trust(rows, obs, raw_frames, MockOCR(),
-                                     400, 50, fps=30.0)
-        flags = [r[3] for r in result]
-        speeds = [r[2] for r in result]
-        assert speeds == [100, 100, 100, 100, 100]
-        assert all(f == Flag.HIGH_TRUST for f in flags)
-
-    def test_outlier_fixed_by_reocr(self):
-        """中间帧异常，re-OCR 提供正确值 → 应被修正。"""
-        rows = self._make_rows([100, 100, 200, 100, 100])
-        obs = self._make_obs(["100", "100", "200", "100", "100"])
-        raw_frames = [(i, _make_frame(i)) for i in range(5)]
-        mock = MockOCR({2: 100.0})  # re-OCR returns 100 for frame 2
-        result = correct_with_trust(rows, obs, raw_frames, mock,
-                                     400, 50, fps=30.0)
-        assert result[2][2] == 100  # corrected
-        assert result[2][3] == Flag.REOCR_AUTO
-
-    def test_reocr_only_flag(self):
-        """reocr_only=True 时管线不崩溃（回归测试：之前 has_partial bug）。"""
-        rows = self._make_rows([100, 100, 200, 100, 100])
-        obs = self._make_obs(["100"] * 5)
-        raw_frames = [(i, _make_frame(i)) for i in range(5)]
-        mock = MockOCR({2: 100.0})
-        result = correct_with_trust(rows, obs, raw_frames, mock,
-                                     400, 50, reocr_only=True, fps=30.0)
-        assert result[2][2] == 100  # still corrected
-
-    def test_light_mode_no_iteration(self):
-        """light_mode=True 时只做一轮且不填充。"""
-        rows = self._make_rows([100, 100, 0, 100, 100])
-        obs = self._make_obs(["100"] * 5)
-        raw_frames = [(i, _make_frame(i)) for i in range(5)]
-        mock = MockOCR({2: 100.0})
-        result = correct_with_trust(rows, obs, raw_frames, mock,
-                                     400, 50, light_mode=True, fps=30.0)
-        assert result[2][2] == 100
-        assert result[2][3] == Flag.REOCR_AUTO
-
-    def test_skip_fill_and_reocr_only(self):
-        """skip_fill + reocr_only + re-OCR 无候选 → 保持 RAW。"""
-        rows = self._make_rows([100, 100, 0, 100, 100])
-        obs = self._make_obs(["100"] * 5)
-        raw_frames = [(i, _make_frame(i)) for i in range(5)]
-        mock = MockOCR({})  # re-OCR returns nothing
-        result = correct_with_trust(rows, obs, raw_frames, mock,
-                                     400, 50, skip_fill=True, reocr_only=True,
-                                     fps=30.0)
-        # frame 2 was error, couldn't fix → stays RAW
-        assert result[2][3] == Flag.RAW

@@ -1,6 +1,6 @@
 [project]
 name = "RaceVideoToLog"
-version = "2.5.0"
+version = "2.6.0"
 description = "从赛车视频中 OCR 提取速度数据，生成时间-速度-距离 CSV（TensorRT + CPU 双后端）"
 requires-python = ">=3.11"
 dependencies = [
@@ -15,12 +15,33 @@ dependencies = [
     "pyclipper",
     "shapely",
 ]
-# GPU 加速（可选）：
-#   pip install tensorrt cuda-python
-#   CUDA Toolkit 12.x + TensorRT 10.x bin 目录加入 PATH
+# GPU acceleration (installed by setup_venv.bat if CUDA/TensorRT available):
+#   pip install --no-deps tensorrt_cu13_bindings cuda-python
+# Requires: CUDA Toolkit 12.x + TensorRT 10.x on system PATH
 
 [project.scripts]
 racevideotolog = "RaceVideoToLog:main"
+
+[tool.setuptools]
+py-modules = [
+    "RaceVideoToLog",
+    "analysis",
+    "config",
+    "correction",
+    "error_detection",
+    "gpu_setup",
+    "gui",
+    "gui_analysis",
+    "gui_export",
+    "gui_review",
+    "gui_settings",
+    "headless",
+    "ocr_engine",
+    "pipeline",
+    "theme_manager",
+    "viterbi",
+    "widget_utils",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
