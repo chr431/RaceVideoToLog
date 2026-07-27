@@ -224,7 +224,7 @@ def select_backend(preferred: str = "auto") -> str:
     if chosen == "TensorRT":
         _gpu_params = {
             "EngineConfig.tensorrt.device_id": 0,
-            "EngineConfig.tensorrt.use_fp16": True,
+            "EngineConfig.tensorrt.use_fp16": False,  # FP32: faster engine build, same speed/accuracy for OCR
             "EngineConfig.tensorrt.workspace_size": 1073741824,  # 1 GB
         }
     elif chosen == "CUDA":

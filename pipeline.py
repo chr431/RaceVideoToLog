@@ -305,8 +305,10 @@ class ProcessingPipeline:
         buf_size = max(2, self._buffer_size * 2)
         q: Queue = Queue(maxsize=buf_size)
         errors: list[Exception] = []
+        _decode_ms = 0.0  # accumulator: decode + preprocess time (ms)
 
         def _producer() -> None:
+            nonlocal _decode_ms
             try:
                 if _src_type == "decord":
                     for _fi in range(f_start or 0, min(_end_limit, total_video_frames)):
@@ -314,11 +316,14 @@ class ProcessingPipeline:
                             continue
                         if self._cancel_check and _fi % 10 == 0:
                             self._cancel_check()
+                        _t0 = _time.perf_counter()
                         _frame = _vr[_fi].asnumpy()
                         _ts = _fi / fps if fps > 0 else 0.0
                         _crop = _frame[y1:y2 + 1, x1:x2 + 1].copy()
+                        del _frame  # free ~6MB per frame, avoid RAM bloat
                         self._raw_frames.append((_fi, _crop))
                         _proc = _preprocess_standard(_crop, target_h, pad)
+                        _decode_ms += (_time.perf_counter() - _t0) * 1000.0
                         q.put((_fi, _proc))
                 else:
                     fi = 0
@@ -331,6 +336,7 @@ class ProcessingPipeline:
                             _cap.grab(); fi += 1; continue
                         if fi % frame_step != 0:
                             _cap.grab(); fi += 1; continue
+                        _t0 = _time.perf_counter()
                         if not _cap.grab():
                             break
                         ok, frame = _cap.retrieve()
@@ -339,6 +345,7 @@ class ProcessingPipeline:
                         crop = frame[y1:y2 + 1, x1:x2 + 1].copy()
                         self._raw_frames.append((fi, crop))
                         proc = _preprocess_standard(crop, target_h, pad)
+                        _decode_ms += (_time.perf_counter() - _t0) * 1000.0
                         q.put((fi, proc))
                         fi += 1
                 q.put(None)
@@ -356,6 +363,7 @@ class ProcessingPipeline:
         _collect_diag = self._log_level in ("detailed", "debug")
         diag: list[dict] = []
         done = 0
+        _inference_ms = 0.0  # accumulator: OCR inference time (ms)
         est_total = (_end_limit - (f_start or 0)) // frame_step
         while True:
             item = q.get()
@@ -365,6 +373,7 @@ class ProcessingPipeline:
             t_ocr0 = _time.perf_counter()
             ocr_result = ocr(proc)
             t_ocr = (_time.perf_counter() - t_ocr0) * 1000.0
+            _inference_ms += t_ocr
             sv, rt, conf = extract_speed_value(ocr_result)
             if sv is not None and rt is not None:
                 observations.append(SpeedObservation(
@@ -415,8 +424,16 @@ class ProcessingPipeline:
         if _cap is not None:
             _cap.release()
         self._timing["ocr"] = _time.perf_counter() - t_start
-        logger.info("OCR 完成: %d 帧, 耗时 %.1fs",
-                        len(observations), self._timing["ocr"])
+        self._timing["decode"] = _decode_ms / 1000.0
+        self._timing["inference"] = _inference_ms / 1000.0
+        n_frames = len(observations)
+        decode_fps = n_frames / max(self._timing["decode"], 0.001)
+        inference_fps = n_frames / max(self._timing["inference"], 0.001)
+        total_fps = n_frames / max(self._timing["ocr"], 0.001)
+        logger.info("OCR 完成: %d 帧 (%s), 总 %.1fs | 解码 %.1fs (%.0f fps) | 推理 %.1fs (%.0f fps) | 总 %.0f fps",
+                        n_frames, self._video_backend_actual,
+                        self._timing["ocr"], self._timing["decode"], decode_fps,
+                        self._timing["inference"], inference_fps, total_fps)
 
     def _integrate_distance(self) -> None:
         fps = self._fps if self._fps > 0 else 1.0
