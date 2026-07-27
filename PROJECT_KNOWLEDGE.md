@@ -1,4 +1,4 @@
-# RaceVideoToLog — 项目知识总结 v2.6
+# RaceVideoToLog — 项目知识总结 v2.6.1
 
 ## 项目概述
 
@@ -16,20 +16,23 @@
 RaceVideoToLog.py    # 入口：arg 解析 + GUI/CLI 调度
 pipeline.py          # 统一处理流水线 (ProcessingPipeline)，GUI/CLI 共用
 gui.py               # PySide6 主窗口 (Fluent Design 主题)
+gui_export.py        # 导出线程 (原生 threading.Thread，避免 QThread 性能损失)
+gui_settings.py      # 左侧设置面板工厂函数
 gui_review.py        # 最终检查对话框 (全帧速度曲线 + 逐帧修正)
 gui_analysis.py      # 数据分析 Tab (matplotlib 图表)
-analysis.py          # 数据分析业务逻辑
-ocr_engine.py        # OCR 引擎、候选生成、Flag 枚举、SG 滤波、LCS 评分（GUI校验用）
+analysis.py          # 数据分析业务逻辑 (含统一 CSV 解析)
+ocr_engine.py        # OCR 引擎、候选生成、Flag 枚举、SG 滤波、CSV 头解析
 correction.py        # Phase 2 纠错流水线 (Viterbi + fill + smoothness + auto-align + force_smooth)
 error_detection.py   # Phase 1 多信号置信度评分 (7 个信号，只读)
 viterbi.py           # Viterbi 动态规划全局最优路径选择
-config.py            # 集中常量：颜色、默认值、物理常量、纠错参数
-gpu_setup.py         # GPU DLL 加载 + TensorRT/CPU 后端选择
+config.py            # 集中常量：版本号、颜色、默认值、物理常量、纠错参数 (124 项)
+gpu_setup.py         # GPU DLL 加载 + TensorRT/CPU 后端选择 (FP32 默认)
 widget_utils.py      # 共享 GUI 组件
 theme_manager.py     # 主题注册/回调系统
 headless.py          # CLI 无头模式
 RaceVideoToLog.spec  # PyInstaller 打包配置
-build_exe.bat        # 一键构建 EXE
+setup_venv.bat       # 一键创建 venv + 安装依赖
+build_exe.bat        # 一键构建 EXE (自动调用 setup_venv.bat)
 ```
 
 ## 两阶段纠错架构
@@ -117,10 +120,12 @@ test4.mp4（max_accel=70）：
 - rapidocr 3.9+ (TensorRT/ONNX OCR)
 - onnxruntime (CPU 推理)
 - opencv-python-headless (图像预处理 + 默认视频解码)
-- decord (可选，NVDEC 硬件解码)
-- PySide6 + PySide6-Fluent-Widgets (GUI)
+- decord (NVDEC 硬件解码)
+- PySide6 + PySide6-Fluent-Widgets (GUI, GPLv3)
 - matplotlib (数据分析绘图)
 - numpy (数值计算)
+- cuda-python (CUDA Python 绑定，~33MB)
+- tensorrt 10.x (TensorRT Python 绑定，--no-deps 安装，DLL 走系统 PATH)
 
 ## 常用命令
 
@@ -147,40 +152,35 @@ python RaceVideoToLog.py --analysis csv1.csv csv2.csv --analysis-out prefix
 build_exe.bat
 ```
 
-## 性能基准
+## 性能基准 (2026-07-27, test.mp4, 3573 frames)
 
-### OCR 推理 (TensorRT FP16 + PP-OCRv6)
+### OCR 推理 (TensorRT FP32 + PP-OCRv6_small)
 
-| 模型 | 推理速度 | 说明 |
+| 后端 | 推理速度 | 说明 |
 |------|---------|------|
-| v6_tiny | ~850 fps (~1.2ms) | 默认主 OCR |
-| v6_small | ~400 fps (~2.5ms) | 默认重 OCR，更高准确率 |
+| CPU (ONNX) | ~280 fps | 默认回退 |
+| TensorRT FP32 | ~550 fps | 引擎构建 ~80s |
 
-双模型策略 (tiny 主 + small 重)：比全程 small 快 ~28%，99.6% 帧差异 <2 km/h。
+FP16 构建 ~178s (2.2x slower)，推理速度无提升 (549 fps vs 567 fps)，已改回 FP32 默认。
 
-### 视频解码
+### 视频解码 (TensorRT OCR 后端)
 
-| 方案 | 纯解码速度 (1080p) | 说明 |
-|------|-------------------|------|
-| cv2 (CPU) | ~457-497 fps | 默认，兼容性好，内存低 |
-| decord (NVDEC) | ~734-767 fps | GPU 硬件解码，内存占用 ~2.6GB |
+| 方案 | 解码速度 | 端到端 fps | 系统内存 |
+|------|---------|-----------|---------|
+| cv2 (CPU) | ~400 fps | ~372 | ~2GB |
+| decord (NVDEC) | ~630 fps | ~476 | ~4GB |
 
-decord 解码 HEVC 比 cv2 快 ~63%，H264 快 ~57%。但管线瓶颈在 OCR 推理而非解码，实际端到端提升有限。
-
-### 全管线吞吐量
-
-- 瓶颈在 OCR TensorRT 推理，非视频解码
-- Producer-consumer Queue 缓冲已掩盖解码延迟
-- 已排除的无效优化：多 consumer 并行 (cuDNN crash)、子进程隔离 (IPC 开销 25%+)、CUDA Graph (需绕过 RapidOCR)
+TRT 推理时 decord 端到端快 ~22%；CPU 推理时仅快 ~5%。
 
 ### 已实施的优化
 
 | 优化 | 效果 |
 |------|------|
-| v6_tiny 默认主 OCR | 推理 ~2.2x 提速 |
+| TRT FP32 默认 | 引擎构建 2.2x 提速 (80s vs 178s) |
+| decord del _frame 立即释放 | 内存占用降低 ~50% |
+| csv 帧号转秒 (fps 头字段) | 数据分析横轴正确 |
 | skip det + cls 模型加载 | 初始化 -200ms，显存 -10MB |
-| 默认 tiny+small 双模型 | 整体 ~28% 提速 |
-| buffer 8→16 | 管线 ~7% 提速 |
+| ocr_engine 延迟导入重构 (_init_rapidocr) | 消除 Pylance 警告，代码清晰 |
 
 ## OCR 细节
 
@@ -235,3 +235,4 @@ python RaceVideoToLog.py test.mp4 --roi ... --frame-start ... --frame-end ... -o
 
 - **v2.5**：从 LCS 5 阶段纠错迁移到 Viterbi DP 两阶段架构，新增 error_detection.py + viterbi.py
 - **v2.6**：一致性孤岛检测与修正（远距离插值、候选过滤、孤岛轮次限制）；手动模式升级为完整管线；自动模式新增 Force-SG 平滑；移除旧 anchor 命名；默认视频后端 cv2 替代 decord（降低内存占用）
+- **v2.6.1**（本节对话）：全面代码清理与优化 — GUI 拆分为 gui_export/gui_settings；60+ 魔法数字迁入 config.py；版本集中管理；测试重写为纯单元测试；GPLv3 许可证；一键构建脚本 setup_venv.bat + build_exe.bat；CI/CD；解码器基准测试工具；CSV 头 fps 字段；TRT FP32 默认；decord 内存优化；OCR 引擎延迟导入重构

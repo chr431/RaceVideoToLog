@@ -5,7 +5,7 @@
 | 包 | 当前版本 | 最低版本 | PyPI | 备注 |
 | --- | --- | --- | --- | --- |
 | rapidocr | 3.9.2 | 3.9 | [rapidocr](https://pypi.org/project/rapidocr/) | PP-OCRv6 ONNX 模型。3.9.2 新增 `use_preprocess_img`（保持 True，TRT 内部 resize 更优） |
-| onnxruntime | 1.27.0 | 1.27 | [onnxruntime](https://pypi.org/project/onnxruntime/) | CPU 推理回退；CUDA provider 已移除 |
+| onnxruntime | 1.28.0 | 1.27 | [onnxruntime](https://pypi.org/project/onnxruntime/) | CPU 推理回退；CUDA provider 已移除 |
 | opencv-python-headless | 5.0.0 | 5.0 | [opencv-python-headless](https://pypi.org/project/opencv-python-headless/) | 图像预处理 (resize, cvtColor) |
 | decord | 0.6.0 | 0.6 | [decord](https://pypi.org/project/decord/) | NVDEC 硬件视频解码；⚠️ 捆绑 FFmpeg 4.x DLL |
 | PySide6 | 6.11.1 | 6.11 | [PySide6](https://pypi.org/project/PySide6/) | Qt 6 GUI |
@@ -15,13 +15,16 @@
 | pyclipper | 1.4.0 | — | [pyclipper](https://pypi.org/project/pyclipper/) | rapidocr 依赖 |
 | shapely | 2.1.2 | — | [shapely](https://pypi.org/project/shapely/) | rapidocr 依赖 |
 
-## GPU 加速（可选，用户自行安装）
+## GPU 加速
 
 | 包 | 当前测试版本 | 来源 | 备注 |
 | --- | --- | --- | --- |
-| tensorrt | 10.16.1.11 | [NVIDIA 官网](https://developer.nvidia.com/tensorrt) | **仅跟踪 10.x**（11.x 可能不兼容）；pip 也有 [tensorrt](https://pypi.org/project/tensorrt/) |
-| cuda-python | 13.3.1 | [cuda-python](https://pypi.org/project/cuda-python/) | `from cuda.bindings import runtime` |
-| CUDA Toolkit | 12.9 | [NVIDIA 官网](https://developer.nvidia.com/cuda-downloads) | 提供 cudart, cublas 等 DLL |
+| tensorrt | 10.16.1.11 | [tensorrt](https://pypi.org/project/tensorrt/) | **仅 10.x**；`--no-deps` 安装，DLL 走系统 PATH |
+| tensorrt_cu13_bindings | 10.16.1.11 | [tensorrt_cu13_bindings](https://pypi.org/project/tensorrt_cu13_bindings/) | Python 绑定（~1MB） |
+| cuda-python | 13.3.1 | [cuda-python](https://pypi.org/project/cuda-python/) | CUDA Python 绑定（~33MB） |
+| CUDA Toolkit | 12.9 | [NVIDIA 官网](https://developer.nvidia.com/cuda-downloads) | 提供 cudart, cublas 等 DLL（系统 PATH） |
+
+**注意**：`tensorrt` 通过 `setup_venv.bat` 以 `--no-deps` 安装，只装 Python 绑定。`tensorrt_cu13_libs`（~2.2GB DLL）被排除，DLL 从系统 PATH 加载。
 
 ## 打包工具
 
@@ -44,8 +47,10 @@
 
 ### tensorrt 10.x
 - `find_lib()` 只搜 `os.environ["PATH"]`，不认 `os.add_dll_directory()`。已在 `gpu_setup` 中同时更新 PATH
-- 首次构建引擎需数分钟；引擎缓存于 `rapidocr/models/models/*.engine`
+- 首次构建引擎 ~80s (FP32)；引擎缓存于 `rapidocr/models/models/*.engine`
+- FP16 构建 ~178s (2.2x slower)，推理速度无提升，不推荐
 - `cuda.bindings` 需额外安装 `cuda-python`
+- ⚠️ 不允许 pip 自动拉入 `tensorrt_cu13_libs`（~2.2GB DLL），使用 `--no-deps` 安装
 
 ## 检查更新
 

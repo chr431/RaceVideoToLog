@@ -1,5 +1,61 @@
 # Release Notes
 
+## v2.6.1 (2026-07-27)
+
+### 全面代码清理与工程优化
+
+**代码结构**
+- GUI 拆分：`gui_export.py`（导出线程）+ `gui_settings.py`（设置面板工厂）
+- `ocr_engine.py` 延迟导入重构为 `_init_rapidocr()`，消除 Pylance 警告
+- 60+ 魔法数字迁入 `config.py`（总计 124 配置项），所有算法参数可配置
+- 版本号集中管理：`config.__version__`，CI 自动校验与 `pyproject.toml` 一致
+- CSV 加载去重：`parse_csv_header` + `parse_csv_setting` + `csv_field_dest` 统一 CLI/GUI
+- 候选生成逻辑去重，spinbox flyout 统一使用 `make_int_spinbox`
+
+**构建系统**
+- 新增 `setup_venv.bat`：一键创建 venv + 安装依赖
+- `build_exe.bat` 重写：6 步全自动（检查 Python → 创建 venv → 安装依赖 → 验证 → 构建 → 完成）
+- `pyproject.toml`：显式 `py-modules` 声明，`setuptools` 不再误识别目录
+- TRT 10.x 锁定：`tensorrt>=10,<11`，`--no-deps` 安装只取 Python 绑定（~2MB），排除 DLL 包（~2.2GB）
+- `cuda-python` + `tensorrt` 移入主依赖（共 ~35MB）
+
+**测试**
+- 测试重写为纯单元测试（250 行，原 464 行），不再依赖配置常量和算法内部行为
+- 移除对已删除函数（`compute_lcs_scores`、`_detect_errors` 等）的引用
+
+**性能优化**
+- TRT 默认 FP32（构建 80s vs FP16 178s，推理速度持平）
+- decord 解码器 `del _frame` 立即释放全帧数组，系统内存降低 ~50%
+- 解码/推理分时统计：`_timing["decode"]` + `_timing["inference"]`
+- 新增 `tools/bench_decoder.py`：cv2 vs decord 自动对比
+- 新增 `tools/bench_trt_build.py`：FP16 vs FP32 引擎构建速度对比
+
+**CSV 格式**
+- 头新增 `fps` 字段，`analysis.py:parse_csv()` 自动将帧号转为秒
+- `video_backend` 写入实际使用值（非用户选择值）
+
+**其他**
+- 许可证：GPLv3（因依赖 PySide6-Fluent-Widgets GPLv3）
+- CI/CD：GitHub Actions（单元测试 + 版本一致性校验）
+- GUI：decord/TensorRT 缺失时弹出明确安装指引
+- `--from-csv` 和 GUI 导入设置统一解析逻辑，`video_backend` 修复遗漏
+- 修复 `build_exe.bat` LF 行尾导致 cmd 闪退
+- 修复 `pipeline.py` `config` 未导入、`viterbi.py` `max_speed_kmh` 参数缺失
+
+### Bug 修复
+- **测试无法运行**：移除对已删除 LCS 函数的导入
+- **数据分析横轴错误**：帧号未转为时间 → CSV 头写入 fps，`parse_csv` 自动转换
+- **GUI 导入 CSV 时 video_backend 不生效**：遗漏映射已补全
+- **PyInstaller spec 绝对路径**：改为 `os.path.abspath`
+- **decord 静默回退 cv2**：`ModuleNotFoundError` 单独捕获并提示安装
+- **`_diag_notes` 未初始化**：`log_level=normal` 时 `AttributeError`
+- **pyname `config` 未导入**：`pipeline.py` 中 `config.__version__` 缺少 `import config`
+- **viterbi `max_speed_kmh` 参数缺失**：`_compute_confidence_scores` 签名遗漏参数
+
+**版本变更（v2.6.0 → v2.6.1）**：基础版本号同步，见上方
+
+---
+
 ## v2.6.0 (2026-07-25)
 
 ### 核心变更：两阶段 Viterbi 纠错架构
@@ -64,8 +120,6 @@
 
 ### Bug 修复
 
-- **最终检查无图像**：`_raw_frames` 在 `finalize()` 中过早清空 → 延迟到 GUI `_finish_export()` 清空
-- **Re-OCR 失效**：`_raw_frames = {}` 破坏候选生成 → 恢复列表传递
 - **诊断文件帧号错位**：使用顺序索引而非实际帧号 → 存储实际帧号
 - **decord 内存泄漏**：VR 对象缓存所有解码帧 → OCR 完成后显式释放
 

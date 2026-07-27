@@ -1,22 +1,26 @@
-# RaceVideoToLog v2.6
+# RaceVideoToLog v2.6.1
 
 从赛车视频中提取速度数据，生成时间-速度-距离 CSV 文件。
 
 ## 安装
 
 ```bash
-pip install rapidocr onnxruntime opencv-python-headless numpy matplotlib pyside6 pyside6-fluent-widgets
-# 可选: GPU 视频解码
-pip install decord
+setup_venv.bat
 ```
 
-### GPU 加速（可选）
+或手动：
+
+```bash
+python -m venv .venv
+.venv\Scripts\pip install -e .
+```
+
+### GPU 加速（可选但推荐）
 
 1. 安装 CUDA Toolkit 12.x + TensorRT 10.x
-2. 安装 Python 绑定：`pip install tensorrt-10.*-cp313-none-win_amd64.whl cuda-python`
-3. 将 CUDA 和 TensorRT 的 `bin/`、`lib/` 目录加入系统 PATH
-4. 启动程序自动检测 TensorRT，首次需构建引擎（几分钟）
-5. 未检测到 GPU 则自动使用 CPU 推理
+2. 将 CUDA 和 TensorRT 的 `bin/`、`lib/` 目录加入系统 PATH
+3. 首次启动自动构建 TRT 引擎（FP32，~80s），后续加载缓存（秒级）
+4. 未检测到 GPU 则自动使用 CPU 推理
 
 ## 使用
 
@@ -60,13 +64,13 @@ python RaceVideoToLog.py --analysis csv1.csv csv2.csv --analysis-out prefix
 ## 输出格式
 
 ```csv
-# RaceVideoToLog v2.6.0
+# RaceVideoToLog v2.6.1
 # video_hash=..., video=test4.mp4
 # roi=862,945,957,1003, format=km/h, frame_start=114, frame_end=6317
-# max_speed=400.0, max_accel=70.0, div=1, target_h=48, pad=0, buffer=16
-# backend=TensorRT, model=v6_tiny, reocr_model=v6_small, video_backend=cv2
+# max_speed=400.0, max_accel=70.0, div=1, target_h=48, pad=0, buffer=16, fps=59.940
+# backend=TensorRT, model=v6_tiny, reocr_model=v6_small, video_backend=decord
 # stats: total=6203, trusted=6091, corrected=111
-# timing: ocr=13.5s, correction=8.5s, total=22.0s
+# timing: ocr=13.5s, decode=5.0s, inference=8.0s, correction=8.5s, total=22.0s
 frame,distance,speed_kmh,flag
 114,0.00,0,21
 115,0.00,0,21
@@ -119,13 +123,11 @@ python RaceVideoToLog.py [video] [options]
 ## 打包
 
 ```bash
-pip install pyinstaller
-python -m PyInstaller RaceVideoToLog.spec --noconfirm
-# 或双击 build_exe.bat
+build_exe.bat
 ```
 
 生成 `dist/RaceVideoToLog/`。GPU 用户需自行安装 CUDA Toolkit 12.x + TensorRT 10.x 并加入 PATH。
 
 ## License
 
-MIT
+GPLv3（因依赖 PySide6-Fluent-Widgets GPLv3）。详见 LICENSE 文件。
