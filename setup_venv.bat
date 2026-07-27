@@ -42,7 +42,7 @@ if errorlevel 1 (
 )
 
 echo Installing GPU Python bindings (DLLs loaded from system PATH) ...
-.venv\Scripts\python -m pip install --no-deps tensorrt tensorrt_cu13 tensorrt_cu13_bindings
+.venv\Scripts\python -m pip install --no-deps "tensorrt>=10,<11" "tensorrt_cu13>=10,<11" "tensorrt_cu13_bindings>=10,<11"
 .venv\Scripts\python -m pip install cuda-python
 echo   To enable TRT inference: install CUDA Toolkit 12.x + TensorRT 10.x and add to PATH.
 echo   Without system TRT, CPU will be used instead.
