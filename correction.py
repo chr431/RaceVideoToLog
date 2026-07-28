@@ -424,9 +424,9 @@ def _force_median_smooth(rows: list, times: list, max_speed_kmh: float,
     regardless of flags. Goal is to minimize max_dv (frame-to-frame
     speed change), not to match truth values.
 
-    Uses iterative 5-frame sliding median: if the center value deviates
-    from the local median by more than max_dv_per_frame * 1.2, it gets
-    replaced by the median (acceleration-clamped)."""
+    Uses iterative time-window sliding median: if the center value deviates
+    from the local median by more than max_dv_per_frame * threshold_mult, it gets
+    nudged toward the median (acceleration-clamped)."""
     n = len(rows)
     if n < 5:
         return 0
@@ -598,8 +598,8 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
     # Manual mode: only for very low confidence (conservative).
     #
     # Guard: skip internally consistent frames (physics>=90 AND linearity>=90
-    # AND sg_dev>=80). These frames agree with both their immediate neighbors
-    # AND the global SG profile — the raw OCR is almost certainly correct.
+    # AND accel>=70). These frames agree with both their immediate neighbors
+    # AND the global speed profile — the raw OCR is almost certainly correct.
     # Applying interpolation references to them causes false positives like
     # 168→68 (subtract 100) across real speed jumps.
     reference_values: dict[int, float] = {}
@@ -616,8 +616,8 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
             score = conf_by_idx.get(i, 50)
             raw_v = rows[i][2]
             ref = _local_interp(i, rows, observations, times, max_speed_kmh, fps=fps)
-            # For suspected island interiors (sg_dev <= 20), the nearest
-            # 3-digit neighbors may also be wrong. Try distant interpolation
+            # For suspected island interiors (accel <= 15), the nearest
+            # neighbors may also be wrong. Try distant interpolation
             # that skips past the island to reach correct anchor frames.
             # Also add the distant interpolation as a candidate so Viterbi
             # has a correct option to choose from.
