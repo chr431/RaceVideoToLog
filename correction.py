@@ -4,7 +4,7 @@ Receives per-frame confidence from Phase 1 (error_detection), interprets
 the scores, and applies corrections using Viterbi DP + fill + smoothness.
 
 Both modes share the same full pipeline (fill, smoothness, auto-align).
-Auto mode additionally runs _force_sg_smooth — iterative 5-frame median
+Auto mode additionally runs _force_median_smooth — iterative time-window median
 filter on ALL frames to minimize max_dv (frame-to-frame speed change).
 """
 from __future__ import annotations
@@ -27,17 +27,17 @@ from config import (
     SMOOTHNESS_MAX_ITERATIONS,
     AUTO_ALIGN_DIFF_MIN_KMH, AUTO_ALIGN_DIFF_MAX_KMH,
     AUTO_ALIGN_NUDGE_FACTOR, AUTO_ALIGN_MIN_CHANGE_KMH,
-    AUTO_ALIGN_SG_DEV_UPPER, AUTO_ALIGN_SG_DEV_LOWER,
-    AUTO_ALIGN_FALLBACK_MAX_DV,
     FORCE_SG_MAX_ITERATIONS, FORCE_SG_NUDGE_FACTOR,
     FORCE_SG_THRESHOLD_MULT, FORCE_SG_MIN_CHANGE_KMH,
     CANDIDATE_POSTFILTER_PHYSICS_MIN, CANDIDATE_POSTFILTER_LINEARITY_MIN,
-    CANDIDATE_HUNDREDS_MAX_DIFF, CANDIDATE_ISLAND_SG_DEV_MAX,
-    REF_GUARD_PHYSICS_MIN, REF_GUARD_LINEARITY_MIN, REF_GUARD_SG_DEV_MIN,
-    DISTANT_INTERP_MIN_DISTANCE, DISTANT_INTERP_ISLAND_THRESHOLD,
+    CANDIDATE_HUNDREDS_MAX_DIFF,
+    ACCEL_SCORE_ISLAND_INTERIOR,
+    REF_GUARD_PHYSICS_MIN, REF_GUARD_LINEARITY_MIN,
+    DISTANT_INTERP_MIN_TIME, DISTANT_INTERP_ISLAND_THRESHOLD,
+    FORCE_MEDIAN_WINDOW_TIME,
     REF_INTERP_MAX_KMH_DIFF, MANUAL_REF_CONFIDENCE_MAX,
     VITERBI_POST_TRUST_THRESHOLD, TRUST_WINDOW_FALLBACK_MAX_DV,
-    TRUST_NEIGHBOR_SEARCH_WINDOW, FILL_CONFIDENCE_THRESHOLD,
+    TRUST_WINDOW_TIME, FILL_CONFIDENCE_THRESHOLD,
     FINAL_CONF_BLEND_PHASE1, FINAL_CONF_BLEND_VITERBI,
 )
 
@@ -86,13 +86,11 @@ def _local_interp(i: int, rows: list, observations: list, times: list,
     n = len(rows)
     la = None
     for j in range(i - 1 - min_distance, -1, -1):
-        rt = observations[j].raw_text if j < len(observations) and observations[j] else ""
-        if len(rt) >= 3 and rows[j][2] > 0:
+        if j < len(observations) and observations[j] and rows[j][2] > 0:
             la = j; break
     ra = None
     for j in range(i + 1 + min_distance, n):
-        rt = observations[j].raw_text if j < len(observations) and observations[j] else ""
-        if len(rt) >= 3 and rows[j][2] > 0:
+        if j < len(observations) and observations[j] and rows[j][2] > 0:
             ra = j; break
     if la is None or ra is None:
         return None
@@ -145,7 +143,7 @@ def _auto_expand_digits(raw_text: str, max_speed_kmh: float) -> list[int]:
     return candidates
 
 
-def _re_ocr_frame(crop_bgr: "np.ndarray", ocr: "RapidOCR", max_speed_kmh: float,
+def _multi_height_ocr(crop_bgr: "np.ndarray", ocr: "RapidOCR", max_speed_kmh: float,
                   cache: dict | None = None) -> set:
     cache = cache if cache is not None else {}
     if crop_bgr is not None and crop_bgr.size > 0:
@@ -191,7 +189,7 @@ def _generate_candidates(fi: int, rows: list, observations: list, raw_frames: li
     obs = observations[min(fi, len(observations) - 1)]
 
     if fi < len(raw_frames):
-        reocr_set = _re_ocr_frame(raw_frames[fi][1], ocr, max_speed_kmh, cache=reocr_cache)
+        reocr_set = _multi_height_ocr(raw_frames[fi][1], ocr, max_speed_kmh, cache=reocr_cache)
         for cv in sorted(reocr_set):
             if 0 <= cv <= max_speed_kmh and cv not in protected_set:
                 protected.append(cv); protected_set.add(cv)
@@ -203,18 +201,17 @@ def _generate_candidates(fi: int, rows: list, observations: list, raw_frames: li
                 protected.append(sv); protected_set.add(sv)
         except ValueError: pass
 
-    if obs.raw_text and obs.raw_text.isdigit() and len(obs.raw_text) == 3 and raw_val > 0:
+    if obs.raw_text and obs.raw_text.isdigit() and raw_val > 0:
         base = int(obs.raw_text) % 100
         for hundreds in range(0, int(max_speed_kmh) + 1, 100):
             alt = hundreds + base
             if 0 <= alt <= max_speed_kmh and alt not in protected_set:
                 protected.append(alt); protected_set.add(alt)
 
-    is_short = obs.raw_text and len(obs.raw_text) < 3
     other: list[float] = []
     other_set: set[float] = set()
 
-    if not reocr_only or is_short:
+    if not reocr_only:
         for cv in build_speed_candidates(obs.raw_text, max_speed_kmh):
             if cv not in protected_set and cv not in other_set:
                 other.append(cv); other_set.add(cv)
@@ -222,19 +219,19 @@ def _generate_candidates(fi: int, rows: list, observations: list, raw_frames: li
             if cv not in protected_set and cv not in other_set:
                 other.append(cv); other_set.add(cv)
 
-    needs_interp = (not reocr_only) or (raw_val < 0) or is_short
+    needs_interp = (not reocr_only) or (raw_val < 0)
     if needs_interp:
         interp_val = _interp_candidate(fi, rows, pinned_set, times, max_speed_kmh, fps=fps)
         if interp_val is None:
             interp_val = _local_interp(fi, rows, observations, times, max_speed_kmh, fps=fps)
         if interp_val is not None and interp_val not in protected_set and interp_val not in other_set:
-            if raw_val < 0 or is_short:
+            if raw_val < 0:
                 protected.append(interp_val); protected_set.add(interp_val)
             else:
                 other.append(interp_val); other_set.add(interp_val)
 
     remaining = VITERBI_MAX_CANDIDATES - len(protected)
-    if remaining > 0 and len(other) > remaining and not is_short:
+    if remaining > 0 and len(other) > remaining:
         def _rank(v): return abs(v - raw_val) / max(1.0, abs(raw_val)) if raw_val > 0 else abs(v - raw_val)
         other.sort(key=_rank)
         other = other[:remaining]
@@ -370,10 +367,9 @@ def _auto_align_pass(rows: list, observations: list, times: list,
         if Flag.is_trusted(rows[i][3]) or rows[i][2] < 0:
             continue
         sigs = confidence_scores[i].get('signals', {}) if i < len(confidence_scores) else {}
-        sg = sigs.get('sg_dev', 50)
-        # Target moderate SG deviation: not too high (already correct),
-        # not too low (island interior, needs stronger correction)
-        if sg > AUTO_ALIGN_SG_DEV_UPPER or sg < AUTO_ALIGN_SG_DEV_LOWER:
+        acc = sigs.get('accel', 100)
+        # Skip island interiors (very low accel score) — need stronger correction
+        if acc <= ACCEL_SCORE_ISLAND_INTERIOR + 5:
             continue
 
         cur_v = rows[i][2]
@@ -421,7 +417,7 @@ def _auto_align_pass(rows: list, observations: list, times: list,
 
 # ═══════════════════ Force-SG smoothing (auto-mode final pass) ═══════════════════
 
-def _force_sg_smooth(rows: list, times: list, max_speed_kmh: float,
+def _force_median_smooth(rows: list, times: list, max_speed_kmh: float,
                      max_accel_mps2: float, fps: float = 1.0,
                      notes: dict[int, str] | None = None) -> int:
     """Auto mode only: aggressive median-filter smoothing on ALL frames
@@ -444,8 +440,9 @@ def _force_sg_smooth(rows: list, times: list, max_speed_kmh: float,
             v = rows[i][2]
             if v < 0:
                 continue
-            # 5-frame median
-            neighbors = [rows[j][2] for j in range(i - 2, i + 3) if rows[j][2] >= 0]
+            # Time-based median window
+            med_look = max(1, int(FORCE_MEDIAN_WINDOW_TIME / max((times[1] - times[0]) if n >= 2 else 1/30, 1e-3)))
+            neighbors = [rows[j][2] for j in range(i - med_look, i + med_look + 1) if 0 <= j < n and rows[j][2] >= 0]
             if len(neighbors) < 3:
                 continue
             neighbors.sort()
@@ -543,7 +540,7 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
         cands: list[float] = []; cands_set: set[float] = set()
         if 0 <= raw_val <= max_speed_kmh:
             cands.append(raw_val); cands_set.add(raw_val)
-        if obs.raw_text and obs.raw_text.isdigit() and len(obs.raw_text) == 3 and raw_val > 0:
+        if obs.raw_text and obs.raw_text.isdigit() and raw_val > 0:
             base = int(obs.raw_text) % 100
             for hundreds in range(0, int(max_speed_kmh) + 1, 100):
                 alt = hundreds + base
@@ -555,10 +552,9 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
                 if 0 <= sv <= max_speed_kmh and sv not in cands_set:
                     cands.append(sv); cands_set.add(sv)
             except (ValueError, TypeError): pass
-        if obs.raw_text and len(obs.raw_text) < 3:
-            for cv in _auto_expand_digits(obs.raw_text, max_speed_kmh):
-                if cv not in cands_set and 0 <= cv <= max_speed_kmh:
-                    cands.append(cv); cands_set.add(cv)
+        for cv in _auto_expand_digits(obs.raw_text, max_speed_kmh):
+            if cv not in cands_set and 0 <= cv <= max_speed_kmh:
+                cands.append(cv); cands_set.add(cv)
         if len(cands) > 1:
             candidates_by_frame[i] = cands; n_cheap += 1
 
@@ -583,16 +579,15 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
         l = sigs.get('linearity', 50)
         raw_v = rows[fi][2]
         if raw_v <= 0: continue
-        raw_digits = len(str(int(raw_v)))
-        if p >= CANDIDATE_POSTFILTER_PHYSICS_MIN and l >= CANDIDATE_POSTFILTER_LINEARITY_MIN and raw_digits >= 3:
+        if p >= CANDIDATE_POSTFILTER_PHYSICS_MIN and l >= CANDIDATE_POSTFILTER_LINEARITY_MIN:
             old_cands = candidates_by_frame[fi]
             new_cands = [c for c in old_cands if abs(c - raw_v) < CANDIDATE_HUNDREDS_MAX_DIFF]
             if len(new_cands) < len(old_cands):
                 n_filtered += 1
                 candidates_by_frame[fi] = new_cands if len(new_cands) >= 1 else [raw_v]
         # Track frames where distant interpolation was added
-        sg = sigs.get('sg_dev', 50)
-        if sg <= CANDIDATE_ISLAND_SG_DEV_MAX and raw_digits >= 3 and p >= CANDIDATE_POSTFILTER_PHYSICS_MIN:
+        a = sigs.get('accel', 100)
+        if a <= ACCEL_SCORE_ISLAND_INTERIOR + 5 and p >= CANDIDATE_POSTFILTER_PHYSICS_MIN:
             n_island_cands += 1
     if log_fn and n_filtered > 0:
         log_fn(f"  Filtered hundreds variants from {n_filtered} consistent 3-digit frames")
@@ -614,9 +609,8 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
         p = sigs.get('physics', 50)
         l = sigs.get('linearity', 50)
         a = sigs.get('accel', 100)
-        sg = sigs.get('sg_dev', 50)
-        if p >= REF_GUARD_PHYSICS_MIN and l >= REF_GUARD_LINEARITY_MIN and sg >= REF_GUARD_SG_DEV_MIN:
-            # Internally consistent + global trend match → trust OCR, skip interpolation
+        if p >= REF_GUARD_PHYSICS_MIN and l >= REF_GUARD_LINEARITY_MIN and a >= 70:
+            # All signals healthy → trust OCR, skip interpolation
             continue
         if mode == "auto":
             score = conf_by_idx.get(i, 50)
@@ -627,9 +621,11 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
             # that skips past the island to reach correct anchor frames.
             # Also add the distant interpolation as a candidate so Viterbi
             # has a correct option to choose from.
-            if sg <= CANDIDATE_ISLAND_SG_DEV_MAX and raw_v > 0:
+            if a <= ACCEL_SCORE_ISLAND_INTERIOR + 5 and raw_v > 0:
+                dt_frame = (times[1] - times[0]) if n >= 2 else 1/60
+                min_frames = max(1, int(DISTANT_INTERP_MIN_TIME / dt_frame))
                 distant = _local_interp(i, rows, observations, times, max_speed_kmh,
-                                        fps=fps, min_distance=DISTANT_INTERP_MIN_DISTANCE)
+                                        fps=fps, min_distance=min_frames)
                 if distant is not None and abs(distant - raw_v) > DISTANT_INTERP_ISLAND_THRESHOLD:
                     # Island detected: local cluster differs from distant anchors
                     ref = distant
@@ -646,7 +642,7 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
             # prevent false corrections (e.g., 168→68 across a speed jump).
             # Exception: island interiors (sg <= 20) where large discrepancies
             # are expected and indicate the raw value is wrong.
-            if ref is not None and raw_v > 0 and abs(ref - raw_v) > REF_INTERP_MAX_KMH_DIFF and sg > CANDIDATE_ISLAND_SG_DEV_MAX:
+            if ref is not None and raw_v > 0 and abs(ref - raw_v) > REF_INTERP_MAX_KMH_DIFF and a > ACCEL_SCORE_ISLAND_INTERIOR + 10:
                 ref = None
             if ref is not None: reference_values[i] = ref
         elif conf_by_idx.get(i, 50) < MANUAL_REF_CONFIDENCE_MAX:
@@ -694,24 +690,21 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
             if v < 0: continue
             vc = viterbi_conf.get(i, 50)
             if vc < VITERBI_POST_TRUST_THRESHOLD and i in candidates_by_frame and len(candidates_by_frame[i]) > 1: continue
+            trust_look = max(1, int(TRUST_WINDOW_TIME / max((times[1] - times[0]) if n >= 2 else 1/30, 1e-3)))
             left_ok = True
-            for j in range(i - 1, max(-1, i - 4), -1):
+            for j in range(i - 1, max(-1, i - 1 - trust_look), -1):
                 if j < 0: break
                 nbr_v = rows[j][2]
                 if nbr_v < 0: continue
-                nbr_rt = observations[j].raw_text if j < len(observations) else ''
-                if nbr_rt and len(nbr_rt) < 3: continue
                 if rows[j][3] == Flag.REOCR_AUTO: continue
-                if abs(v - nbr_v) > _dv: left_ok = False; break
+                if abs(v - nbr_v) > (i - j) * _dv: left_ok = False; break
             if not left_ok: continue
             right_ok = True
-            for j in range(i + 1, min(n, i + 4)):
+            for j in range(i + 1, min(n, i + 1 + trust_look)):
                 nbr_v = rows[j][2]
                 if nbr_v < 0: continue
-                nbr_rt = observations[j].raw_text if j < len(observations) else ''
-                if nbr_rt and len(nbr_rt) < 3: continue
                 if rows[j][3] == Flag.REOCR_AUTO: continue
-                if abs(nbr_v - v) > _dv: right_ok = False; break
+                if abs(nbr_v - v) > (j - i) * _dv: right_ok = False; break
             if not right_ok: continue
             rows[i][3] = Flag.HIGH_TRUST; trusted_set.add(i); round_trusted += 1
         total_trusted += round_trusted
@@ -749,7 +742,7 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
     # Ignores all flags, applies aggressive median-filter smoothing
     # to minimize max_dv (frame-to-frame speed change).
     if force_smooth:
-        n_forced = _force_sg_smooth(rows, times, max_speed_kmh, max_accel_mps2, fps, notes)
+        n_forced = _force_median_smooth(rows, times, max_speed_kmh, max_accel_mps2, fps, notes)
         if log_fn and n_forced > 0:
             log_fn(f"  Force-SG: {n_forced} frame-nudges applied")
 
@@ -784,35 +777,3 @@ def compute_confidence(rows: list, observations: list, max_speed: float,
         confidences.append({'index': i, 'score': score,
             'is_corrected': Flag.is_corrected(flags[i]), 'speed': cur, 'reason': reason})
     return confidences
-
-
-
-# ═══════════════════ Deprecated backward-compat alias ═══════════════════
-# correct_with_trust was renamed to correct_errors in v2.5.
-# Kept for test compatibility.
-def correct_with_trust(rows, observations, raw_frames, ocr,
-                       max_speed_kmh, max_accel_mps2,
-                       confidence_scores=None, times=None,
-                       pinned=None, reocr_cache=None,
-                       reocr_only=True, split_results=None,
-                       fps=1.0, skip_fill=False, **kwargs):
-    import warnings
-    warnings.warn("correct_with_trust is deprecated, use correct_errors",
-                  DeprecationWarning, stacklevel=2)
-    # Build times + confidence if not provided (backward compat)
-    n = len(rows)
-    if times is None:
-        times = [r[0] / fps for r in rows]
-    if confidence_scores is None:
-        confidence_scores = compute_confidence(rows, observations,
-                                                max_speed_kmh, max_accel_mps2,
-                                                fps=fps)
-    mode = "manual" if skip_fill else "auto"
-    result_rows, result_conf = correct_errors(
-        rows, observations, raw_frames, ocr,
-        confidence_scores, times,
-        max_speed_kmh, max_accel_mps2,
-        mode=mode, pinned=pinned,
-        reocr_cache=reocr_cache, reocr_only=reocr_only,
-        split_results=split_results, fps=fps)
-    return result_rows

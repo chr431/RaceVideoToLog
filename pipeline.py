@@ -380,8 +380,8 @@ class ProcessingPipeline:
                     raw_speed_kmh=int(sv * SOURCE_TO_KMH[speed_format]),
                     raw_text=rt,
                     confidence=conf))
-                # 短文本缺位检测：OCR 读到 1-2 位时，用三等分分割 OCR 尝试恢复
-                if len(rt) < 3:
+                # 低置信度时用三等分分割 OCR 尝试恢复缺失的数字位
+                if conf < 0.85:
                     _crop = self._raw_frames[done][1]
                     _h, _w = _crop.shape[:2]
                     if _w > 12:
