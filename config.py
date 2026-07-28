@@ -66,11 +66,13 @@ CONSISTENCY_PINNED_WEIGHT: float = 3.0  # 已固定帧权重倍率
 MANUAL_EDIT_ACCEL_WARNING: float = 0.5  # 人工修正加速度警告阈值
 
 # ═══════════════════ 错误检测：多信号置信度评分 ═══════════════════
-ERROR_DETECT_OCR_CONF_WEIGHT: float = 0.01   # OCR 模型内部置信度（修复后可用）
-ERROR_DETECT_PHYSICS_WEIGHT: float = 0.20    # 物理可达性
-ERROR_DETECT_LINEARITY_WEIGHT: float = 0.20  # 局部线性度
-ERROR_DETECT_ACCEL_SPIKE_WEIGHT: float = 0.40 # 加速度尖峰对检测
+ERROR_DETECT_OCR_CONF_WEIGHT: float = 0.01   # OCR 模型内部置信度
+ERROR_DETECT_PHYSICS_WEIGHT: float = 0.15     # 物理可达性
+ERROR_DETECT_LINEARITY_WEIGHT: float = 0.15   # 局部线性度（中位数鲁棒插值）
+ERROR_DETECT_ACCEL_SPIKE_WEIGHT: float = 0.50 # 加速度尖峰对检测
 ERROR_DETECT_CANDIDATE_THRESHOLD: int = 65
+# 最差信号地板：任一信号低于阈值时，组合分数上限
+ERROR_DETECT_FLOOR_CAP: dict[float, float] = {30.0: 25.0, 50.0: 50.0, 70.0: 69.0}
 
 # ═══════════════════ Viterbi DP ═══════════════════
 VITERBI_OBS_WEIGHT: float = 0.3
@@ -140,8 +142,11 @@ VITERBI_CONF_MARGINAL_MIN: int = 40         # Viterbi 置信度"存疑"等级下
 
 # ═══════════════════ 错误检测信号内部常量 ═══════════════════
 PHYSICS_FALLBACK_DT: float = 0.02            # 物理信号 fallback dt (秒, ~50fps)
-LINEARITY_NEIGHBOR_MAX_LOOK: int = 120       # 线性度信号邻居搜索最大帧数
 LINEARITY_DECAY_FACTOR: float = 3.0          # 线性度指数衰减系数
+LINEARITY_TIME_WINDOW: float = 0.25          # 线性度每侧搜索时间窗 (秒)
+LINEARITY_MAX_NEIGHBORS: int = 10            # 线性度每侧最大邻居帧数
+PHYSICS_TIME_WINDOW: float = 0.25            # 物理检查搜索时间窗 (秒)
+PHYSICS_DECAY_FACTOR: float = 2.0            # 物理违规指数衰减系数
 ACCEL_SPIKE_VIOLATION_MULT: float = 2.0      # 加速度尖峰阈值倍率
 ACCEL_SPIKE_SEARCH_WINDOW: int = 15          # 对立尖峰搜索窗口 (帧)
 SG_WINDOW_HALF_MIN: int = 31                 # SG中值滤波窗口最小半宽
@@ -172,7 +177,7 @@ REOCR_AGREE_3PLUS: float = 20.0              # Re-OCR三维以上得分
 
 # ═══════════════════ 向后兼容置信度权重 ═══════════════════
 COMPAT_CONF_PHYSICS_WEIGHT: float = 0.60
-COMPAT_CONF_TEXTLEN_WEIGHT: float = 0.40
+COMPAT_CONF_OCR_WEIGHT: float = 0.40
 
 # ═══════════════════ 部分数字扩展参数 ═══════════════════
 MAX_PARTIAL_WILDCARDS: int = 2         # expand_partial 最大通配符数

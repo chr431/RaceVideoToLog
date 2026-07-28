@@ -5,8 +5,8 @@ independent signals. READ-ONLY: does not modify any values or flags.
 
 Signals:
   1. OCR model confidence — from RapidOCR output
-  2. Physics reachability  — both-neighbor check (reliable >=3-digit only)
-  3. Local linearity       — deviation from reliable-neighbor interpolation
+  2. Physics reachability  — both-neighbor check
+  3. Local linearity       — median-of-pairs robust interpolation
   4. Acceleration spikes   — opposing spike pairs = consistency island
 """
 from __future__ import annotations
@@ -24,14 +24,13 @@ from config import (
     ERROR_DETECT_LINEARITY_WEIGHT,
     ERROR_DETECT_ACCEL_SPIKE_WEIGHT,
     ERROR_DETECT_CANDIDATE_THRESHOLD,
-    PHYSICS_FALLBACK_DT, LINEARITY_NEIGHBOR_MAX_LOOK,
-    LINEARITY_DECAY_FACTOR,
+    ERROR_DETECT_FLOOR_CAP,
+    PHYSICS_TIME_WINDOW, PHYSICS_DECAY_FACTOR,
+    LINEARITY_DECAY_FACTOR, LINEARITY_TIME_WINDOW, LINEARITY_MAX_NEIGHBORS,
     ACCEL_SPIKE_VIOLATION_MULT, ACCEL_SPIKE_SEARCH_WINDOW,
-    REOCR_CLUSTER_GAP_KMH,
     CONF_TIER_LOW_MAX, CONF_TIER_MEDIUM_MAX,
     ACCEL_SCORE_NORMAL, ACCEL_SCORE_NEAR_ONE, ACCEL_SCORE_SAME_DIR,
     ACCEL_SCORE_VIOLATION, ACCEL_SCORE_ISLAND_INTERIOR,
-    REOCR_AGREE_1CLUSTER, REOCR_AGREE_2CLUSTER, REOCR_AGREE_3PLUS,
 )
 
 if TYPE_CHECKING:
@@ -64,10 +63,38 @@ def _signal_ocr_conf(observations: list, n: int) -> list[float]:
     return scores
 
 
+# ═══════════════════ Helper: nearest valid frame within time window ═══════════════════
+
+def _find_nearest_valid(rows: list, times: list[float], i: int, direction: int,
+                        time_window: float) -> int | None:
+    """Return the nearest frame in *direction* with speed >= 0 within time_window seconds."""
+    step = 1 if direction > 0 else -1
+    j = i + step
+    t_i = times[i]
+    while 0 <= j < len(rows):
+        if abs(times[j] - t_i) > time_window:
+            break
+        if rows[j][2] >= 0:
+            return j
+        j += step
+    return None
+
+
 # ═══════════════════ Signal 2: Physics reachability ═══════════════════
 
-def _signal_physics(rows: list, observations: list, times: list[float],
-                    max_accel_mps2: float) -> list[float]:
+def _signal_physics(rows: list, times: list[float], max_accel_mps2: float,
+                    time_window: float = PHYSICS_TIME_WINDOW) -> list[float]:
+    """Physics reachability — continuous scoring, no text-length dependency.
+
+    For each frame, finds the nearest valid-speed neighbour on each side
+    within *time_window* seconds.  Score is based on how badly (if at all)
+    the speed change exceeds the physics limit.
+
+    v < 0      →   0.0  (invalid measurement)
+    no neighbour →  50.0  (neutral — insufficient context)
+    reachable  → 100.0  (perfect)
+    excess     → 100 * exp(-excess_ratio * decay)  (continuous drop)
+    """
     n = len(rows)
     scores = []
     for i in range(n):
@@ -75,85 +102,107 @@ def _signal_physics(rows: list, observations: list, times: list[float],
         if v < 0:
             scores.append(0.0)
             continue
-        reachable = 0
-        total = 0
-        for ni in (i - 1, i + 1):
-            if 0 <= ni < n:
-                rt = ""
-                if ni < len(observations) and observations[ni] is not None:
-                    rt = (observations[ni].raw_text or "")
-                if len(rt) < 3:
-                    continue
-                nv = rows[ni][2]
-                if nv > 0:
-                    total += 1
-                    dt = abs(times[i] - times[ni])
-                    if dt <= 0:
-                        dt = PHYSICS_FALLBACK_DT
-                    max_dv = max_accel_mps2 * dt * MPS_TO_KMH
-                    if abs(v - nv) <= max_dv:
-                        reachable += 1
-        if total == 0:
+
+        side_scores: list[float] = []
+        for direction in (-1, 1):
+            ni = _find_nearest_valid(rows, times, i, direction, time_window)
+            if ni is None:
+                continue
+            nv = rows[ni][2]
+            dt = abs(times[i] - times[ni])
+            if dt <= 0:
+                continue
+            max_dv = max_accel_mps2 * dt * MPS_TO_KMH
+            dv = abs(v - nv)
+            if dv <= max_dv:
+                side_scores.append(100.0)
+            else:
+                excess = (dv - max_dv) / max_dv
+                side_scores.append(100.0 * math.exp(-excess * PHYSICS_DECAY_FACTOR))
+
+        if not side_scores:
             scores.append(50.0)
-        elif reachable == total:
-            scores.append(100.0)
-        elif reachable == 0:
-            scores.append(5.0)
         else:
-            scores.append(60.0)
+            scores.append(round(min(side_scores), 1))
+
     return scores
 
 
-# ═══════════════════ Helper: find reliable neighbor ═══════════════════
+# ═══════════════════ Signal 3: Local linearity (median-of-pairs) ═══════════════════
 
-def _find_reliable_neighbor(i: int, direction: int, rows: list, observations: list,
-                            times: list[float], max_accel_mps2: float,
-                            max_look: int = LINEARITY_NEIGHBOR_MAX_LOOK) -> int | None:
-    step = 1 if direction > 0 else -1
-    j = i + step
-    v = rows[i][2]
-    while 0 <= j < len(rows) and abs(j - i) <= max_look:
-        nv = rows[j][2]
-        if nv < 0:
-            j += step; continue
-        rt = ""
-        if j < len(observations) and observations[j] is not None:
-            rt = observations[j].raw_text or ""
-        if len(rt) < 3:
-            j += step; continue
-        if v > 0 and nv > 0:
-            dt = abs(times[i] - times[j])
-            if dt <= 0: dt = 0.02
-            max_dv = max_accel_mps2 * dt * MPS_TO_KMH
-            if abs(v - nv) <= max_dv:
-                return j
-        j += step
-    return None
+def _signal_linearity(rows: list, times: list[float],
+                      time_window: float = LINEARITY_TIME_WINDOW,
+                      max_neighbors: int = LINEARITY_MAX_NEIGHBORS) -> list[float]:
+    """Robust linearity check using median-of-pairs interpolation.
 
+    For each frame, finds valid-speed neighbours on each side within
+    *time_window* seconds (capped at *max_neighbors* per side), linearly
+    interpolates from all left×right pairs, takes the median expected
+    value, and scores based on relative deviation.
 
-# ═══════════════════ Signal 3: Local linearity ═══════════════════
-
-def _signal_linearity(rows: list, observations: list, times: list[float],
-                      max_accel_mps2: float) -> list[float]:
+    No reliability gate — the median naturally rejects outlier anchors.
+    Works equally well at all speed ranges (no text-length dependency).
+    """
     n = len(rows)
     scores = []
     for i in range(n):
         v = rows[i][2]
         if v < 0:
-            scores.append(0.0); continue
-        la = _find_reliable_neighbor(i, -1, rows, observations, times, max_accel_mps2)
-        ra = _find_reliable_neighbor(i, +1, rows, observations, times, max_accel_mps2)
-        if la is None or ra is None:
-            scores.append(50.0); continue
-        lv, rv = rows[la][2], rows[ra][2]
-        lt, rt = times[la], times[ra]
-        span = max(rt - lt, 1e-3)
-        frac = (times[i] - lt) / span
-        expected = lv + (rv - lv) * frac
-        if expected <= 0:
-            scores.append(50.0); continue
+            scores.append(0.0)
+            continue
+
+        t_i = times[i]
+
+        # Collect valid frames on each side within time_window
+        left_frames: list[int] = []
+        j = i - 1
+        while j >= 0 and len(left_frames) < max_neighbors:
+            if t_i - times[j] > time_window:
+                break
+            if rows[j][2] >= 0:
+                left_frames.append(j)
+            j -= 1
+
+        right_frames: list[int] = []
+        j = i + 1
+        while j < n and len(right_frames) < max_neighbors:
+            if times[j] - t_i > time_window:
+                break
+            if rows[j][2] >= 0:
+                right_frames.append(j)
+            j += 1
+
+        if not left_frames or not right_frames:
+            scores.append(50.0)
+            continue
+
+        # Expected values from all left-right pairs, median for robustness
+        expected_vals: list[float] = []
+        for li in left_frames:
+            lv = rows[li][2]
+            lt = times[li]
+            for ri in right_frames:
+                rv = rows[ri][2]
+                rt = times[ri]
+                span = rt - lt
+                if span < 1e-6:
+                    continue
+                frac = (t_i - lt) / span
+                expected = lv + (rv - lv) * frac
+                if expected > 0:
+                    expected_vals.append(expected)
+
+        if not expected_vals:
+            scores.append(50.0)
+            continue
+
+        expected_vals.sort()
+        expected = expected_vals[len(expected_vals) // 2]  # median
+
         deviation = abs(v - expected) / expected
-        scores.append(max(0.0, min(100.0, 100.0 * math.exp(-deviation * LINEARITY_DECAY_FACTOR))))
+        score = 100.0 * math.exp(-deviation * LINEARITY_DECAY_FACTOR)
+        scores.append(round(max(0.0, min(100.0, score)), 1))
+
     return scores
 
 
@@ -223,8 +272,8 @@ def detect_errors(rows: list, observations: list, times: list[float],
         return ErrorReport()
 
     ocr_conf_scores = _signal_ocr_conf(observations, n)
-    physics_scores = _signal_physics(rows, observations, times, max_accel_mps2)
-    linearity_scores = _signal_linearity(rows, observations, times, max_accel_mps2)
+    physics_scores = _signal_physics(rows, times, max_accel_mps2)
+    linearity_scores = _signal_linearity(rows, times)
     accel_scores = _signal_accel_spikes(rows, times, fps, max_accel_mps2)
     total_w = (ERROR_DETECT_OCR_CONF_WEIGHT + ERROR_DETECT_PHYSICS_WEIGHT +
                ERROR_DETECT_LINEARITY_WEIGHT + ERROR_DETECT_ACCEL_SPIKE_WEIGHT)
@@ -242,6 +291,13 @@ def detect_errors(rows: list, observations: list, times: list[float],
                  w_lin * linearity_scores[i] +
                  w_acc * accel_scores[i])
         score = round(max(0.0, min(100.0, score)), 1)
+
+        # Worst-signal floor: any weak signal caps the combined score
+        min_sig = min(physics_scores[i], linearity_scores[i], accel_scores[i])
+        for threshold, cap in sorted(ERROR_DETECT_FLOOR_CAP.items()):
+            if min_sig < threshold:
+                score = min(score, cap)
+                break
 
         if score < CONF_TIER_LOW_MAX: tier = "low"; n_low += 1
         elif score < CONF_TIER_MEDIUM_MAX: tier = "medium"; n_medium += 1

@@ -771,7 +771,7 @@ def compute_confidence(rows: list, observations: list, max_speed: float,
     n = len(rows)
     times = [r[0] / fps for r in rows]
     ocr_conf = _signal_ocr_conf(observations, n)
-    physics = _signal_physics(rows, observations, times, max_accel)
+    physics = _signal_physics(rows, times, max_accel)
     confidences = []
     from config import COMPAT_CONF_OCR_WEIGHT, COMPAT_CONF_PHYSICS_WEIGHT
     for i in range(n):
