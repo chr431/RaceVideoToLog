@@ -767,16 +767,15 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
 def compute_confidence(rows: list, observations: list, max_speed: float,
                        max_accel: float, pinned: set[int] | None = None,
                        fps: float = 1.0) -> list[dict]:
-    from error_detection import _signal_physics, _signal_text_len, _signal_ocr_conf
+    from error_detection import _signal_physics, _signal_ocr_conf
     n = len(rows)
     times = [r[0] / fps for r in rows]
     ocr_conf = _signal_ocr_conf(observations, n)
     physics = _signal_physics(rows, observations, times, max_accel)
-    text_len = _signal_text_len(observations, n)
     confidences = []
-    from config import COMPAT_CONF_OCR_WEIGHT, COMPAT_CONF_PHYSICS_WEIGHT, COMPAT_CONF_TEXTLEN_WEIGHT
+    from config import COMPAT_CONF_OCR_WEIGHT, COMPAT_CONF_PHYSICS_WEIGHT
     for i in range(n):
-        score = round(max(0.0, min(100.0, COMPAT_CONF_OCR_WEIGHT * ocr_conf[i] + COMPAT_CONF_PHYSICS_WEIGHT * physics[i] + COMPAT_CONF_TEXTLEN_WEIGHT * text_len[i])), 1)
+        score = round(max(0.0, min(100.0, COMPAT_CONF_OCR_WEIGHT * ocr_conf[i] + COMPAT_CONF_PHYSICS_WEIGHT * physics[i])), 1)
         flags = [r[3] for r in rows]; cur = rows[i][2]
         if cur < 0 or cur > max_speed: reason = '速度超出范围'
         elif score >= 70: reason = '正常'

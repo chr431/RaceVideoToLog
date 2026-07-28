@@ -25,7 +25,6 @@ from config import (
     ERROR_DETECT_OCR_CONF_WEIGHT,
     ERROR_DETECT_PHYSICS_WEIGHT,
     ERROR_DETECT_LINEARITY_WEIGHT,
-    ERROR_DETECT_TEXT_LEN_WEIGHT,
     ERROR_DETECT_ACCEL_SPIKE_WEIGHT,
     ERROR_DETECT_SG_DEVIATION_WEIGHT,
     ERROR_DETECT_CANDIDATE_THRESHOLD,
@@ -36,7 +35,6 @@ from config import (
     SG_DEV_REL_THRESHOLD, SG_DEV_ABS_THRESHOLD_KMH,
     REOCR_CLUSTER_GAP_KMH,
     CONF_TIER_LOW_MAX, CONF_TIER_MEDIUM_MAX,
-    TEXTLEN_SCORE_3PLUS, TEXTLEN_SCORE_2, TEXTLEN_SCORE_1, TEXTLEN_SCORE_0,
     ACCEL_SCORE_NORMAL, ACCEL_SCORE_NEAR_ONE, ACCEL_SCORE_SAME_DIR,
     ACCEL_SCORE_VIOLATION, ACCEL_SCORE_ISLAND_INTERIOR,
     SG_CLUSTER_SCORE_1, SG_CLUSTER_SCORE_3, SG_CLUSTER_SCORE_5,
@@ -167,24 +165,7 @@ def _signal_linearity(rows: list, observations: list, times: list[float],
     return scores
 
 
-# ═══════════════════ Signal 5: Text length ═══════════════════
-
-def _signal_text_len(observations: list, n: int) -> list[float]:
-    scores = []
-    for i in range(n):
-        if i < len(observations) and observations[i] is not None:
-            rt = observations[i].raw_text or ""
-            digits = sum(1 for ch in rt if ch.isdigit())
-            if digits >= 3: scores.append(TEXTLEN_SCORE_3PLUS)
-            elif digits == 2: scores.append(TEXTLEN_SCORE_2)
-            elif digits == 1: scores.append(TEXTLEN_SCORE_1)
-            else: scores.append(TEXTLEN_SCORE_0)
-        else:
-            scores.append(10.0)
-    return scores
-
-
-# ═══════════════════ Signal 6: Acceleration spike pairs ═══════════════════
+# ═══════════════════ Signal 5: Acceleration spike pairs ═══════════════════
 
 def _signal_accel_spikes(rows: list, times: list[float], fps: float,
                          max_accel_mps2: float) -> list[float]:
@@ -315,17 +296,15 @@ def detect_errors(rows: list, observations: list, times: list[float],
     ocr_conf_scores = _signal_ocr_conf(observations, n)
     physics_scores = _signal_physics(rows, observations, times, max_accel_mps2)
     linearity_scores = _signal_linearity(rows, observations, times, max_accel_mps2)
-    text_len_scores = _signal_text_len(observations, n)
     accel_scores = _signal_accel_spikes(rows, times, fps, max_accel_mps2)
     sg_scores = _signal_sg_deviation(rows, observations, times, fps)
 
     total_w = (ERROR_DETECT_OCR_CONF_WEIGHT + ERROR_DETECT_PHYSICS_WEIGHT +
-               ERROR_DETECT_LINEARITY_WEIGHT + ERROR_DETECT_TEXT_LEN_WEIGHT +
+               ERROR_DETECT_LINEARITY_WEIGHT +
                ERROR_DETECT_ACCEL_SPIKE_WEIGHT + ERROR_DETECT_SG_DEVIATION_WEIGHT)
     w_ocr = ERROR_DETECT_OCR_CONF_WEIGHT / total_w
     w_phy = ERROR_DETECT_PHYSICS_WEIGHT / total_w
     w_lin = ERROR_DETECT_LINEARITY_WEIGHT / total_w
-    w_txt = ERROR_DETECT_TEXT_LEN_WEIGHT / total_w
     w_acc = ERROR_DETECT_ACCEL_SPIKE_WEIGHT / total_w
     w_sg = ERROR_DETECT_SG_DEVIATION_WEIGHT / total_w
 
@@ -335,8 +314,8 @@ def detect_errors(rows: list, observations: list, times: list[float],
 
     for i in range(n):
         score = (w_ocr * ocr_conf_scores[i] + w_phy * physics_scores[i] +
-                 w_lin * linearity_scores[i] + w_reo * reocr_scores[i] +
-                 w_txt * text_len_scores[i] + w_acc * accel_scores[i] +
+                 w_lin * linearity_scores[i] +
+                 w_acc * accel_scores[i] +
                  w_sg * sg_scores[i])
         score = round(max(0.0, min(100.0, score)), 1)
 
@@ -346,7 +325,7 @@ def detect_errors(rows: list, observations: list, times: list[float],
 
         signals_sorted = sorted(
             [("ocr_conf", ocr_conf_scores[i]), ("physics", physics_scores[i]),
-             ("linearity", linearity_scores[i]), ("text_len", text_len_scores[i]),
+             ("linearity", linearity_scores[i]),
              ("accel", accel_scores[i]), ("sg_dev", sg_scores[i])], key=lambda x: x[1])
         lowest_signal, lowest_val = signals_sorted[0]
         if score >= 70: reason = "正常"
@@ -361,7 +340,6 @@ def detect_errors(rows: list, observations: list, times: list[float],
                 "ocr_conf": round(ocr_conf_scores[i], 1),
                 "physics": round(physics_scores[i], 1),
                 "linearity": round(linearity_scores[i], 1),
-                "text_len": round(text_len_scores[i], 1),
                 "accel": round(accel_scores[i], 1),
                 "sg_dev": round(sg_scores[i], 1),
             },

@@ -197,7 +197,6 @@ class ProcessingPipeline:
         self._error_report = detect_errors(
             self._rows, self._observations, times,
             self._max_accel, self._max_speed,
-            reocr_values_by_frame=None,
             split_results=self._split_results if self._split_results else None,
             fps=self._fps)
         self._detection_confidence = self._error_report.confidence
@@ -507,7 +506,7 @@ class ProcessingPipeline:
         with report_path.open("w", newline="", encoding="utf-8-sig") as fh:
             fields = ["frame", "raw_text", "raw_val",
                 "sig_ocr_conf", "sig_physics", "sig_linearity",
-                "sig_text_len", "sig_accel", "sig_sg_dev",
+                "sig_accel", "sig_sg_dev",
                 "combined_conf", "conf_tier",
                 "old_flag", "new_flag", "old_val", "new_val", "correction_note"]
             w = csv.DictWriter(fh, fieldnames=fields, extrasaction="ignore")
@@ -523,7 +522,6 @@ class ProcessingPipeline:
                     "sig_ocr_conf": sigs.get("ocr_conf", ""),
                     "sig_physics": sigs.get("physics", ""),
                     "sig_linearity": sigs.get("linearity", ""),
-                    "sig_text_len": sigs.get("text_len", ""),
                     "sig_accel": sigs.get("accel", ""),
                     "sig_sg_dev": sigs.get("sg_dev", ""),
                     "combined_conf": conf.get("score", ""),

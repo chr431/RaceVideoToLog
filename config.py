@@ -69,7 +69,6 @@ MANUAL_EDIT_ACCEL_WARNING: float = 0.5  # 人工修正加速度警告阈值
 ERROR_DETECT_OCR_CONF_WEIGHT: float = 0.01   # OCR 模型内部置信度（修复后可用）
 ERROR_DETECT_PHYSICS_WEIGHT: float = 0.20    # 物理可达性
 ERROR_DETECT_LINEARITY_WEIGHT: float = 0.20  # 局部线性度
-ERROR_DETECT_TEXT_LEN_WEIGHT: float = 0.14   # 文本长度信号
 ERROR_DETECT_ACCEL_SPIKE_WEIGHT: float = 0.40 # 加速度尖峰对检测
 ERROR_DETECT_SG_DEVIATION_WEIGHT: float = 0.15 # 中值滤波偏离度（唯一全局信号）
 ERROR_DETECT_CANDIDATE_THRESHOLD: int = 65
