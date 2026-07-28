@@ -1,16 +1,13 @@
 """Error Detection — Phase 1: multi-signal per-frame confidence scoring.
 
-Computes continuous confidence scores [0, 100] for every frame using 7
+Computes continuous confidence scores [0, 100] for every frame using 4
 independent signals. READ-ONLY: does not modify any values or flags.
 
 Signals:
-  1. OCR model confidence — from RapidOCR output (0→100, nearly useless)
-  2. Physics reachability  — both-neighbor check (reliable ≥3-digit only)
+  1. OCR model confidence — from RapidOCR output
+  2. Physics reachability  — both-neighbor check (reliable >=3-digit only)
   3. Local linearity       — deviation from reliable-neighbor interpolation
-  4. Re-OCR agreement      — consensus among all OCR readings
-  5. Text length           — digit count as reliability indicator
-  6. Acceleration spikes   — opposing spike pairs = consistency island
-  7. SG/median deviation   — auxiliary broad-trend check
+  4. Acceleration spikes   — opposing spike pairs = consistency island
 """
 from __future__ import annotations
 import math
@@ -160,7 +157,7 @@ def _signal_linearity(rows: list, observations: list, times: list[float],
     return scores
 
 
-# ═══════════════════ Signal 5: Acceleration spike pairs ═══════════════════
+# ═══════════════════ Signal 4: Acceleration spike pairs ═══════════════════
 
 def _signal_accel_spikes(rows: list, times: list[float], fps: float,
                          max_accel_mps2: float) -> list[float]:
@@ -215,8 +212,6 @@ def _signal_accel_spikes(rows: list, times: list[float], fps: float,
     return scores
 
 
-# ═══════════════════ Signal 7: SG/median deviation ═══════════════════
-
 # ═══════════════════ Main entry point ═══════════════════
 
 def detect_errors(rows: list, observations: list, times: list[float],
@@ -245,8 +240,7 @@ def detect_errors(rows: list, observations: list, times: list[float],
     for i in range(n):
         score = (w_ocr * ocr_conf_scores[i] + w_phy * physics_scores[i] +
                  w_lin * linearity_scores[i] +
-                 w_acc * accel_scores[i] +
-                 w_sg * sg_scores[i])
+                 w_acc * accel_scores[i])
         score = round(max(0.0, min(100.0, score)), 1)
 
         if score < CONF_TIER_LOW_MAX: tier = "low"; n_low += 1
