@@ -506,7 +506,7 @@ class ProcessingPipeline:
         with report_path.open("w", newline="", encoding="utf-8-sig") as fh:
             fields = ["frame", "raw_text", "raw_val",
                 "sig_ocr_conf", "sig_physics", "sig_linearity",
-                "sig_accel", "sig_sg_dev",
+                "sig_accel",
                 "combined_conf", "conf_tier",
                 "old_flag", "new_flag", "old_val", "new_val", "correction_note"]
             w = csv.DictWriter(fh, fieldnames=fields, extrasaction="ignore")
@@ -523,7 +523,6 @@ class ProcessingPipeline:
                     "sig_physics": sigs.get("physics", ""),
                     "sig_linearity": sigs.get("linearity", ""),
                     "sig_accel": sigs.get("accel", ""),
-                    "sig_sg_dev": sigs.get("sg_dev", ""),
                     "combined_conf": conf.get("score", ""),
                     "conf_tier": conf.get("tier", ""),
                     "old_flag": row[3], "new_flag": row[3],

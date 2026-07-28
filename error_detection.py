@@ -26,19 +26,14 @@ from config import (
     ERROR_DETECT_PHYSICS_WEIGHT,
     ERROR_DETECT_LINEARITY_WEIGHT,
     ERROR_DETECT_ACCEL_SPIKE_WEIGHT,
-    ERROR_DETECT_SG_DEVIATION_WEIGHT,
     ERROR_DETECT_CANDIDATE_THRESHOLD,
     PHYSICS_FALLBACK_DT, LINEARITY_NEIGHBOR_MAX_LOOK,
     LINEARITY_DECAY_FACTOR,
     ACCEL_SPIKE_VIOLATION_MULT, ACCEL_SPIKE_SEARCH_WINDOW,
-    SG_WINDOW_HALF_MIN, SG_WINDOW_HALF_FPS_MULT, SG_WINDOW_HALF_FALLBACK,
-    SG_DEV_REL_THRESHOLD, SG_DEV_ABS_THRESHOLD_KMH,
     REOCR_CLUSTER_GAP_KMH,
     CONF_TIER_LOW_MAX, CONF_TIER_MEDIUM_MAX,
     ACCEL_SCORE_NORMAL, ACCEL_SCORE_NEAR_ONE, ACCEL_SCORE_SAME_DIR,
     ACCEL_SCORE_VIOLATION, ACCEL_SCORE_ISLAND_INTERIOR,
-    SG_CLUSTER_SCORE_1, SG_CLUSTER_SCORE_3, SG_CLUSTER_SCORE_5,
-    SG_CLUSTER_SCORE_10, SG_CLUSTER_SCORE_MANY,
     REOCR_AGREE_1CLUSTER, REOCR_AGREE_2CLUSTER, REOCR_AGREE_3PLUS,
 )
 
@@ -222,67 +217,6 @@ def _signal_accel_spikes(rows: list, times: list[float], fps: float,
 
 # ═══════════════════ Signal 7: SG/median deviation ═══════════════════
 
-def _signal_sg_deviation(rows: list, observations: list, times: list[float],
-                         fps: float) -> list[float]:
-    """Wide median profile deviation using only 3+ digit frames."""
-    n = len(rows)
-    if n < 5:
-        return [50.0] * n
-
-    speeds = np.array([r[2] if r[2] >= 0 else 0.0 for r in rows], dtype=float)
-    reliable_mask = np.zeros(n, dtype=bool)
-    for i in range(n):
-        if i < len(observations) and observations[i] is not None:
-            rt = observations[i].raw_text or ""
-            if len(rt) >= 3:
-                reliable_mask[i] = True
-
-    wide_half = max(SG_WINDOW_HALF_MIN, int(fps * SG_WINDOW_HALF_FPS_MULT) if fps > 0 else SG_WINDOW_HALF_FALLBACK)
-    wide_median = np.zeros(n, dtype=float)
-    for i in range(n):
-        lo = max(0, i - wide_half)
-        hi = min(n, i + wide_half + 1)
-        wv = speeds[lo:hi]
-        wr = reliable_mask[lo:hi]
-        if np.any(wr):
-            wide_median[i] = float(np.median(wv[wr]))
-        elif np.any(wv > 0):
-            wide_median[i] = float(np.median(wv[wv > 0]))
-
-    rel_threshold, abs_threshold = SG_DEV_REL_THRESHOLD, SG_DEV_ABS_THRESHOLD_KMH
-    scores = []
-    for i in range(n):
-        v, mp = speeds[i], wide_median[i]
-        if v < 0 or mp <= 0:
-            scores.append(50.0); continue
-        deviation = abs(v - mp)
-        is_deviating = deviation > max(abs_threshold, mp * rel_threshold)
-        if not is_deviating:
-            scores.append(100.0); continue
-
-        cluster_size = 1
-        for j in range(i - 1, -1, -1):
-            vj, mpj = speeds[j], wide_median[j]
-            if vj < 0 or mpj <= 0: break
-            if abs(vj - mpj) > max(abs_threshold, mpj * rel_threshold):
-                cluster_size += 1
-            else: break
-        for j in range(i + 1, n):
-            vj, mpj = speeds[j], wide_median[j]
-            if vj < 0 or mpj <= 0: break
-            if abs(vj - mpj) > max(abs_threshold, mpj * rel_threshold):
-                cluster_size += 1
-            else: break
-
-        if cluster_size <= 1: score = SG_CLUSTER_SCORE_1
-        elif cluster_size <= 3: score = SG_CLUSTER_SCORE_3
-        elif cluster_size <= 5: score = SG_CLUSTER_SCORE_5
-        elif cluster_size <= 10: score = SG_CLUSTER_SCORE_10
-        else: score = SG_CLUSTER_SCORE_MANY
-        scores.append(score)
-    return scores
-
-
 # ═══════════════════ Main entry point ═══════════════════
 
 def detect_errors(rows: list, observations: list, times: list[float],
@@ -297,16 +231,12 @@ def detect_errors(rows: list, observations: list, times: list[float],
     physics_scores = _signal_physics(rows, observations, times, max_accel_mps2)
     linearity_scores = _signal_linearity(rows, observations, times, max_accel_mps2)
     accel_scores = _signal_accel_spikes(rows, times, fps, max_accel_mps2)
-    sg_scores = _signal_sg_deviation(rows, observations, times, fps)
-
     total_w = (ERROR_DETECT_OCR_CONF_WEIGHT + ERROR_DETECT_PHYSICS_WEIGHT +
-               ERROR_DETECT_LINEARITY_WEIGHT +
-               ERROR_DETECT_ACCEL_SPIKE_WEIGHT + ERROR_DETECT_SG_DEVIATION_WEIGHT)
+               ERROR_DETECT_LINEARITY_WEIGHT + ERROR_DETECT_ACCEL_SPIKE_WEIGHT)
     w_ocr = ERROR_DETECT_OCR_CONF_WEIGHT / total_w
     w_phy = ERROR_DETECT_PHYSICS_WEIGHT / total_w
     w_lin = ERROR_DETECT_LINEARITY_WEIGHT / total_w
     w_acc = ERROR_DETECT_ACCEL_SPIKE_WEIGHT / total_w
-    w_sg = ERROR_DETECT_SG_DEVIATION_WEIGHT / total_w
 
     confidence = []
     n_low, n_medium, n_high = 0, 0, 0
@@ -326,7 +256,7 @@ def detect_errors(rows: list, observations: list, times: list[float],
         signals_sorted = sorted(
             [("ocr_conf", ocr_conf_scores[i]), ("physics", physics_scores[i]),
              ("linearity", linearity_scores[i]),
-             ("accel", accel_scores[i]), ("sg_dev", sg_scores[i])], key=lambda x: x[1])
+             ("accel", accel_scores[i])], key=lambda x: x[1])
         lowest_signal, lowest_val = signals_sorted[0]
         if score >= 70: reason = "正常"
         elif score < 30: reason = f"错误({lowest_signal}={lowest_val:.0f})"
@@ -341,7 +271,6 @@ def detect_errors(rows: list, observations: list, times: list[float],
                 "physics": round(physics_scores[i], 1),
                 "linearity": round(linearity_scores[i], 1),
                 "accel": round(accel_scores[i], 1),
-                "sg_dev": round(sg_scores[i], 1),
             },
             "is_corrected": False,
         })
