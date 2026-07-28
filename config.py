@@ -99,10 +99,10 @@ AUTO_ALIGN_MIN_CHANGE_KMH: int = 3       # auto-align 最小提交变化量 (km/
 AUTO_ALIGN_FALLBACK_MAX_DV: float = 4.0  # 无法获取 fps 时的 fallback max_dv (km/h)
 
 # ═══════════════════ Force-Median 平滑参数 ═══════════════════
-FORCE_SG_MAX_ITERATIONS: int = 15        # _force_median_smooth 最大迭代轮数
-FORCE_SG_NUDGE_FACTOR: float = 0.7       # force-SG 向中值修正的比例
-FORCE_SG_THRESHOLD_MULT: float = 1.2     # force-SG max_dv 阈值倍率
-FORCE_SG_MIN_CHANGE_KMH: int = 1         # force-SG 最小变化量 (km/h)
+FORCE_MEDIAN_MAX_ITERATIONS: int = 15     # _force_median_smooth 最大迭代轮数
+FORCE_MEDIAN_NUDGE_FACTOR: float = 0.7    # 向中值修正的比例
+FORCE_MEDIAN_THRESHOLD_MULT: float = 1.2  # max_dv 阈值倍率
+FORCE_MEDIAN_MIN_CHANGE_KMH: int = 1      # 最小变化量 (km/h)
 
 # ═══════════════════ 候选值后过滤 ═══════════════════
 CANDIDATE_POSTFILTER_PHYSICS_MIN: int = 90    # 自洽帧 physics 最低阈值

@@ -27,8 +27,8 @@ from config import (
     SMOOTHNESS_MAX_ITERATIONS,
     AUTO_ALIGN_DIFF_MIN_KMH, AUTO_ALIGN_DIFF_MAX_KMH,
     AUTO_ALIGN_NUDGE_FACTOR, AUTO_ALIGN_MIN_CHANGE_KMH,
-    FORCE_SG_MAX_ITERATIONS, FORCE_SG_NUDGE_FACTOR,
-    FORCE_SG_THRESHOLD_MULT, FORCE_SG_MIN_CHANGE_KMH,
+    FORCE_MEDIAN_MAX_ITERATIONS, FORCE_MEDIAN_NUDGE_FACTOR,
+    FORCE_MEDIAN_THRESHOLD_MULT, FORCE_MEDIAN_MIN_CHANGE_KMH,
     CANDIDATE_POSTFILTER_PHYSICS_MIN, CANDIDATE_POSTFILTER_LINEARITY_MIN,
     CANDIDATE_HUNDREDS_MAX_DIFF,
     ACCEL_SCORE_ISLAND_INTERIOR,
@@ -431,10 +431,10 @@ def _force_median_smooth(rows: list, times: list, max_speed_kmh: float,
     if n < 5:
         return 0
     max_dv_per_frame = max_accel_mps2 * (times[1] - times[0]) * MPS_TO_KMH if n >= 2 else 4.0
-    threshold = max_dv_per_frame * FORCE_SG_THRESHOLD_MULT
+    threshold = max_dv_per_frame * FORCE_MEDIAN_THRESHOLD_MULT
     total_smoothed = 0
 
-    for _pass in range(FORCE_SG_MAX_ITERATIONS):
+    for _pass in range(FORCE_MEDIAN_MAX_ITERATIONS):
         changed = 0
         for i in range(2, n - 2):
             v = rows[i][2]
@@ -469,9 +469,9 @@ def _force_median_smooth(rows: list, times: list, max_speed_kmh: float,
                 lo = max(lo, rows[i + 1][2] - dv_limit)
                 hi = min(hi, rows[i + 1][2] + dv_limit)
 
-            target = v + diff * FORCE_SG_NUDGE_FACTOR  # Partial nudge
+            target = v + diff * FORCE_MEDIAN_NUDGE_FACTOR  # Partial nudge
             new_val = round(max(lo, min(hi, target)))
-            if abs(new_val - v) < FORCE_SG_MIN_CHANGE_KMH:
+            if abs(new_val - v) < FORCE_MEDIAN_MIN_CHANGE_KMH:
                 continue
 
             rows[i][2] = int(new_val)
