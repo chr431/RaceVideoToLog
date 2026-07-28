@@ -5,7 +5,7 @@
 关于test_truth.csv:
 该视频全程速度变化平缓，加速度较小，但是部分区间会有连续多帧模糊，导致完全无法辨认。
 
-关于test_truth.csv:
+关于test2_truth.csv:
 该视频速度模式和画质基本和test_truth.csv相同，但是具体速度数值和长度不同。
 
 关于test3_truth.csv:

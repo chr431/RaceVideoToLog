@@ -202,6 +202,7 @@ class SpeedObservation:
     timestamp: float
     raw_speed_kmh: int
     raw_text: str
+    confidence: float = 0.0  # OCR model confidence [0, 1], 0 if unavailable
 
 
 def format_duration(seconds: float) -> str:

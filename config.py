@@ -66,13 +66,12 @@ CONSISTENCY_PINNED_WEIGHT: float = 3.0  # 已固定帧权重倍率
 MANUAL_EDIT_ACCEL_WARNING: float = 0.5  # 人工修正加速度警告阈值
 
 # ═══════════════════ 错误检测：多信号置信度评分 ═══════════════════
-ERROR_DETECT_OCR_CONF_WEIGHT: float = 0.01   # OCR 模型内部置信度（几乎不可靠）
-ERROR_DETECT_PHYSICS_WEIGHT: float = 0.20    # 物理可达性（仅可靠邻居）
+ERROR_DETECT_OCR_CONF_WEIGHT: float = 0.01   # OCR 模型内部置信度（修复后可用）
+ERROR_DETECT_PHYSICS_WEIGHT: float = 0.20    # 物理可达性
 ERROR_DETECT_LINEARITY_WEIGHT: float = 0.20  # 局部线性度
-ERROR_DETECT_REOCR_AGREE_WEIGHT: float = 0.20 # OCR 读数自洽
 ERROR_DETECT_TEXT_LEN_WEIGHT: float = 0.14   # 文本长度信号
-ERROR_DETECT_ACCEL_SPIKE_WEIGHT: float = 0.40 # 加速度尖峰对检测（一致性孤岛）
-ERROR_DETECT_SG_DEVIATION_WEIGHT: float = 0.15 # 中值滤波偏离度（辅助）
+ERROR_DETECT_ACCEL_SPIKE_WEIGHT: float = 0.40 # 加速度尖峰对检测
+ERROR_DETECT_SG_DEVIATION_WEIGHT: float = 0.15 # 中值滤波偏离度（唯一全局信号）
 ERROR_DETECT_CANDIDATE_THRESHOLD: int = 65
 
 # ═══════════════════ Viterbi DP ═══════════════════
@@ -174,9 +173,8 @@ REOCR_AGREE_2CLUSTER: float = 60.0           # Re-OCR两聚类得分
 REOCR_AGREE_3PLUS: float = 20.0              # Re-OCR三维以上得分
 
 # ═══════════════════ 向后兼容置信度权重 ═══════════════════
-COMPAT_CONF_OCR_WEIGHT: float = 0.15
-COMPAT_CONF_PHYSICS_WEIGHT: float = 0.50
-COMPAT_CONF_TEXTLEN_WEIGHT: float = 0.35
+COMPAT_CONF_PHYSICS_WEIGHT: float = 0.60
+COMPAT_CONF_TEXTLEN_WEIGHT: float = 0.40
 
 # ═══════════════════ 部分数字扩展参数 ═══════════════════
 MAX_PARTIAL_WILDCARDS: int = 2         # expand_partial 最大通配符数

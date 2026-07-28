@@ -25,7 +25,6 @@ from config import (
     ERROR_DETECT_OCR_CONF_WEIGHT,
     ERROR_DETECT_PHYSICS_WEIGHT,
     ERROR_DETECT_LINEARITY_WEIGHT,
-    ERROR_DETECT_REOCR_AGREE_WEIGHT,
     ERROR_DETECT_TEXT_LEN_WEIGHT,
     ERROR_DETECT_ACCEL_SPIKE_WEIGHT,
     ERROR_DETECT_SG_DEVIATION_WEIGHT,
@@ -62,14 +61,14 @@ class ErrorReport:
     n_candidate_frames: int = 0
 
 
-# ═══════════════════ Signal 1: OCR confidence ═══════════════════
+# ═══════════════════ Signal 1: OCR model confidence ═══════════════════
 
 def _signal_ocr_conf(observations: list, n: int) -> list[float]:
     scores = []
     for i in range(n):
         if i < len(observations) and observations[i] is not None:
-            conf = getattr(observations[i], "confidence", None)
-            scores.append(round(conf * 100, 1) if (conf is not None and conf > 0) else 50.0)
+            conf = observations[i].confidence
+            scores.append(round(conf * 100, 1) if conf > 0 else 50.0)
         else:
             scores.append(50.0)
     return scores
@@ -303,39 +302,10 @@ def _signal_sg_deviation(rows: list, observations: list, times: list[float],
     return scores
 
 
-# ═══════════════════ Signal 4: Re-OCR agreement ═══════════════════
-
-def _signal_reocr_agree(rows: list, reocr_values_by_frame: dict[int, set[float]],
-                        split_results: dict[int, str] | None, n: int) -> list[float]:
-    scores = []
-    for i in range(n):
-        if i not in reocr_values_by_frame or not reocr_values_by_frame[i]:
-            scores.append(50.0); continue
-        raw_v = rows[i][2]
-        all_readings = set(reocr_values_by_frame[i])
-        if 0 <= raw_v <= 400:
-            all_readings.add(raw_v)
-        if split_results and i in split_results:
-            try: all_readings.add(int(split_results[i]))
-            except (ValueError, TypeError): pass
-        if len(all_readings) <= 1:
-            scores.append(100.0); continue
-        sorted_vals = sorted(all_readings)
-        clusters = 1
-        for j in range(1, len(sorted_vals)):
-            if sorted_vals[j] - sorted_vals[j - 1] > REOCR_CLUSTER_GAP_KMH:
-                clusters += 1
-        if clusters == 1: scores.append(REOCR_AGREE_1CLUSTER)
-        elif clusters == 2: scores.append(REOCR_AGREE_2CLUSTER)
-        else: scores.append(REOCR_AGREE_3PLUS)
-    return scores
-
-
 # ═══════════════════ Main entry point ═══════════════════
 
 def detect_errors(rows: list, observations: list, times: list[float],
                   max_accel_mps2: float, max_speed_kmh: float,
-                  reocr_values_by_frame: dict[int, set[float]] | None = None,
                   split_results: dict[int, str] | None = None,
                   fps: float = 60.0) -> ErrorReport:
     n = len(rows)
@@ -349,19 +319,12 @@ def detect_errors(rows: list, observations: list, times: list[float],
     accel_scores = _signal_accel_spikes(rows, times, fps, max_accel_mps2)
     sg_scores = _signal_sg_deviation(rows, observations, times, fps)
 
-    if reocr_values_by_frame is not None:
-        reocr_scores = _signal_reocr_agree(rows, reocr_values_by_frame, split_results, n)
-    else:
-        reocr_scores = [50.0] * n
-
     total_w = (ERROR_DETECT_OCR_CONF_WEIGHT + ERROR_DETECT_PHYSICS_WEIGHT +
-               ERROR_DETECT_LINEARITY_WEIGHT + ERROR_DETECT_REOCR_AGREE_WEIGHT +
-               ERROR_DETECT_TEXT_LEN_WEIGHT + ERROR_DETECT_ACCEL_SPIKE_WEIGHT +
-               ERROR_DETECT_SG_DEVIATION_WEIGHT)
+               ERROR_DETECT_LINEARITY_WEIGHT + ERROR_DETECT_TEXT_LEN_WEIGHT +
+               ERROR_DETECT_ACCEL_SPIKE_WEIGHT + ERROR_DETECT_SG_DEVIATION_WEIGHT)
     w_ocr = ERROR_DETECT_OCR_CONF_WEIGHT / total_w
     w_phy = ERROR_DETECT_PHYSICS_WEIGHT / total_w
     w_lin = ERROR_DETECT_LINEARITY_WEIGHT / total_w
-    w_reo = ERROR_DETECT_REOCR_AGREE_WEIGHT / total_w
     w_txt = ERROR_DETECT_TEXT_LEN_WEIGHT / total_w
     w_acc = ERROR_DETECT_ACCEL_SPIKE_WEIGHT / total_w
     w_sg = ERROR_DETECT_SG_DEVIATION_WEIGHT / total_w
@@ -383,9 +346,8 @@ def detect_errors(rows: list, observations: list, times: list[float],
 
         signals_sorted = sorted(
             [("ocr_conf", ocr_conf_scores[i]), ("physics", physics_scores[i]),
-             ("linearity", linearity_scores[i]), ("reocr_agree", reocr_scores[i]),
-             ("text_len", text_len_scores[i]), ("accel", accel_scores[i]),
-             ("sg_dev", sg_scores[i])], key=lambda x: x[1])
+             ("linearity", linearity_scores[i]), ("text_len", text_len_scores[i]),
+             ("accel", accel_scores[i]), ("sg_dev", sg_scores[i])], key=lambda x: x[1])
         lowest_signal, lowest_val = signals_sorted[0]
         if score >= 70: reason = "正常"
         elif score < 30: reason = f"错误({lowest_signal}={lowest_val:.0f})"
@@ -399,7 +361,6 @@ def detect_errors(rows: list, observations: list, times: list[float],
                 "ocr_conf": round(ocr_conf_scores[i], 1),
                 "physics": round(physics_scores[i], 1),
                 "linearity": round(linearity_scores[i], 1),
-                "reocr_agree": round(reocr_scores[i], 1),
                 "text_len": round(text_len_scores[i], 1),
                 "accel": round(accel_scores[i], 1),
                 "sg_dev": round(sg_scores[i], 1),
@@ -412,10 +373,6 @@ def detect_errors(rows: list, observations: list, times: list[float],
             cands = []
             if 0 <= raw_v <= max_speed_kmh:
                 cands.append(raw_v)
-            if reocr_values_by_frame and i in reocr_values_by_frame:
-                for rv in sorted(reocr_values_by_frame[i]):
-                    if 0 <= rv <= max_speed_kmh and rv not in cands:
-                        cands.append(rv)
             if split_results and i in split_results:
                 try:
                     sv = int(split_results[i])

@@ -379,7 +379,8 @@ class ProcessingPipeline:
                 observations.append(SpeedObservation(
                     timestamp=fi,
                     raw_speed_kmh=int(sv * SOURCE_TO_KMH[speed_format]),
-                    raw_text=rt))
+                    raw_text=rt,
+                    confidence=conf))
                 # 短文本缺位检测：OCR 读到 1-2 位时，用三等分分割 OCR 尝试恢复
                 if len(rt) < 3:
                     _crop = self._raw_frames[done][1]
@@ -506,7 +507,7 @@ class ProcessingPipeline:
         with report_path.open("w", newline="", encoding="utf-8-sig") as fh:
             fields = ["frame", "raw_text", "raw_val",
                 "sig_ocr_conf", "sig_physics", "sig_linearity",
-                "sig_reocr_agree", "sig_text_len", "sig_accel", "sig_sg_dev",
+                "sig_text_len", "sig_accel", "sig_sg_dev",
                 "combined_conf", "conf_tier",
                 "old_flag", "new_flag", "old_val", "new_val", "correction_note"]
             w = csv.DictWriter(fh, fieldnames=fields, extrasaction="ignore")
@@ -522,7 +523,6 @@ class ProcessingPipeline:
                     "sig_ocr_conf": sigs.get("ocr_conf", ""),
                     "sig_physics": sigs.get("physics", ""),
                     "sig_linearity": sigs.get("linearity", ""),
-                    "sig_reocr_agree": sigs.get("reocr_agree", ""),
                     "sig_text_len": sigs.get("text_len", ""),
                     "sig_accel": sigs.get("accel", ""),
                     "sig_sg_dev": sigs.get("sg_dev", ""),
