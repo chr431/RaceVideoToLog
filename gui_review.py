@@ -183,7 +183,7 @@ class ReviewDialog(QDialog):
         from matplotlib.figure import Figure
         from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 
-        fig = Figure(figsize=(8, 3.5), dpi=100, layout='constrained')
+        fig = Figure(figsize=(8, 3.5), dpi=100, layout='tight')
         fig.subplots_adjust(left=0.08, right=0.98, top=0.95, bottom=0.15)
         ax = fig.add_subplot(111)
         dark = isDarkTheme()
