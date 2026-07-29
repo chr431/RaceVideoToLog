@@ -9,6 +9,10 @@ import os as _os
 
 import config
 
+# ── ONNX CPU 性能优化：设置 OpenMP 环境变量 ──
+# 避免线程忙等，降低 CPU 空转
+_os.environ.setdefault("OMP_WAIT_POLICY", "PASSIVE")
+
 logger = logging.getLogger("RaceVideoToLog.gpu_setup")
 
 # ═══════════════════ 内部状态 ═══════════════════
@@ -236,7 +240,14 @@ def select_backend(preferred: str = "auto") -> str:
             "EngineConfig.onnxruntime.cuda_ep_cfg.do_copy_in_default_stream": True,
         }
     else:
-        _gpu_params = {"EngineConfig.onnxruntime.use_cuda": False}
+        import multiprocessing as _mp
+        _cpu_count = _mp.cpu_count()
+        _gpu_params = {
+            "EngineConfig.onnxruntime.use_cuda": False,
+            "EngineConfig.onnxruntime.enable_cpu_mem_arena": True,
+            "EngineConfig.onnxruntime.intra_op_num_threads": max(2, _cpu_count // 2),
+            "EngineConfig.onnxruntime.inter_op_num_threads": 2,
+        }
 
     _gpu_backend = chosen
     config.set_gpu_backend(chosen)
