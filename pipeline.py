@@ -310,20 +310,33 @@ class ProcessingPipeline:
             nonlocal _decode_ms
             try:
                 if _src_type == "decord":
-                    for _fi in range(f_start or 0, min(_end_limit, total_video_frames)):
-                        if (_fi - (f_start or 0)) % frame_step != 0:
-                            continue
+                    _fi = f_start or 0
+                    # Seek once to start, then sequential-read to avoid decord
+                    # buffering all past frames in memory (it is optimised for
+                    # random access, not streaming).
+                    if _fi > 0:
+                        _vr.seek_accurate(_fi)
+                    _limit = min(_end_limit, total_video_frames)
+                    while _fi < _limit:
                         if self._cancel_check and _fi % 10 == 0:
                             self._cancel_check()
                         _t0 = _time.perf_counter()
-                        _frame = _vr[_fi].asnumpy()
+                        try:
+                            _frame = _vr.next().asnumpy()
+                        except StopIteration:
+                            break
                         _ts = _fi / fps if fps > 0 else 0.0
                         _crop = _frame[y1:y2 + 1, x1:x2 + 1].copy()
-                        del _frame  # free ~6MB per frame, avoid RAM bloat
+                        del _frame
                         self._raw_frames.append((_fi, _crop))
                         _proc = _preprocess_standard(_crop, target_h, pad)
                         _decode_ms += (_time.perf_counter() - _t0) * 1000.0
                         q.put((_fi, _proc))
+                        # Advance: skip (frame_step-1) frames for div
+                        skip = frame_step - 1
+                        if skip > 0:
+                            _vr.skip_frames(skip)
+                        _fi += frame_step
                 else:
                     fi = 0
                     while fi < total_video_frames:
