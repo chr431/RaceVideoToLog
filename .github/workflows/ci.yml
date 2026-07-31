@@ -8,6 +8,7 @@ on:
 
 jobs:
   test:
+    if: github.ref_name != 'master'  # master is the release branch (no tests/)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
