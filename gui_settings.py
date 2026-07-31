@@ -77,9 +77,9 @@ def build_settings_panel(parent) -> dict:
     pl.addWidget(BodyLabel("OCR 高度 (px)"), 2, 0)
     widgets["target_h_spin"] = make_int_spinbox(8, 256, config.DEFAULT_TARGET_H, 70)
     pl.addWidget(widgets["target_h_spin"], 2, 1)
-    pl.addWidget(BodyLabel("边缘填充 (px)"), 2, 2)
-    widgets["pad_spin"] = make_int_spinbox(0, 64, config.DEFAULT_PAD, 70)
-    pl.addWidget(widgets["pad_spin"], 2, 3)
+    pl.addWidget(BodyLabel("最大宽度 (px)"), 2, 2)
+    widgets["max_width_spin"] = make_int_spinbox(0, 512, config.DEFAULT_MAX_WIDTH, 70)
+    pl.addWidget(widgets["max_width_spin"], 2, 3)
     pl.addWidget(BodyLabel("OCR 后端"), 3, 0)
     widgets["backend_combo"] = ComboBox()
     widgets["backend_combo"].addItems(["自动", "TensorRT", "CPU"])
@@ -109,6 +109,9 @@ def build_settings_panel(parent) -> dict:
     widgets["log_level_combo"].setCurrentIndex(0)
     widgets["log_level_combo"].setFixedWidth(120)
     pl.addWidget(widgets["log_level_combo"], 5, 1)
+    pl.addWidget(BodyLabel("边缘填充 (px)"), 5, 2)
+    widgets["pad_spin"] = make_int_spinbox(0, 64, config.DEFAULT_PAD, 70)
+    pl.addWidget(widgets["pad_spin"], 5, 3)
 
     # ── Correction mode card ──
     mode_card = make_static_card(parent)

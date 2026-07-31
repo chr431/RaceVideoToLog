@@ -266,6 +266,7 @@ _CSV_FIELD_MAP: dict[str, tuple[str, str]] = {
     "max_accel":     ("max_accel",     "float"),
     "div":           ("div",           "int"),
     "target_h":      ("target_h",      "int"),
+    "max_width":     ("max_width",     "int"),
     "pad":           ("pad",           "int"),
     "backend":       ("backend",       "str"),
     "buffer":        ("buffer",        "int"),

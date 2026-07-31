@@ -578,6 +578,7 @@ class RaceVideoToLogApp(QMainWindow):
 
         _spin_fields = {
             "div": s["div_spin"], "target_h": s["target_h_spin"],
+            "max_width": s["max_width_spin"],
             "pad": s["pad_spin"], "buffer": s["buffer_spin"],
         }
         for key, widget in _spin_fields.items():
@@ -628,6 +629,7 @@ class RaceVideoToLogApp(QMainWindow):
             ms = float(s["max_speed_edit"].text())
             ma = float(s["max_accel_edit"].text())
             fd = s["div_spin"].value(); th = s["target_h_spin"].value()
+            mw = s["max_width_spin"].value()
             pp = s["pad_spin"].value(); nw = s["buffer_spin"].value()
             be = ["auto", "tensorrt", "cpu"][s["backend_combo"].currentIndex()]
             log_level = ["normal", "detailed", "debug"][s["log_level_combo"].currentIndex()]
@@ -672,6 +674,7 @@ class RaceVideoToLogApp(QMainWindow):
             roi=roi,
             max_speed_kmh=ms, max_accel_mps2=ma,
             frame_div=fd, target_h=th, pad_px=pp, buffer_size=nw,
+            max_width=mw,
             backend=be,
             ocr_model=s["model_combo"].currentText(),
             reocr_model=self._reocr_model(),
