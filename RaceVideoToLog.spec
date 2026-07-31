@@ -49,15 +49,16 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('qfluentwidgets')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
-# cuda-python + tensorrt: Python bindings only (actual .dll from system PATH)
-# Using hiddenimports only — NOT collect_all which would bundle ~500MB+ of native libs
+# cuda-python: collect all .py/.pyd submodules (NOT collect_all which bundles
+# ~500MB of native .dll — those come from system PATH at runtime).
 try:
-    import cuda  # noqa: F401
-    hiddenimports += ['cuda', 'cuda.bindings', 'cuda.bindings._bindings',
-                      'cuda.bindings.runtime', 'cuda.bindings.driver',
-                      'cuda.bindings._bindings.cydriver',
-                      'cuda.bindings._bindings.cyruntime',
-                      'cuda.core', 'cuda.pathfinder']
+    from PyInstaller.utils.hooks import collect_submodules
+    _cuda_hidden = collect_submodules('cuda')
+    hiddenimports += _cuda_hidden
+    # collect_submodules may miss Cython pyd files inside subpackages;
+    # run a deeper scan on cuda.bindings specifically
+    _cuda_bindings = collect_submodules('cuda.bindings')
+    hiddenimports += [m for m in _cuda_bindings if m not in _cuda_hidden]
 except Exception:
     pass  # cuda-python not installed
 
