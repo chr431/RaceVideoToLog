@@ -53,9 +53,11 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 # Using hiddenimports only — NOT collect_all which would bundle ~500MB+ of native libs
 try:
     import cuda  # noqa: F401
-    hiddenimports += ['cuda', 'cuda.bindings', 'cuda.bindings.runtime',
-                      'cuda.bindings.driver', 'cuda.bindings.cydriver',
-                      'cuda.bindings.cyruntime', 'cuda.core', 'cuda.pathfinder']
+    hiddenimports += ['cuda', 'cuda.bindings', 'cuda.bindings._bindings',
+                      'cuda.bindings.runtime', 'cuda.bindings.driver',
+                      'cuda.bindings._bindings.cydriver',
+                      'cuda.bindings._bindings.cyruntime',
+                      'cuda.core', 'cuda.pathfinder']
 except Exception:
     pass  # cuda-python not installed
 
