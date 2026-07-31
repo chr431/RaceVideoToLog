@@ -432,6 +432,7 @@ def _force_median_smooth(rows: list, times: list, max_speed_kmh: float,
     max_dv_per_frame = max_accel_mps2 * (times[1] - times[0]) * MPS_TO_KMH if n >= 2 else 4.0
     threshold = max_dv_per_frame * FORCE_MEDIAN_THRESHOLD_MULT
     total_smoothed = 0
+    dry_passes = 0  # consecutive passes with very few changes
 
     for _pass in range(FORCE_MEDIAN_MAX_ITERATIONS):
         changed = 0
@@ -479,8 +480,16 @@ def _force_median_smooth(rows: list, times: list, max_speed_kmh: float,
             changed += 1
 
         total_smoothed += changed
-        if changed == 0:
-            break
+
+        # Adaptive convergence: stop when two consecutive passes fix very
+        # few frames — remaining deviations are either too small to matter
+        # or inside large error islands where local median can't help.
+        if changed <= 2:
+            dry_passes += 1
+            if dry_passes >= 2:
+                break
+        else:
+            dry_passes = 0
 
     return total_smoothed
 
