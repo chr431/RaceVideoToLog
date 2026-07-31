@@ -44,6 +44,7 @@ class ExportThread(QThread):
             frame_end: str,
             log_level: str,
             video_backend: str,
+            max_aspect: float,
             correction_mode: str,
             output_path: Path,
             parent: QWidget | None = None,
@@ -65,6 +66,7 @@ class ExportThread(QThread):
         self._frame_end = frame_end
         self._log_level = log_level
         self._video_backend = video_backend
+        self._max_aspect = max_aspect
         self._correction_mode = correction_mode
         self._output_path = output_path
         self._cancel_flag = False
@@ -99,6 +101,7 @@ class ExportThread(QThread):
                     cancel_check=self._check_cancel,
                     log_level=self._log_level,
                     video_backend=self._video_backend,
+                    max_aspect=self._max_aspect,
                 )
                 mode = self._correction_mode
                 if mode == "auto":

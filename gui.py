@@ -680,6 +680,7 @@ class RaceVideoToLogApp(QMainWindow):
             frame_end=s["frame_end_edit"].text(),
             log_level=log_level,
             video_backend=vb,
+            max_aspect=0.0,
             correction_mode=self.correction_mode,
             output_path=Path(out),
             parent=self,
