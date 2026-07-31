@@ -42,6 +42,71 @@
 - 修复 `build_exe.bat` LF 行尾导致 cmd 闪退
 - 修复 `pipeline.py` `config` 未导入、`viterbi.py` `max_speed_kmh` 参数缺失
 
+### Phase 1 信号重构（2026-07-28~29）
+
+**Physics 信号重新设计**
+- 移除文本长度门控：不再只接受 ≥3 位数的邻居，2 位低速读数也能参与物理检查
+- 时间窗搜索（±0.25s）替代固定紧邻帧：自适应帧率变化
+- 连续指数衰减打分（`100·exp(-excess·2.0)`）替代 4 档离散打分
+- `nv >= 0` 将停车帧（速度=0）视为可靠锚点
+
+**Linearity 信号：中位数鲁棒插值**
+- 全新实现：每侧取 K 个有效帧，K×K 配对插值，取中位数期望值
+- 天然抗异常值，无需可靠性门控（移除有缺陷的 `_find_reliable_neighbor`）
+- 时间窗搜索（±0.25s，最多 10 帧/侧）+ `nv >= 0`
+- 所有速度范围同等有效（不再依赖文本长度）
+
+**最差信号地板规则**
+- 加权平均易被高分信号掩盖问题 → 新增地板规则：任一信号 <30 封顶 25，<50 封顶 50，<70 封顶 69
+- 帧要获得 `high confidence` (≥70)，所有 4 个信号必须全部 ≥70
+- 检测漏检率大幅下降：div=1 下严重漏检归零，div=2 从 18.2%→7.3%
+
+### Phase 2 纠正算法优化
+
+**候选生成改进**
+- `build_speed_candidates` 混淆映射 `_CONFUSION_MAP` 提升为模块级常量（为精准候选扩展做准备）
+- 百位变体生成扩展到所有数字位数（不再仅限 3 位）
+
+**参数调优**
+- `AUTO_CORRECT_THRESHOLD` 80→70：conf≥70 已满足所有信号正常的约束，不应再被 Viterbi 干预
+- `MANUAL_CORRECT_THRESHOLD` 保持 40（经测试确认最优）
+
+**Force-Median 自适应收敛**
+- 新增提前终止：连续两轮修改 ≤2 帧即停止（防止过度平滑）
+- 局部中位数天然无法处理大错误岛内部——由 Viterbi + auto-align 在前序步骤解决
+
+### 代码清理（P0/P1/P2 Audit）
+
+**架构缺陷修复**
+- 移除 **8 处文本长度歧视**（`correction.py` + `pipeline.py`）：`len(raw_text) < 3` 门控全部替换
+- 修复 **3 处 sg_dev 僵尸引用**：Phase 1 不再计算的信号，Phase 2 改用 accel/linearity 信号替代
+- 清理 **18 个孤常量**：`TEXTLEN_SCORE_*`、`REOCR_AGREE_*`、`SG_CLUSTER_SCORE_*`、`PHYSICS_FALLBACK_DT` 等
+
+**固定帧窗口→时间窗（3 处）**
+- 信任传播：`TRUST_WINDOW_TIME=0.15s`（替代硬编码 ±3 帧）
+- Force-Median：`FORCE_MEDIAN_WINDOW_TIME=0.1s`（替代硬编码 ±2 帧）
+- 远距离插值：`DISTANT_INTERP_MIN_TIME=1.0s`（替代硬编码 30 帧）
+
+**弃用代码移除**
+- 移除 `correct_with_trust()` 函数（v2.5 起标记 deprecated，无调用者）
+- 重命名 `_re_ocr_frame` → `_multi_height_ocr`（准确描述多高度缩放行为）
+- 重命名 `_force_sg_smooth` → `_force_median_smooth`（实际使用中值滤波而非 SG）
+- 重命名 `FORCE_SG_*` → `FORCE_MEDIAN_*` 常量
+- 修复 `COMPAT_CONF_OCR_WEIGHT` 缺失（被 `compute_confidence` 引用）
+
+### 性能优化
+
+**ONNX CPU 后端（+45%）**
+- `intra_op_num_threads=cpu_count//2`（限制线程数避免调度损耗）
+- `inter_op_num_threads=2`、`enable_cpu_mem_arena=True`
+- `OMP_WAIT_POLICY=PASSIVE`（避免线程忙等）
+- 实测推理速度 314→456 fps
+
+**decord 内存优化**
+- 顺序读取替代随机访问：`_vr.next()` 代替每帧 `_vr[fi]`（seek_accurate）
+- 消除内部帧缓存，内存从 ~5GB 降至 ~1GB（与 cv2 持平）
+- 解码速度保持 343 fps
+
 ### Bug 修复
 - **测试无法运行**：移除对已删除 LCS 函数的导入
 - **数据分析横轴错误**：帧号未转为时间 → CSV 头写入 fps，`parse_csv` 自动转换
@@ -51,6 +116,17 @@
 - **`_diag_notes` 未初始化**：`log_level=normal` 时 `AttributeError`
 - **pyname `config` 未导入**：`pipeline.py` 中 `config.__version__` 缺少 `import config`
 - **viterbi `max_speed_kmh` 参数缺失**：`_compute_confidence_scores` 签名遗漏参数
+- **matplotlib 布局警告**：`constrained` → `tight` 布局引擎
+
+### 准确率（vs ground truth，max_accel=50，div=2）
+
+| 指标 | v2.6.1 自动 | v2.6.1 手动 |
+|------|:----------:|:----------:|
+| test.mp4 ≤0.5 | 97.8% | 97.9% |
+| test.mp4 >5 | 4 帧 | 4 帧 |
+| test2.mp4 ≤0.5 | 99.2% | 99.0% |
+| test2.mp4 >5 | 0 | 0 |
+| test3.mp4 误报 | 0 low-conf | — |
 
 **版本变更（v2.6.0 → v2.6.1）**：基础版本号同步，见上方
 
