@@ -59,7 +59,7 @@ def run_headless(args: argparse.Namespace) -> None:
         progress_cb=_progress,
         log_level=getattr(args, 'log_level', 'normal'),
         video_backend=getattr(args, 'video_backend', 'cv2'),
-        max_aspect=getattr(args, 'max_aspect', 0.0),
+        max_width=getattr(args, 'max_width', 0),
     )
 
     t0 = time.perf_counter()

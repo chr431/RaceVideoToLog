@@ -37,8 +37,8 @@ def main() -> None:
     parser.add_argument("--max-accel", type=float, default=config.DEFAULT_MAX_ACCEL)
     parser.add_argument("--target-h", type=int, default=config.DEFAULT_TARGET_H)
     parser.add_argument("--pad", type=int, default=config.DEFAULT_PAD)
-    parser.add_argument("--max-aspect", type=float, default=config.DEFAULT_MAX_ASPECT,
-        help="预处理宽度上限（target_h 的倍数，0=不限）。扁宽字体设为 2.0 可改善识别")
+    parser.add_argument("--max-width", type=int, default=config.DEFAULT_MAX_WIDTH,
+        help="预处理最大宽度 px（0=不限）。扁宽字体设为 96 可改善识别")
     parser.add_argument("--buffer", type=int, default=config.DEFAULT_BUFFER_SIZE)
     parser.add_argument("--backend", choices=["auto","tensorrt","cpu"], default=config.DEFAULT_BACKEND)
     parser.add_argument("--video-backend", choices=["cv2","decord"], default=config.DEFAULT_VIDEO_BACKEND,

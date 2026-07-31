@@ -26,18 +26,18 @@ logger = logging.getLogger("RaceVideoToLog.pipeline")
 
 
 def _preprocess_standard(crop: np.ndarray, target_h: int, pad: int,
-                         max_aspect: float = 0.0) -> np.ndarray:
-    """标准预处理：resize + 可选水平压缩 + 填充。
+                         max_width: int = 0) -> np.ndarray:
+    """标准预处理：resize + 可选宽度限制 + 填充。
 
-    max_aspect > 0 时限制宽度为目标高度的倍数，用于纠正扁宽字体
-    （如数字高度≈宽度时设为 2.0 可恢复 ~2:1 高宽比）。
+    max_width > 0 时限制宽度上限（px），用于纠正扁宽字体
+    （如数字高度≈宽度时设为 96 可恢复 ~2:1 高宽比）。
     """
     h, w = crop.shape[:2]
     if target_h < 8:
         raise ValueError(f"target_h 必须 >= 8，当前为 {target_h}")
     new_w = max(1, int(w * target_h / h)) if h > 0 else w
-    if max_aspect > 0:
-        new_w = min(new_w, int(target_h * max_aspect))
+    if max_width > 0:
+        new_w = min(new_w, max_width)
     resized = cv2.resize(crop, (new_w, target_h)) if abs(target_h / h - 1.0) > 0.02 else crop
     if pad > 0:
         resized = cv2.copyMakeBorder(resized, pad, pad, pad, pad,
@@ -66,7 +66,7 @@ class ProcessingPipeline:
                     log_level: str = "normal",
                 final_check: bool = False,
                 video_backend: str = "cv2",
-                max_aspect: float = 0.0):
+                max_width: int = 0):
         if target_h < 8:
             raise ValueError(f"target_h 必须 >= 8，当前为 {target_h}")
         if pad < 0:
@@ -90,7 +90,7 @@ class ProcessingPipeline:
         self._progress = progress_cb
         self._final_check = final_check
         self._video_backend = video_backend  # user-requested: "decord" or "cv2"
-        self._max_aspect = max_aspect
+        self._max_width = max_width
         self._video_backend_actual: str = ""  # set by _run_ocr after fallback
 
         # 状态
@@ -264,7 +264,7 @@ class ProcessingPipeline:
         speed_format = self._speed_format
         target_h = self._target_h
         pad = self._pad
-        _max_aspect = self._max_aspect
+        _max_width = self._max_width
         frame_step = max(1, self._frame_div)
         t_start = _time.perf_counter()
 
@@ -336,7 +336,7 @@ class ProcessingPipeline:
                         _crop = _frame[y1:y2 + 1, x1:x2 + 1].copy()
                         del _frame
                         self._raw_frames.append((_fi, _crop))
-                        _proc = _preprocess_standard(_crop, target_h, pad, max_aspect=_max_aspect)
+                        _proc = _preprocess_standard(_crop, target_h, pad, max_width=_max_width)
                         _decode_ms += (_time.perf_counter() - _t0) * 1000.0
                         q.put((_fi, _proc))
                         # Advance: skip (frame_step-1) frames for div
@@ -363,7 +363,7 @@ class ProcessingPipeline:
                             break
                         crop = frame[y1:y2 + 1, x1:x2 + 1].copy()
                         self._raw_frames.append((fi, crop))
-                        proc = _preprocess_standard(crop, target_h, pad, max_aspect=_max_aspect)
+                        proc = _preprocess_standard(crop, target_h, pad, max_width=_max_width)
                         _decode_ms += (_time.perf_counter() - _t0) * 1000.0
                         q.put((fi, proc))
                         fi += 1
