@@ -460,25 +460,15 @@ class RaceVideoToLogApp(QMainWindow):
         self._preview_scale = scale
         self._preview_ox = (pw - dw) / 2.0; self._preview_oy = (ph - dh) / 2.0
 
-        # ROI 框 + 纵向三等分线
+        # ROI 框
         roi = self._get_roi()
         if roi is not None:
             painter = QPainter(scaled)
             x1, y1, x2, y2 = roi
             l = int(x1 * scale); t = int(y1 * scale)
             r = int(x2 * scale); b = int(y2 * scale)
-            # ROI 边框
             painter.setPen(QPen(QColor("#ff5050"), max(2, int(scale * 2))))
             painter.drawRect(l, t, r - l, b - t)
-            # 纵向三等分线（虚线，半透明）
-            dash_pen = QPen(QColor(255, 80, 80), max(1, int(scale)))
-            from PySide6.QtCore import Qt as _Qt
-            dash_pen.setStyle(_Qt.PenStyle.DashLine)
-            painter.setPen(dash_pen)
-            w_third = (r - l) / 3.0
-            for i in range(1, 3):
-                x = int(l + w_third * i)
-                painter.drawLine(x, t, x, b)
             painter.end()
 
         result = QPixmap(pw, ph); result.fill(QColor("#151515"))

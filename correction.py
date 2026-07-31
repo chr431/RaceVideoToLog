@@ -19,7 +19,7 @@ from ocr_engine import extract_speed_value, build_speed_candidates, Flag
 from viterbi import viterbi_correct
 from config import (
     MPS_TO_KMH,
-    FILL_MAX_PASSES, CORRECTION_MIN_DIFF, REOCR_HEIGHTS,
+    FILL_MAX_PASSES, CORRECTION_MIN_DIFF,
     MANUAL_CORRECT_THRESHOLD, AUTO_CORRECT_THRESHOLD,
     AUTO_SMOOTH_CLUSTER_MAX, AUTO_SMOOTH_DEVIATION_MULT,
     VITERBI_TRUSTED_BOUNDARY_CONFIDENCE, CORRECTION_MAX_ROUNDS,
@@ -158,13 +158,14 @@ def _multi_height_ocr(crop_bgr: "np.ndarray", ocr: "RapidOCR", max_speed_kmh: fl
         return candidates
     h, w = crop_bgr.shape[:2]
     if h <= 0 or w <= 0: return candidates
-    for target_h in REOCR_HEIGHTS:
-        scale = target_h / h if h > 0 else 1.0
-        proc = cv2.resize(crop_bgr, (max(1, int(w * scale)), target_h))
-        res = ocr(proc)
-        sv, rt, _conf = extract_speed_value(res)
-        if sv is not None and sv <= max_speed_kmh:
-            candidates.add(int(sv))
+    # Single-height re-OCR: multi-height (24,32,48) tested, no improvement
+    # over using the main pipeline target_h=48 alone.  Removes ~0.5s latency.
+    scale = 48 / h if h > 0 else 1.0
+    proc = cv2.resize(crop_bgr, (max(1, int(w * scale)), 48))
+    res = ocr(proc)
+    sv, rt, _conf = extract_speed_value(res)
+    if sv is not None and sv <= max_speed_kmh:
+        candidates.add(int(sv))
     if cache_key is not None:
         cache[cache_key] = candidates
     return candidates

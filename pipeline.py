@@ -393,24 +393,6 @@ class ProcessingPipeline:
                     raw_speed_kmh=int(sv * SOURCE_TO_KMH[speed_format]),
                     raw_text=rt,
                     confidence=conf))
-                # 低置信度时用三等分分割 OCR 尝试恢复缺失的数字位
-                if conf < 0.85:
-                    _crop = self._raw_frames[done][1]
-                    _h, _w = _crop.shape[:2]
-                    if _w > 12:
-                        _w3 = _w // 3
-                        _parts = []
-                        for _j in range(3):
-                            _sp = _crop[:, _j*_w3:((_j+1)*_w3 if _j<2 else _w)]
-                            if _sp.shape[1] <= 4:
-                                _parts.append('?'); continue
-                            _proc = _preprocess_standard(_sp, target_h, pad)
-                            _r = ocr(_proc)
-                            _sv, _rt, _ = extract_speed_value(_r)
-                            _parts.append(_rt if _rt else '?')
-                        _combined = ''.join(s for s in _parts if s != '?')
-                        if len(_combined) >= 3:
-                            self._split_results[fi] = _combined
             else:
                 observations.append(SpeedObservation(fi, -1, ""))
             if _collect_diag:

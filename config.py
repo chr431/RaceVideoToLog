@@ -88,7 +88,6 @@ FILL_MAX_PASSES: int = 50
 CORRECTION_MIN_DIFF: float = 0.5
 AUTO_SMOOTH_CLUSTER_MAX: int = 5
 AUTO_SMOOTH_DEVIATION_MULT: float = 5.0
-REOCR_HEIGHTS: tuple = (24, 32, 48)
 
 # ═══════════════════ 平滑 + 自动对齐参数 ═══════════════════
 SMOOTHNESS_MAX_ITERATIONS: int = 10       # _smoothness_pass 最大迭代轮数
