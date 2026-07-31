@@ -54,7 +54,8 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 try:
     import cuda  # noqa: F401
     hiddenimports += ['cuda', 'cuda.bindings', 'cuda.bindings.runtime',
-                      'cuda.bindings.driver', 'cuda.core', 'cuda.pathfinder']
+                      'cuda.bindings.driver', 'cuda.bindings.cydriver',
+                      'cuda.bindings.cyruntime', 'cuda.core', 'cuda.pathfinder']
 except Exception:
     pass  # cuda-python not installed
 
