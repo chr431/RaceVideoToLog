@@ -82,7 +82,7 @@ VITERBI_MAX_CANDIDATES: int = 40
 
 # ═══════════════════ 纠错参数 ═══════════════════
 MANUAL_CORRECT_THRESHOLD: int = 40
-AUTO_CORRECT_THRESHOLD: int = 80
+AUTO_CORRECT_THRESHOLD: int = 70
 CORRECTION_MAX_ROUNDS: int = 10        # Viterbi 多轮迭代
 FILL_MAX_PASSES: int = 50
 CORRECTION_MIN_DIFF: float = 0.5

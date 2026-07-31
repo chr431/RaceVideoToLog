@@ -218,7 +218,6 @@ def _generate_candidates(fi: int, rows: list, observations: list, raw_frames: li
         for cv in _auto_expand_digits(obs.raw_text, max_speed_kmh):
             if cv not in protected_set and cv not in other_set:
                 other.append(cv); other_set.add(cv)
-
     needs_interp = (not reocr_only) or (raw_val < 0)
     if needs_interp:
         interp_val = _interp_candidate(fi, rows, pinned_set, times, max_speed_kmh, fps=fps)

@@ -487,6 +487,22 @@ def _savgol_filter_np(y: "np.ndarray", window_length: int, polyorder: int) -> "n
     return result
 
 
+# Common OCR digit confusion map (symmetric). Used by build_speed_candidates
+# and the Phase-2 candidate expansion for low-confidence short-text frames.
+_CONFUSION_MAP: dict[str, list[str]] = {
+    "0": ["8", "6", "9"],
+    "1": ["7", "2", "4", "9"],
+    "2": ["7", "1", "3", "9"],
+    "3": ["8", "9", "2", "5"],
+    "4": ["7", "9", "1"],
+    "5": ["6", "3", "8", "9"],
+    "6": ["8", "5", "0", "2"],
+    "7": ["1", "2", "4"],
+    "8": ["0", "6", "3", "5", "9"],
+    "9": ["8", "3", "5", "0", "4", "1", "2"],
+}
+
+
 def build_speed_candidates(raw_text: str, max_speed_kmh: float) -> list[int]:
     """根据 OCR 原始文本生成可能的速度候选值。
 
@@ -528,18 +544,6 @@ def build_speed_candidates(raw_text: str, max_speed_kmh: float) -> list[int]:
             candidates.add(int(candidate))
 
     # 策略3: 常见 OCR 字符混淆替换（对称映射）
-    _CONFUSION_MAP = {
-        "0": ["8", "6", "9"],
-        "1": ["7", "2", "4", "9"],
-        "2": ["7", "1", "3", "9"],
-        "3": ["8", "9", "2", "5"],
-        "4": ["7", "9", "1"],
-        "5": ["6", "3", "8", "9"],
-        "6": ["8", "5", "0", "2"],
-        "7": ["1", "2", "4"],
-        "8": ["0", "6", "3", "5", "9"],
-        "9": ["8", "3", "5", "0", "4", "1", "2"],
-    }
     for i, ch in enumerate(text):
         for alt in _CONFUSION_MAP.get(ch, []):
             altered = text[:i] + alt + text[i+1:]
