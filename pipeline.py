@@ -11,6 +11,7 @@ import time as _time
 from pathlib import Path
 from collections.abc import Callable
 
+import cv2
 import numpy as np
 
 
@@ -155,26 +156,21 @@ logger = logging.getLogger("RaceVideoToLog.pipeline")
 
 def _preprocess_standard(crop: np.ndarray, target_h: int, pad: int,
                          max_width: int = 0) -> np.ndarray:
-    """标准预处理：resize (Pillow) + 可选宽度限制 + 填充 (numpy edge)。
+    """标准预处理：resize (cv2) + 可选宽度限制 + 填充。
 
     max_width > 0 时限制宽度上限（px），用于纠正扁宽字体
     （如数字高度≈宽度时设为 96 可恢复 ~2:1 高宽比）。
     """
-    from PIL import Image
     h, w = crop.shape[:2]
     if target_h < 8:
         raise ValueError(f"target_h 必须 >= 8，当前为 {target_h}")
     new_w = max(1, int(w * target_h / h)) if h > 0 else w
     if max_width > 0:
         new_w = min(new_w, max_width)
-    if abs(target_h / h - 1.0) > 0.02:
-        resized = np.array(
-            Image.fromarray(crop).resize((new_w, target_h), Image.LANCZOS))
-    else:
-        resized = crop
+    resized = cv2.resize(crop, (new_w, target_h)) if abs(target_h / h - 1.0) > 0.02 else crop
     if pad > 0:
-        resized = np.pad(resized, ((pad, pad), (pad, pad), (0, 0)),
-                         mode='edge')
+        resized = cv2.copyMakeBorder(resized, pad, pad, pad, pad,
+                                     cv2.BORDER_REPLICATE)
     return resized
 
 

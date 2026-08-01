@@ -12,6 +12,7 @@ import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+import cv2
 import numpy as np
 
 from ocr_engine import extract_speed_value, build_speed_candidates, Flag
@@ -160,9 +161,7 @@ def _multi_height_ocr(crop_bgr: "np.ndarray", ocr: "RapidOCR", max_speed_kmh: fl
     # Single-height re-OCR: multi-height (24,32,48) tested, no improvement
     # over using the main pipeline target_h=48 alone.  Removes ~0.5s latency.
     scale = 48 / h if h > 0 else 1.0
-    from PIL import Image
-    proc = np.array(
-        Image.fromarray(crop_bgr).resize((max(1, int(w * scale)), 48), Image.LANCZOS))
+    proc = cv2.resize(crop_bgr, (max(1, int(w * scale)), 48))
     res = ocr(proc)
     sv, rt, _conf = extract_speed_value(res)
     if sv is not None and sv <= max_speed_kmh:

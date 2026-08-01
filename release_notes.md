@@ -1,6 +1,67 @@
 # Release Notes
 
-## v2.6.1 (2026-07-27)
+## v2.7.0 (2026-08-01)
+
+### 自建 decord：GPU 解码 + 内存修复
+
+PyPI decord 仅提供 CPU 版本，内存占用高达 ~10 GB。v2.7.0 换用自建 decord（chr431/decord）。
+
+**decord 源码修复**
+- CPU：DECORD_FFMPEG_THREAD_COUNT env var（默认 2，原 16+ 线程），内存 ~10GB -> ~600MB
+- CPU：DECORD_CPU_FRAME_QUEUE_SIZE env var（默认 32），帧队列上限防无界增长
+- GPU：FindCUDA.cmake 自动搜索 Video Codec SDK 13.x
+- GPU：nvcuvid 头文件更新至 SDK 13.1.15
+
+**内存对比 (test5, div=1, 7223 帧)**
+| | PyPI CPU | 自建 CPU | 自建 GPU |
+|--|---------|---------|---------|
+| 峰值 RSS | ~9,500 MB | ~600 MB | **~400 MB** |
+
+**解码器选择**
+- GPU 优先（NVDEC）-> CPU 自动回退
+- DECORD_FORCE_CPU=1 强制 CPU 模式
+
+### 移除 cv2
+
+- cv2.resize -> Pillow Image.LANCZOS
+- cv2.copyMakeBorder -> np.pad(mode='edge')
+- cv2.VideoCapture（GUI 预览）-> decord
+- cv2.cvtColor -> 直接使用（decord 返回 RGB）
+- 性能变化 <7%，EXE 体积减少 ~35 MB
+
+### GUI
+
+- 编码字段显示真实编码（h264/hevc），通过 ffprobe.exe 检测
+- 边缘填充移动到第 3 行（原视频后端位置），移除视频后端下拉框
+- 进度标签：[decord/GPU + CPU] / [decord/GPU + TensorRT]
+
+### CSV 格式 v2
+
+- fps + codec 在 line 2；max_width 紧邻 target_h 始终写入
+- video_backend 值：decord/GPU 或 decord/CPU
+
+### 构建
+
+- setup_venv.bat：自动检测 _decord_build/，自建 decord 优先；GPU 绑定默认安装
+- build_exe.bat：移除 cv2 检查，4 步流程
+- PyInstaller spec：runtime_hook.py 处理 frozen DLL 路径；排除 FFmpeg 4.x + opencv 冗余 DLL
+
+### 配置
+
+- 移除 DEFAULT_VIDEO_BACKEND
+- opencv-python-headless 移出直接依赖
+- [project.optional-dependencies] 新增 dev（pytest）和 gpu
+
+### 性能 (7945HX + 4060M, test5, div=1)
+
+| 模型 | CPU OCR | TRT OCR | 推荐 |
+|------|--------|--------|------|
+| tiny+small | 23.4s | 27.0s | CPU |
+| small+small | 46.5s | 32.6s | TRT |
+
+---
+
+## v2.6.1 (2026-07-31)
 
 ### 全面代码清理与工程优化
 
