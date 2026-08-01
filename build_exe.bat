@@ -6,9 +6,9 @@ echo   RaceVideoToLog - Build EXE
 echo ========================================
 echo.
 
-REM [1/5] Check / create venv
+REM [1/4] Check / create venv
 if not exist ".venv\Scripts\python.exe" (
-    echo [1/5] .venv not found, running setup_venv.bat ...
+    echo [1/4] .venv not found, running setup_venv.bat ...
     call "%~dp0setup_venv.bat"
     if errorlevel 1 (
         echo [ERROR] venv setup failed.
@@ -16,13 +16,13 @@ if not exist ".venv\Scripts\python.exe" (
         exit /b 1
     )
 ) else (
-    echo [1/5] Using existing .venv.
+    echo [1/4] Using existing .venv.
 )
 set PY=.venv\Scripts\python
 
-REM [2/5] Verify key deps + PyInstaller
-echo [2/5] Checking dependencies ...
-%PY% -c "import rapidocr, onnxruntime, cv2, numpy, PySide6, matplotlib, decord, qfluentwidgets, shapely, pyclipper, tensorrt, cuda"
+REM [2/4] Verify key deps + PyInstaller
+echo [2/4] Checking dependencies ...
+%PY% -c "import rapidocr, onnxruntime, numpy, PySide6, matplotlib, decord, qfluentwidgets, shapely, pyclipper, tensorrt, cuda"
 if errorlevel 1 (
     echo   Some deps missing, reinstalling ...
     %PY% -m pip install -e .
@@ -32,7 +32,6 @@ if errorlevel 1 (
         exit /b 1
     )
 )
-
 
 %PY% -c "import PyInstaller" 2>nul
 if errorlevel 1 (
@@ -45,34 +44,26 @@ if errorlevel 1 (
     )
 )
 
-REM [3/5] Verify spec exists
-if not exist "RaceVideoToLog.spec" (
-    echo [ERROR] RaceVideoToLog.spec not found.
-    echo   Run this script from the repository root.
-    pause
-    exit /b 1
-)
-
-REM [4/5] Clean + Build
-echo [4/5] Cleaning old builds ...
+REM [3/4] Build
+echo.
+echo [3/4] Building EXE ...
 if exist "build" rmdir /s /q "build"
 if exist "dist"  rmdir /s /q "dist"
 
-echo [4/5] Building with PyInstaller ...
 %PY% -m PyInstaller RaceVideoToLog.spec --noconfirm
 if errorlevel 1 (
     echo.
-    echo [ERROR] Build failed.
+    echo [ERROR] Build failed.  Make sure the venv is active.
     pause
     exit /b 1
 )
 
-REM [5/5] Show result
+REM [4/4] Show result
 echo.
-echo [5/5] Build complete.
+echo [4/4] Build complete.
 for /d %%d in (dist\*) do (
     echo   Output: %%d
-    dir /s "%%d\RaceVideoToLog.exe" 2>nul
+    dir "%%d\RaceVideoToLog.exe" 2>nul
 )
 echo.
 echo ========================================

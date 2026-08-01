@@ -6,7 +6,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import cv2
 import numpy as np
 
 import config
@@ -50,9 +49,9 @@ class RaceVideoToLogApp(QMainWindow):
         self.video_path: Path | None = None
         self._pipeline: object | None = None
         self.metadata: VideoMetadata | None = None
-        self.first_frame_bgr: np.ndarray | None = None
+        self.first_frame_rgb: np.ndarray | None = None
         self.first_frame_qimg: QImage | None = None
-        self._preview_cap: cv2.VideoCapture | None = None
+        self._preview_vr: object | None = None  # decord VideoReader
         self._preview_frame_no: int = 0
         self._throttle_timer: QTimer | None = None
         self.ocr_engine: "RapidOCR | None" = None
@@ -314,38 +313,39 @@ class RaceVideoToLogApp(QMainWindow):
             self._status_label.setText("导入失败。")
 
     def _load_video(self, path: Path) -> None:
-        cap = cv2.VideoCapture(str(path))
-        if not cap.isOpened(): raise RuntimeError("无法打开视频文件。")
+        from pipeline import open_decord_vr, get_video_codec
 
-        fc = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
-        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
-        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
-        fourcc = cap.get(cv2.CAP_PROP_FOURCC) or 0.0
-        dur = fc / fps if fps > 0 else 0.0
+        vr, label = open_decord_vr(str(path))
+        codec = get_video_codec(str(path)) or "?"
+        try:
+            fc = len(vr)
+            fps = vr.get_avg_fps()
+            first = vr[0].asnumpy()  # decord returns RGB
+            h, w = first.shape[:2]
+            dur = fc / fps if fps > 0 else 0.0
+        except Exception:
+            del vr
+            raise RuntimeError("无法读取视频第一帧。")
 
-        ok, frame = cap.read()
-        if not ok or frame is None:
-            cap.release(); raise RuntimeError("无法读取视频第一帧。")
-
-        if self._preview_cap is not None: self._preview_cap.release()
-        self._preview_cap = cap; self._preview_frame_no = 0
+        if self._preview_vr is not None:
+            del self._preview_vr
+        self._preview_vr = vr
+        self._preview_frame_no = 0
 
         self.video_path = path
         self.metadata = VideoMetadata(path=path, duration_sec=dur, width=w, height=h,
-            fps=fps, codec=codec_from_fourcc(fourcc), frame_count=fc)
-        self.first_frame_bgr = frame
+            fps=fps, codec=codec, frame_count=fc)
+        self.first_frame_rgb = first
 
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        hh, ww, ch = rgb.shape
-        self.first_frame_qimg = QImage(rgb.data, ww, hh, ch * ww,
+        hh, ww, ch = first.shape
+        self.first_frame_qimg = QImage(first.data, ww, hh, ch * ww,
             QImage.Format.Format_RGB888).copy()
 
         self._file_label.setText(str(path))
         self._dur_label.setText(format_duration(dur))
         self._res_label.setText(f"{w} x {h}")
         self._fps_label.setText(f"{fps:.3f}" if fps > 0 else "Unknown")
-        self._codec_label.setText(self.metadata.codec)
+        self._codec_label.setText(codec)
         self._status_label.setText("视频已载入，请输入识别范围并预览。")
         self._slider.setRange(0, fc - 1); self._slider.setValue(0)
         self._frame_label.setText(f"#{0}/{fc}")
@@ -394,29 +394,20 @@ class RaceVideoToLogApp(QMainWindow):
 
     def _show_frame(self, frame_no: int) -> None:
         pm = None
-        if frame_no > 0 and self._preview_cap is not None and self._seek(frame_no):
-            ok, frame = self._preview_cap.retrieve()
-            if ok and frame is not None:
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                h, w, ch = rgb.shape
-                qimg = QImage(rgb.data, w, h, ch * w, QImage.Format.Format_RGB888).copy()
+        vr = self._preview_vr
+        if frame_no > 0 and vr is not None and frame_no < len(vr):
+            try:
+                frame = vr[frame_no].asnumpy()  # decord returns RGB
+                h, w, ch = frame.shape
+                qimg = QImage(frame.data, w, h, ch * w, QImage.Format.Format_RGB888).copy()
                 pm = QPixmap.fromImage(qimg)
+            except Exception:
+                pass
         if pm is None and self.first_frame_qimg is not None:
             pm = QPixmap.fromImage(self.first_frame_qimg)
         if pm is not None:
             self._preview_pm = pm
             self._redraw()
-
-    def _seek(self, target: int) -> bool:
-        cap = self._preview_cap
-        if cap is None: return False
-        diff = target - self._preview_frame_no
-        if 0 < diff <= 30:
-            for _ in range(diff):
-                if not cap.grab(): return False
-            self._preview_frame_no = target; return True
-        cap.set(cv2.CAP_PROP_POS_FRAMES, target)
-        self._preview_frame_no = target; return True
 
     def _on_slider(self, value: int) -> None:
         if self.metadata:
@@ -589,7 +580,6 @@ class RaceVideoToLogApp(QMainWindow):
         # ── 下拉框字段 ──
         _combo_map = {
             "backend":      (s["backend_combo"],      {"auto": 0, "tensorrt": 1, "cpu": 2}),
-            "video_backend":(s["video_backend_combo"], {"cv2": 0, "decord": 1}),
             "model":        (s["model_combo"],         {"v6_tiny": 0, "v6_small": 1}),
             "reocr_model":  (s["reocr_model_combo"],   {"v6_tiny": 1, "v6_small": 2}),
         }
@@ -633,7 +623,6 @@ class RaceVideoToLogApp(QMainWindow):
             pp = s["pad_spin"].value(); nw = s["buffer_spin"].value()
             be = ["auto", "tensorrt", "cpu"][s["backend_combo"].currentIndex()]
             log_level = ["normal", "detailed", "debug"][s["log_level_combo"].currentIndex()]
-            vb = ["cv2", "decord"][s["video_backend_combo"].currentIndex()]
         except ValueError:
             QMessageBox.warning(self, "参数错误", "请检查数值参数。"); return
 
@@ -661,14 +650,14 @@ class RaceVideoToLogApp(QMainWindow):
                     "将自动回退到 CPU 推理。\n\n"
                     "启用 GPU 加速（需先安装 CUDA Toolkit 12.x + TensorRT 10.x）：\n"
                     "  .venv\\Scripts\\pip install cuda-python tensorrt")
-        if vb == "decord":
-            try:
-                import decord  # noqa: F401
-            except ModuleNotFoundError:
-                QMessageBox.warning(self, "decord 未安装",
-                    "你选择了 decord 解码器，但 decord 未安装。\n"
-                    "将自动回退到 cv2 (CPU 解码)。\n\n"
-                    "如需 GPU 加速：pip install decord")
+        try:
+            import decord  # noqa: F401
+        except ModuleNotFoundError:
+            QMessageBox.critical(self, "decord 未安装",
+                "视频解码需要 decord。\n\n"
+                "安装方法：pip install decord")
+            self._finish_export()
+            return
         self._export_thread = ExportThread(
             video_path=self.video_path,
             roi=roi,
@@ -682,8 +671,6 @@ class RaceVideoToLogApp(QMainWindow):
             frame_start=s["frame_start_edit"].text(),
             frame_end=s["frame_end_edit"].text(),
             log_level=log_level,
-            video_backend=vb,
-            max_aspect=0.0,
             correction_mode=self.correction_mode,
             output_path=Path(out),
             parent=self,
@@ -763,10 +750,24 @@ class RaceVideoToLogApp(QMainWindow):
         # Release pipeline memory (raw_frames etc.) on cancel/error
         pipeline = getattr(self, "_pipeline", None)
         if pipeline is not None:
+            import logging
+            _log = logging.getLogger("RaceVideoToLog.gui")
+            try:
+                from pipeline import _rss_mb, _sum_nbytes
+                _raw_mb = _sum_nbytes([x[1] for x in pipeline._raw_frames]) / 1e6
+                _log.info("[MEM] _finish_export PRE-clear: raw_frames=%d(%.1fMB) rss=%.0fMB",
+                    len(pipeline._raw_frames), _raw_mb, _rss_mb())
+            except Exception:
+                pass
             pipeline._raw_frames.clear()
             if getattr(pipeline, '_diag', None):
                 pipeline._diag.clear()
             import gc; gc.collect()
+            try:
+                from pipeline import _rss_mb
+                _log.info("[MEM] _finish_export POST-clear: rss=%.0fMB", _rss_mb())
+            except Exception:
+                pass
             self._pipeline = None
         self._release_engines()
 

@@ -28,6 +28,9 @@ Thumbs.db
 *.avi
 *_log.csv
 
+# Self-built decord binaries
+_decord_build/
+
 # Large bundles (not needed after DML removal)
 ort_dml_bundle/
 
@@ -49,3 +52,4 @@ _patch_*.py
 *_stage_report.csv
 *_summary.json
 *_diagnostics.csv
+RaceVideoToLog.egg-info/

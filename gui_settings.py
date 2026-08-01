@@ -25,7 +25,7 @@ def build_settings_panel(parent) -> dict:
         format_ms, format_kmh, format_mph  -- RadioButton (speed format)
         max_speed_edit, max_accel_edit      -- LineEdit
         div_spin, buffer_spin, target_h_spin, pad_spin  -- CompactSpinBox
-        backend_combo, video_backend_combo  -- ComboBox
+        backend_combo                       -- ComboBox
         model_combo, reocr_model_combo      -- ComboBox
         log_level_combo                     -- ComboBox
         mode_auto, mode_baseline            -- RadioButton (correction mode)
@@ -85,12 +85,9 @@ def build_settings_panel(parent) -> dict:
     widgets["backend_combo"].addItems(["自动", "TensorRT", "CPU"])
     widgets["backend_combo"].setCurrentIndex(0)
     pl.addWidget(widgets["backend_combo"], 3, 1)
-    pl.addWidget(BodyLabel("视频解码"), 3, 2)
-    widgets["video_backend_combo"] = ComboBox()
-    widgets["video_backend_combo"].addItems(["cv2 (稳定)", "decord (快速)"])
-    widgets["video_backend_combo"].setCurrentIndex(0)
-    widgets["video_backend_combo"].setFixedWidth(120)
-    pl.addWidget(widgets["video_backend_combo"], 3, 3)
+    pl.addWidget(BodyLabel("边缘填充 (px)"), 3, 2)
+    widgets["pad_spin"] = make_int_spinbox(0, 64, config.DEFAULT_PAD, 70)
+    pl.addWidget(widgets["pad_spin"], 3, 3)
     pl.addWidget(BodyLabel("OCR 模型"), 4, 0)
     widgets["model_combo"] = ComboBox()
     widgets["model_combo"].addItems(["v6_tiny", "v6_small"])
@@ -109,9 +106,6 @@ def build_settings_panel(parent) -> dict:
     widgets["log_level_combo"].setCurrentIndex(0)
     widgets["log_level_combo"].setFixedWidth(120)
     pl.addWidget(widgets["log_level_combo"], 5, 1)
-    pl.addWidget(BodyLabel("边缘填充 (px)"), 5, 2)
-    widgets["pad_spin"] = make_int_spinbox(0, 64, config.DEFAULT_PAD, 70)
-    pl.addWidget(widgets["pad_spin"], 5, 3)
 
     # ── Correction mode card ──
     mode_card = make_static_card(parent)
