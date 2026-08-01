@@ -1,5 +1,11 @@
 # Release Notes
 
+## v2.7.1 (2026-08-01)
+
+预处理回退 cv2：Pillow 替代实验因性能不如 cv2（~12% decode 变慢）且 cv2 已随 rapidocr 打包，故回退。EXE 体积不变。
+
+---
+
 ## v2.7.0 (2026-08-01)
 
 ### 自建 decord：GPU 解码 + 内存修复
