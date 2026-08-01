@@ -43,7 +43,7 @@ class ExportThread(QThread):
             frame_start: str,
             frame_end: str,
             log_level: str,
-            video_backend: str,
+            max_width: int,
             correction_mode: str,
             output_path: Path,
             parent: QWidget | None = None,
@@ -64,7 +64,7 @@ class ExportThread(QThread):
         self._frame_start = frame_start
         self._frame_end = frame_end
         self._log_level = log_level
-        self._video_backend = video_backend
+        self._max_width = max_width
         self._correction_mode = correction_mode
         self._output_path = output_path
         self._cancel_flag = False
@@ -98,7 +98,7 @@ class ExportThread(QThread):
                     progress_cb=self._emit_progress,
                     cancel_check=self._check_cancel,
                     log_level=self._log_level,
-                    video_backend=self._video_backend,
+                    max_width=self._max_width,
                 )
                 mode = self._correction_mode
                 if mode == "auto":

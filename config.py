@@ -1,7 +1,7 @@
 """RaceVideoToLog 集中配置 — 常量、颜色、公共 API。"""
 from __future__ import annotations
 
-__version__ = "2.6.1"
+__version__ = "2.7.0"
 
 # ═══════════════════ 物理常量 ═══════════════════
 MPS_TO_KMH: float = 3.6          # m/s → km/h 转换因子
@@ -9,7 +9,6 @@ KMH_TO_MPS: float = 1.0 / 3.6    # km/h → m/s 转换因子
 
 # ═══════════════════ 用户可配置默认值 ═══════════════════
 DEFAULT_BACKEND: str = "auto"           # GPU 后端 (auto / tensorrt / cpu)
-DEFAULT_VIDEO_BACKEND: str = "cv2"     # 视频解码器 (cv2 / decord)，cv2 兼容性好且内存低
 DEFAULT_OCR_MODEL: str = "v6_tiny"     # 主 OCR 模型
 DEFAULT_REOCR_MODEL: str = "v6_small"  # 重 OCR 模型
 DEFAULT_SPEED_FORMAT: str = "km/h"     # 速度单位 (km/h / m/s / mile/h)
@@ -18,6 +17,7 @@ DEFAULT_MAX_SPEED: float = 400.0       # 最大速度 (km/h)
 DEFAULT_MAX_ACCEL: float = 50.0        # 最大加速度 (m/s²)
 DEFAULT_TARGET_H: int = 48             # OCR 预处理目标高度 (px)
 DEFAULT_PAD: int = 0                   # OCR 预处理 padding (px)
+DEFAULT_MAX_WIDTH: int = 0              # 预处理最大宽度 px（0=不限）
 DEFAULT_BUFFER_SIZE: int = 16          # 生产者-消费者队列缓冲大小
 DEFAULT_LOG_LEVEL: str = "normal"      # 日志级别 (normal / detailed / debug)
 DEFAULT_CORRECTION_MODE: str = "auto"  # 纠错模式 (auto / manual)

@@ -3,13 +3,117 @@
 """
 from __future__ import annotations
 import csv
+import gc
+import os as _os
+import sys
 import logging
 import time as _time
 from pathlib import Path
 from collections.abc import Callable
 
-import cv2
 import numpy as np
+
+
+def _register_cuda_dll_dirs() -> None:
+    """Register CUDA Toolkit bin directories so decord can find cudart etc.
+
+    Scans the CUDA_PATH env var and system PATH for CUDA installations
+    and calls os.add_dll_directory() for each one found."""
+    if sys.platform != "win32":
+        return
+    _found: set[str] = set()
+    # 1) CUDA_PATH / CUDA_PATH_V* env vars
+    for _k, _v in _os.environ.items():
+        if _k.startswith("CUDA_PATH") and _v:
+            _bin = Path(_v) / "bin"
+            if _bin.is_dir():
+                _found.add(str(_bin))
+    # 2) Scan PATH for entries containing "CUDA" or "cuda" with cudart dll
+    for _entry in _os.environ.get("PATH", "").split(";"):
+        _p = _entry.strip()
+        if not _p:
+            continue
+        _lp = _p.lower().replace("\\", "/")
+        if ("cuda" in _lp and "bin" in _lp) or "nvidia" in _lp:
+            try:
+                if any(f.startswith("cudart64_") for f in _os.listdir(_p)
+                       if f.lower().endswith(".dll")):
+                    _found.add(_p)
+            except OSError:
+                pass
+    for _d in sorted(_found):
+        try:
+            _os.add_dll_directory(_d)
+        except OSError:
+            pass
+
+
+_register_cuda_dll_dirs()
+
+
+def _find_ffprobe() -> str | None:
+    """Locate ffprobe.exe bundled alongside the decord package."""
+    import importlib.util as _iu
+    try:
+        _spec = _iu.find_spec("decord")
+        if _spec and _spec.origin:
+            _d = Path(_spec.origin).parent / "ffprobe.exe"
+            if _d.is_file():
+                return str(_d)
+    except Exception:
+        pass
+    return None
+
+
+def get_video_codec(video_path) -> str:
+    """Return the video codec name (e.g. h264, hevc) using bundled ffprobe."""
+    _ffprobe = _find_ffprobe()
+    if not _ffprobe:
+        return ""
+    import subprocess
+    try:
+        _r = subprocess.run(
+            [_ffprobe, "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=codec_name",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(video_path)],
+            capture_output=True, text=True, timeout=15)
+        return _r.stdout.strip() if _r.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def open_decord_vr(video_path, force_cpu: bool = False):
+    """Open video with decord — GPU (NVDEC) preferred, CPU fallback.
+
+    Returns (VideoReader, label) where label is ``'GPU'`` or ``'CPU'``.
+    Set ``DECORD_FORCE_CPU=1`` in the environment or pass *force_cpu=True*
+    to skip GPU even when available.
+    """
+    from decord import VideoReader as _VR
+
+    _vr = None
+    _label = "CPU"
+    _force = force_cpu or _os.environ.get("DECORD_FORCE_CPU", "").strip() == "1"
+
+    if not _force:
+        try:
+            from decord import gpu as _decord_gpu
+            _vr = _VR(str(video_path), ctx=_decord_gpu(0))
+            _label = "GPU"
+        except Exception:
+            pass
+
+    if _vr is None:
+        try:
+            from decord import cpu as _decord_cpu
+            _vr = _VR(str(video_path), ctx=_decord_cpu(0))
+        except ModuleNotFoundError:
+            raise RuntimeError("decord 未安装。请运行: pip install decord")
+        except Exception as _e:
+            raise RuntimeError(f"decord 无法打开视频: {_e}")
+
+    return _vr, _label
+
 
 from ocr_engine import (
     clamp_region, compute_video_hash,
@@ -22,22 +126,55 @@ from error_detection import detect_errors
 from correction import correct_errors
 from gpu_setup import get_gpu_backend, get_engine_params, get_engine_type
 
+# ── Memory diagnostics (feat/memory-diag) ──
+_MEM_DIAG_ENABLED = False  # set True to enable per-frame RSS logging
+
+def _mf(fmt: str, *args) -> None:
+    """Emit a memory-diag log line if enabled."""
+    if _MEM_DIAG_ENABLED:
+        logger.info("[MEM] " + fmt, *args)
+
+def _rss_mb() -> float:
+    import os as _os
+    try:
+        import psutil
+        return psutil.Process(_os.getpid()).memory_info().rss / (1024 * 1024)
+    except ImportError:
+        return -1.0
+
+def _sum_nbytes(seq) -> int:
+    s = 0
+    for x in seq:
+        if hasattr(x, 'nbytes'): s += x.nbytes
+        elif hasattr(x, '__len__') and len(x) == 2:
+            if hasattr(x[1], 'nbytes'): s += x[1].nbytes
+    return s
+
 logger = logging.getLogger("RaceVideoToLog.pipeline")
 
 
-def _preprocess_standard(crop: np.ndarray, target_h: int, pad: int) -> np.ndarray:
-    """标准预处理：纯 resize + 填充。保留 BGR 通道以利用颜色信息。"""
+def _preprocess_standard(crop: np.ndarray, target_h: int, pad: int,
+                         max_width: int = 0) -> np.ndarray:
+    """标准预处理：resize (Pillow) + 可选宽度限制 + 填充 (numpy edge)。
+
+    max_width > 0 时限制宽度上限（px），用于纠正扁宽字体
+    （如数字高度≈宽度时设为 96 可恢复 ~2:1 高宽比）。
+    """
+    from PIL import Image
     h, w = crop.shape[:2]
     if target_h < 8:
         raise ValueError(f"target_h 必须 >= 8，当前为 {target_h}")
-    scale = target_h / h if h > 0 else 1.0
-    if abs(scale - 1.0) > 0.02:
-        resized = cv2.resize(crop, (max(1, int(w * scale)), target_h))
+    new_w = max(1, int(w * target_h / h)) if h > 0 else w
+    if max_width > 0:
+        new_w = min(new_w, max_width)
+    if abs(target_h / h - 1.0) > 0.02:
+        resized = np.array(
+            Image.fromarray(crop).resize((new_w, target_h), Image.LANCZOS))
     else:
         resized = crop
     if pad > 0:
-        resized = cv2.copyMakeBorder(resized, pad, pad, pad, pad,
-                                        cv2.BORDER_REPLICATE)
+        resized = np.pad(resized, ((pad, pad), (pad, pad), (0, 0)),
+                         mode='edge')
     return resized
 
 
@@ -61,7 +198,7 @@ class ProcessingPipeline:
                     cancel_check: "Callable[[], None] | None" = None,
                     log_level: str = "normal",
                 final_check: bool = False,
-                video_backend: str = "cv2"):
+                max_width: int = 0):
         if target_h < 8:
             raise ValueError(f"target_h 必须 >= 8，当前为 {target_h}")
         if pad < 0:
@@ -84,8 +221,8 @@ class ProcessingPipeline:
         self._frame_end = frame_end
         self._progress = progress_cb
         self._final_check = final_check
-        self._video_backend = video_backend  # user-requested: "decord" or "cv2"
-        self._video_backend_actual: str = ""  # set by _run_ocr after fallback
+        self._max_width = max_width
+        self._video_backend_actual: str = ""  # set by _run_ocr: "decord/GPU" or "decord/CPU"
 
         # 状态
         self._ocr: "RapidOCR | None" = None
@@ -246,10 +383,10 @@ class ProcessingPipeline:
             self.finalize(output_path)
 
     def _run_ocr(self) -> None:
-        """解码 + OCR：producer 解码(decord/cv2)/预处理 → consumer 推理。
+        """解码 + OCR：producer 解码(decord)/预处理 → consumer 推理。
 
-        Queue 流水线重叠 I/O 与 GPU 推理。decord (NVDEC) 优先，
-        不可用时自动回退 cv2 (CPU)。OCR 后端由 gpu_setup 自动选择。
+        Queue 流水线重叠 I/O 与 GPU 推理。decord GPU 优先（NVDEC），
+        不可用时自动回退 CPU。OCR 后端由 gpu_setup 自动选择。
         """
         import threading
         from queue import Queue
@@ -258,42 +395,20 @@ class ProcessingPipeline:
         speed_format = self._speed_format
         target_h = self._target_h
         pad = self._pad
+        _max_width = self._max_width
         frame_step = max(1, self._frame_div)
         t_start = _time.perf_counter()
 
-        # ── 视频源：按 video_backend 配置选择解码器 ──
-        _src_type = "cv2"
-        _vr = None
-        _cap: "cv2.VideoCapture | None" = None
-
-        if self._video_backend == "decord":
-            try:
-                from decord import VideoReader as _VR, cpu as _decord_cpu
-                _vr = _VR(str(self._video_path), ctx=_decord_cpu(0))
-                total_video_frames = len(_vr)
-                fps = _vr.get_avg_fps(); self._fps = fps
-                _first = _vr[0].asnumpy()
-                h, w = _first.shape[:2]
-                _src_type = "decord"
-                self._video_backend_actual = "decord"
-                logger.info("Video source: decord (NVDEC)")
-            except ModuleNotFoundError:
-                self._video_backend_actual = "cv2"
-                logger.warning("decord not installed; falling back to cv2. "
-                               "Install with: pip install decord")
-            except Exception as _e:
-                self._video_backend_actual = "cv2"
-                logger.warning("decord failed (%s); falling back to cv2. "
-                               "decord requires an NVIDIA GPU with NVDEC support.", _e)
-
-        if _src_type != "decord":
-            self._video_backend_actual = "cv2"
-            _cap = cv2.VideoCapture(str(self._video_path))
-            total_video_frames = int(_cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-            fps = float(_cap.get(cv2.CAP_PROP_FPS) or 0.0); self._fps = fps
-            w = int(_cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
-            h = int(_cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
-            logger.info("Video source: cv2 (CPU)")
+        # ── 视频源：decord GPU 优先 → CPU 回退 ──
+        _vr, _gpu_label = open_decord_vr(self._video_path)
+        total_video_frames = len(_vr)
+        fps = _vr.get_avg_fps(); self._fps = fps
+        _first = _vr[0].asnumpy()
+        h, w = _first.shape[:2]
+        self._video_backend_actual = f"decord/{_gpu_label}"
+        logger.info("Video source: decord (%s)", _gpu_label)
+        _mf("video-opened: %dframes %dx%d  %s  rss=%.0fMB",
+            total_video_frames, w, h, _gpu_label, _rss_mb())
 
         x1, y1, x2, y2 = clamp_region(*self._roi, w, h)
         f_start = _parse_int_or_none(self._frame_start)
@@ -309,64 +424,37 @@ class ProcessingPipeline:
         def _producer() -> None:
             nonlocal _decode_ms
             try:
-                if _src_type == "decord":
-                    _fi = f_start or 0
-                    # Seek once to start, then sequential-read to avoid decord
-                    # buffering all past frames in memory (it is optimised for
-                    # random access, not streaming).
-                    if _fi > 0:
-                        _vr.seek_accurate(_fi)
-                    _limit = min(_end_limit, total_video_frames)
-                    while _fi < _limit:
-                        if self._cancel_check and _fi % 10 == 0:
-                            self._cancel_check()
-                        _t0 = _time.perf_counter()
-                        try:
-                            _frame = _vr.next().asnumpy()
-                        except StopIteration:
-                            break
-                        _ts = _fi / fps if fps > 0 else 0.0
-                        _crop = _frame[y1:y2 + 1, x1:x2 + 1].copy()
-                        del _frame
-                        self._raw_frames.append((_fi, _crop))
-                        _proc = _preprocess_standard(_crop, target_h, pad)
-                        _decode_ms += (_time.perf_counter() - _t0) * 1000.0
-                        q.put((_fi, _proc))
-                        # Advance: skip (frame_step-1) frames for div
-                        skip = frame_step - 1
-                        if skip > 0:
-                            _vr.skip_frames(skip)
-                        _fi += frame_step
-                else:
-                    fi = 0
-                    while fi < total_video_frames:
-                        if self._cancel_check and fi % 10 == 0:
-                            self._cancel_check()
-                        if fi >= _end_limit:
-                            break
-                        if f_start is not None and fi < f_start:
-                            _cap.grab(); fi += 1; continue
-                        if fi % frame_step != 0:
-                            _cap.grab(); fi += 1; continue
-                        _t0 = _time.perf_counter()
-                        if not _cap.grab():
-                            break
-                        ok, frame = _cap.retrieve()
-                        if not ok or frame is None:
-                            break
-                        crop = frame[y1:y2 + 1, x1:x2 + 1].copy()
-                        self._raw_frames.append((fi, crop))
-                        proc = _preprocess_standard(crop, target_h, pad)
-                        _decode_ms += (_time.perf_counter() - _t0) * 1000.0
-                        q.put((fi, proc))
-                        fi += 1
+                _fi = f_start or 0
+                if _fi > 0:
+                    _vr.seek_accurate(_fi)
+                _limit = min(_end_limit, total_video_frames)
+                while _fi < _limit:
+                    if self._cancel_check and _fi % 10 == 0:
+                        self._cancel_check()
+                    _t0 = _time.perf_counter()
+                    try:
+                        _frame = _vr.next().asnumpy()
+                    except StopIteration:
+                        break
+                    _crop = _frame[y1:y2 + 1, x1:x2 + 1].copy()
+                    del _frame
+                    self._raw_frames.append((_fi, _crop))
+                    _proc = _preprocess_standard(_crop, target_h, pad, max_width=_max_width)
+                    _decode_ms += (_time.perf_counter() - _t0) * 1000.0
+                    q.put((_fi, _proc))
+                    # ── memory diag ──
+                    if _MEM_DIAG_ENABLED and len(self._raw_frames) % 120 == 0:
+                        _raw_nb = _sum_nbytes([x[1] for x in self._raw_frames])
+                        _mf("decoded=%d  raw_frames=%5.1fMB  rss=%5.0fMB",
+                            len(self._raw_frames), _raw_nb/1e6, _rss_mb())
+                    skip = frame_step - 1
+                    if skip > 0:
+                        _vr.skip_frames(skip)
+                    _fi += frame_step
                 q.put(None)
             except Exception as e:
                 errors.append(e)
                 q.put(None)
-            finally:
-                if _cap is not None:
-                    _cap.release()
 
         t = threading.Thread(target=_producer, daemon=True)
         t.start()
@@ -406,18 +494,25 @@ class ProcessingPipeline:
             done += 1
             if done % 10 == 0 or done <= 3 or done == est_total:
                 pct = 3.0 + (done / max(est_total, 1)) * 87.0
-                self._emit(f"[{get_gpu_backend()}] OCR: {done}/{est_total}", pct)
+                _label = f"{self._video_backend_actual} + {get_gpu_backend()}"
+                self._emit(f"[{_label}] OCR: {done}/{est_total}", pct)
+            if _MEM_DIAG_ENABLED and done % 120 == 0:
+                _mf("consumer: done=%d  qsize~%d  rss=%.0fMB",
+                    done, q.qsize(), _rss_mb())
         t.join()
         if errors:
             raise errors[0]
         self._observations = observations
         self._diag = diag
         self._diag_notes: dict[int, str] = {}
-        # Release decoder to free full-frame cache
+        # ── memory diag: pre-release ──
+        _mf("pre-release: raw_frames=%d  rss=%.0fMB",
+            len(self._raw_frames), _rss_mb())
+        # Release decoder to free internal frame buffers
         if _vr is not None:
             del _vr
-        if _cap is not None:
-            _cap.release()
+        gc.collect()
+        _mf("post-release(del _vr): rss=%.0fMB", _rss_mb())
         self._timing["ocr"] = _time.perf_counter() - t_start
         self._timing["decode"] = _decode_ms / 1000.0
         self._timing["inference"] = _inference_ms / 1000.0
@@ -452,20 +547,27 @@ class ProcessingPipeline:
         n_pinned = sum(1 for row in rows if row[3] == Flag.PINNED)
         n_corrected = sum(1 for row in rows if Flag.is_corrected(row[3]))
         timing_str = ", ".join(f"{k}={v:.1f}s" for k, v in self._timing.items())
+        _codec = get_video_codec(str(self._video_path)) or ""
         with output_path.open("w", newline="", encoding="utf-8-sig") as fh:
             fh.write(f"# RaceVideoToLog v{config.__version__}\n")
-            fh.write(f"# video_hash={vhash}, video={self._video_path.name}\n")
+            fh.write(f"# video_hash={vhash}, video={self._video_path.name}"
+                     f", fps={self._fps:.3f}")
+            if _codec:
+                fh.write(f", codec={_codec}")
+            fh.write("\n")
             fh.write(f"# roi={r[0]},{r[1]},{r[2]},{r[3]}, format={self._speed_format}"
                         f", frame_start={self._frame_start or ''}"
                         f", frame_end={self._frame_end or ''}\n")
             fh.write(f"# max_speed={self._max_speed}, max_accel={self._max_accel}"
                         f", div={self._frame_div}, target_h={self._target_h}"
-                        f", pad={self._pad}, buffer={self._buffer_size}"
-                        f", fps={self._fps:.3f}\n")
+                        f", pad={self._pad}, buffer={self._buffer_size}")
+            if self._max_width > 0:
+                fh.write(f", max_width={self._max_width}")
+            fh.write("\n")
             fh.write(f"# backend={self._backend_actual}, model={self._ocr_model}")
             reocr_info = f", reocr_model={self._reocr_model}" if self._reocr_model and self._reocr_model != self._ocr_model else ""
             fh.write(f"{reocr_info}")
-            fh.write(f", video_backend={self._video_backend_actual or self._video_backend}\n")
+            fh.write(f", video_backend={self._video_backend_actual or 'decord'}\n")
             if n_pinned > 0:
                 fh.write(f"# pinned={n_pinned}\n")
             fh.write(f"# stats: total={n_total}, trusted={n_trusted},"

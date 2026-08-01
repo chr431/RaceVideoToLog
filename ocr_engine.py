@@ -266,6 +266,7 @@ _CSV_FIELD_MAP: dict[str, tuple[str, str]] = {
     "max_accel":     ("max_accel",     "float"),
     "div":           ("div",           "int"),
     "target_h":      ("target_h",      "int"),
+    "max_width":     ("max_width",     "int"),
     "pad":           ("pad",           "int"),
     "backend":       ("backend",       "str"),
     "buffer":        ("buffer",        "int"),
@@ -274,6 +275,8 @@ _CSV_FIELD_MAP: dict[str, tuple[str, str]] = {
     "model":         ("ocr_model",     "str"),
     "reocr_model":   ("reocr_model",   "str"),
     "video_backend": ("video_backend", "str"),
+    "fps":          ("fps",          "float"),
+    "codec":        ("codec",        "str"),
 }
 
 

@@ -1,12 +1,11 @@
 [project]
 name = "RaceVideoToLog"
-version = "2.6.1"
+version = "2.7.0"
 description = "从赛车视频中 OCR 提取速度数据，生成时间-速度-距离 CSV（TensorRT + CPU 双后端）"
 requires-python = ">=3.11"
 dependencies = [
     "rapidocr>=3.9",
     "onnxruntime>=1.27",
-    "opencv-python-headless>=5",
     "numpy>=2",
     "matplotlib>=3.10",
     "PySide6>=6.11",
@@ -15,9 +14,14 @@ dependencies = [
     "pyclipper",
     "shapely",
 ]
+# opencv-python-headless is a transitive dep of rapidocr — no longer used directly.
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
 # GPU acceleration (installed by setup_venv.bat if CUDA/TensorRT available):
 #   pip install --no-deps tensorrt_cu13_bindings cuda-python
-# Requires: CUDA Toolkit 12.x + TensorRT 10.x on system PATH
+# Requires: CUDA Toolkit + TensorRT 10.x on system PATH
 
 [project.scripts]
 racevideotolog = "RaceVideoToLog:main"

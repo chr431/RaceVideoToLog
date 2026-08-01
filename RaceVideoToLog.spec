@@ -34,7 +34,6 @@ hiddenimports = [
     'widget_utils', 'theme_manager',
     # rapidocr transitive deps (may not be auto-discovered)
     'shapely', 'pyclipper', 'colorlog', 'omegaconf',
-    'cv2',  # opencv (headless)
 ]
 
 # rapidocr（OCR 引擎，含 ONNX 后端）
@@ -152,7 +151,7 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=[os.path.join(_PROJECT_ROOT, 'runtime_hook.py')],
     # 排除 onnxruntime 中的非推理模块 + scipy/matplotlib 测试和未用子模块
     # 这些模块的 hidden imports 会产生大量 ERROR 日志（不影响功能）
     excludes=[
@@ -218,10 +217,14 @@ _EXCLUDE_BINARIES = {
     'Qt6PrintSupport.dll', 'Qt6WebChannel.dll',
     'Qt6WebEngine.dll', 'Qt6WebEngineCore.dll', 'Qt6WebEngineQuick.dll',
     'Qt6Designer.dll', 'Qt6Help.dll', 'Qt6UiTools.dll',
-    # 音频格式
+    # PySide6-bundled FFmpeg 6.x/7.x (decord provides FFmpeg 5.x)
     'swresample-5.dll', 'swscale-8.dll', 'avformat-61.dll',
-    'avutil-59.dll', 'avdevice-61.dll', 'avfilter-10.dll',
+    'avutil-59.dll', 'avcodec-61.dll', 'avdevice-61.dll', 'avfilter-10.dll',
     'postproc-58.dll',
+    'avformat-60.dll', 'avutil-58.dll', 'avcodec-60.dll',
+    'avdevice-60.dll', 'avfilter-9.dll', 'postproc-57.dll',
+    # opencv (removed from project, exclude if caught transitively)
+    'opencv_world480.dll', 'opencv_world490.dll',
 }
 a.binaries = [(n, p, t) for n, p, t in a.binaries
               if os.path.basename(p) not in _EXCLUDE_BINARIES]
@@ -238,10 +241,9 @@ coll = COLLECT(
     upx_exclude=[
         'onnxruntime.dll',
         'onnxruntime_providers_shared.dll',
-        # opencv-python-headless 5.x uses cv2.pyd (no opencv_world*.dll)
-        # decord FFmpeg 4.x DLLs (UPX may corrupt)
-        'avcodec-58.dll', 'avformat-58.dll', 'avutil-56.dll',
-        'swresample-3.dll', 'swscale-5.dll',
+        # decord FFmpeg 5.x DLLs (UPX may corrupt)
+        'avcodec-59.dll', 'avformat-59.dll', 'avutil-57.dll',
+        'swresample-4.dll', 'swscale-6.dll',
     ],
     name='RaceVideoToLog',
 )

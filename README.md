@@ -1,97 +1,101 @@
-# RaceVideoToLog v2.6.1
+# RaceVideoToLog v2.7.0
 
 从赛车视频中提取速度数据，生成时间-速度-距离 CSV 文件。
 
-## 安装
+## 前置要求
+
+- Python 3.11+
+- NVIDIA 显卡 + 最新驱动（GPU 视频解码；CPU 模式也可用但内存较高）
+- （可选）CUDA Toolkit + TensorRT 10.x（GPU OCR 推理；无则自动使用 CPU）
+
+## 一键安装
 
 ```bash
 setup_venv.bat
 ```
 
-或手动：
+脚本自动完成：
 
-```bash
-python -m venv .venv
-.venv\Scripts\pip install -e .
+1. 创建 `.venv` 虚拟环境
+2. `pip install -e .` 安装所有 Python 依赖
+3. 检测 `_decord_build\` 目录，若存在则安装自建 decord（GPU 解码 + 内存修复）
+4. 安装 TensorRT / cuda-python Python 绑定
+
+### 自建 decord（推荐）
+
+PyPI 版 decord 是 CPU-only 且内存占用高达 ~10 GB。自建版本支持 NVDEC GPU 硬解码，内存仅 ~400 MB。
+
+1. 按 [decord wiki](https://github.com/chr431/decord) 构建 decord
+2. 将构建产物放入 `_decord_build\`：
+
+```text
+_decord_build\
+├── decord.dll
+├── avcodec-59.dll
+├── avformat-59.dll
+├── avutil-57.dll
+├── avfilter-8.dll
+├── avdevice-59.dll
+├── swresample-4.dll
+├── swscale-6.dll
+├── postproc-56.dll
+├── msvcp140.dll
+├── vcruntime140.dll
+├── vcruntime140_1.dll
+├── ffprobe.exe         （可选，用于显示视频编码）
 ```
 
-### GPU 加速（可选但推荐）
+3. 重新运行 `setup_venv.bat`
 
-1. 安装 CUDA Toolkit 12.x + TensorRT 10.x
-2. 将 CUDA 和 TensorRT 的 `bin/`、`lib/` 目录加入系统 PATH
-3. 首次启动自动构建 TRT 引擎（FP32，~80s），后续加载缓存（秒级）
-4. 未检测到 GPU 则自动使用 CPU 推理
+如无 `_decord_build\`，安装脚本会使用 PyPI decord（CPU-only，功能正常但内存较高）。
 
 ## 使用
 
 ### GUI
 
 ```bash
-python RaceVideoToLog.py
+.venv\Scripts\python RaceVideoToLog.py
 ```
-
-1. 导入视频，框选仪表盘速度数字区域
-2. 选择 OCR 模型和纠错模式
-3. 点击"导出 CSV"
-
-导出完成后弹出**最终检查**窗口：全帧速度曲线图，橙色标记低置信度帧，点击任意数据点可查看原始 ROI 图像并手动修正该帧速度值。支持滚轮缩放和拖拽平移。
-
-**纠错模式**：
-- **自动**（推荐）：全自动处理，输出平滑曲线，适合大多数场景
-- **人工辅助**：保守修正，减少自动干预
-
-**导入设置**：可从已有 CSV 文件头一键导入所有参数。
 
 ### CLI
 
 ```bash
-python RaceVideoToLog.py video.mp4 --roi X1 Y1 X2 Y2 -o output.csv
-```
-
-CLI 与 GUI 共用同一处理管线。支持从 CSV 导入设置：
-
-```bash
-python RaceVideoToLog.py video.mp4 --from-csv settings.csv --div 1 -o output.csv
+.venv\Scripts\python RaceVideoToLog.py video.mp4 --roi X1 Y1 X2 Y2 -o output.csv
 ```
 
 ### 数据分析
 
 ```bash
-# 比较两个 CSV，生成速度-时间、速度-距离、时间差-距离对比图
-python RaceVideoToLog.py --analysis csv1.csv csv2.csv --analysis-out prefix
+.venv\Scripts\python RaceVideoToLog.py --analysis csv1.csv csv2.csv --analysis-out prefix
 ```
 
 ## 输出格式
 
 ```csv
-# RaceVideoToLog v2.6.1
-# video_hash=..., video=test4.mp4
-# roi=862,945,957,1003, format=km/h, frame_start=114, frame_end=6317
-# max_speed=400.0, max_accel=70.0, div=1, target_h=48, pad=0, buffer=16, fps=59.940
-# backend=TensorRT, model=v6_tiny, reocr_model=v6_small, video_backend=decord
-# stats: total=6203, trusted=6091, corrected=111
-# timing: ocr=13.5s, decode=5.0s, inference=8.0s, correction=8.5s, total=22.0s
+# RaceVideoToLog v2.7.0
+# video_hash=..., video=test5.mp4, fps=59.767, codec=h264
+# roi=843,993,948,1025, format=km/h, frame_start=362, frame_end=7585
+# max_speed=400.0, max_accel=40.0, div=1, target_h=48, pad=0, buffer=16
+# backend=CPU, model=v6_tiny, reocr_model=v6_small, video_backend=decord/GPU
+# stats: total=7223, trusted=7090, corrected=118
+# timing: ocr=17.0s, decode=16.6s, inference=15.7s, correction=4.5s
 frame,distance,speed_kmh,flag
-114,0.00,0,21
-115,0.00,0,21
+362,0.00,257,21
 ```
-
-CSV 头包含完整处理参数。每行 4 列：帧号、累计距离 (m)、速度 (km/h)、flag（见下表）。
 
 | Flag | 含义 |
 |------|------|
-| 0 | 原始 OCR 值 |
-| 11 | 自动修正 |
-| 12 | 插值填充 |
-| 13 | 部分数字推断修正 |
-| 21 | 高可信帧 |
-| 22 | 用户手动修正 |
-| 23 | 人工确认段 |
-| 30 | 待审核 |
+| 0    | 原始 OCR 值 |
+| 11   | 自动修正 |
+| 12   | 插值填充 |
+| 13   | 部分数字推断修正 |
+| 21   | 高可信帧 |
+| 22   | 用户手动修正 |
+| 23   | 人工确认段 |
 
 ## CLI 参数
 
-```
+```text
 python RaceVideoToLog.py [video] [options]
 
 位置参数:
@@ -104,10 +108,10 @@ python RaceVideoToLog.py [video] [options]
   --max-speed N                  最大速度 km/h (默认: 400)
   --max-accel N                  最大加速度 m/s² (默认: 50)
   --target-h N                   OCR 高度 px (默认: 48)
+  --max-width N                  最大宽度 px（0=不限；扁宽字体可设为 96）
   --pad N                        边缘填充 px (默认: 0)
   --buffer N                     缓冲队列大小 (默认: 16)
   --backend {auto,tensorrt,cpu}  OCR 后端 (默认: auto)
-  --video-backend {cv2,decord}   视频解码器 (默认: cv2)
   --ocr-model {v6_tiny,v6_small} 主 OCR 模型 (默认: v6_tiny)
   --reocr-model {v6_tiny,v6_small} 重 OCR 模型 (默认: v6_small)
   --mode {auto,manual}           纠错模式 (默认: auto)
@@ -126,7 +130,7 @@ python RaceVideoToLog.py [video] [options]
 build_exe.bat
 ```
 
-生成 `dist/RaceVideoToLog/`。GPU 用户需自行安装 CUDA Toolkit 12.x + TensorRT 10.x 并加入 PATH。
+生成 `dist/RaceVideoToLog/`。GPU 用户仅需 NVIDIA 驱动（NVDEC 解码）；TensorRT OCR 推理需额外安装 CUDA Toolkit + TensorRT 并加入 PATH。
 
 ## License
 

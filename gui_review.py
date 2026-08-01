@@ -17,8 +17,6 @@ from widget_utils import make_static_card, setup_chart_zoom_pan
 from config import (COLOR_RED, COLOR_ORANGE, COLOR_BLUE,
     COLOR_LIGHT_GRAY, COLOR_LIGHTER_GRAY, chart_colors,
     MANUAL_EDIT_ACCEL_WARNING)
-
-import cv2
 import numpy as np
 
 
@@ -390,7 +388,8 @@ class ReviewDialog(QDialog):
         if 0 <= frame_index < len(self._raw_frames):
             _, crop = self._raw_frames[frame_index]
             if crop is not None and crop.size > 0:
-                rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+                # decord returns RGB — no conversion needed
+                rgb = crop
                 h, w, ch = rgb.shape
                 qimg = QImage(rgb.data, w, h, ch * w, QImage.Format.Format_RGB888)
                 pm = QPixmap.fromImage(qimg)
