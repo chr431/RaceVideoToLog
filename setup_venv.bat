@@ -83,9 +83,8 @@ if %_COPIED%==1 (
 )
 
 echo.
-echo Installing GPU Python bindings (DLLs loaded from system PATH) ...
-.venv\Scripts\python -m pip install --no-deps "tensorrt>=10,<11" "tensorrt_cu13>=10,<11" "tensorrt_cu13_bindings>=10,<11"
-.venv\Scripts\python -m pip install cuda-python
+echo Installing GPU Python bindings (thin wrappers, ~few MB) ...
+.venv\Scripts\python -m pip install -e ".[gpu]"
 echo   GPU video decode (NVDEC) is ready - only requires an NVIDIA GPU with drivers.
 echo   GPU OCR (TensorRT) requires CUDA Toolkit + TensorRT installed and on PATH.
 echo   Without them, CPU OCR will be used automatically.

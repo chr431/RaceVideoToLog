@@ -18,10 +18,13 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
-
-# GPU acceleration (installed by setup_venv.bat if CUDA/TensorRT available):
-#   pip install --no-deps tensorrt_cu13_bindings cuda-python
-# Requires: CUDA Toolkit + TensorRT 10.x on system PATH
+gpu = [
+    "cuda-python",
+    "tensorrt_cu13_bindings>=10,<11",
+]
+# tensorrt (meta-package) is intentionally omitted: it pulls in
+# tensorrt_libs (~2.2 GB of DLLs).  Runtime DLLs are loaded from the
+# system (CUDA Toolkit + TensorRT on PATH).
 
 [project.scripts]
 racevideotolog = "RaceVideoToLog:main"

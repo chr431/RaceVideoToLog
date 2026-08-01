@@ -225,6 +225,13 @@ _EXCLUDE_BINARIES = {
     'avdevice-60.dll', 'avfilter-9.dll', 'postproc-57.dll',
     # opencv (removed from project, exclude if caught transitively)
     'opencv_world480.dll', 'opencv_world490.dll',
+    # FFmpeg 4.x DLLs (PyPI decord; self-built decord uses 5.x)
+    'avcodec-58.dll', 'avformat-58.dll', 'avutil-56.dll',
+    'avfilter-7.dll', 'avdevice-58.dll', 'swresample-3.dll',
+    'swscale-5.dll', 'postproc-55.dll',
+    # opencv bundled FFmpeg (decord handles all video I/O)
+    'opencv_videoio_ffmpeg500_64.dll', 'opencv_videoio_ffmpeg490_64.dll',
+    'opencv_videoio_ffmpeg480_64.dll',
 }
 a.binaries = [(n, p, t) for n, p, t in a.binaries
               if os.path.basename(p) not in _EXCLUDE_BINARIES]
