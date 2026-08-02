@@ -87,6 +87,7 @@ AUTO_CORRECT_THRESHOLD: int = 70
 CORRECTION_MAX_ROUNDS: int = 10        # Viterbi 多轮迭代
 FILL_MAX_PASSES: int = 50
 CORRECTION_MIN_DIFF: float = 0.5
+MANUAL_CORRECTION_MIN_DIFF: float = 2.0  # 手动模式 Viterbi 最小提交差值（±1 微调视为噪声保留 raw）
 AUTO_SMOOTH_CLUSTER_MAX: int = 5
 AUTO_SMOOTH_DEVIATION_MULT: float = 5.0
 
@@ -117,6 +118,7 @@ FORCE_MEDIAN_WINDOW_TIME: float = 0.1      # force-median 中值窗口时间 (�
 TRUST_WINDOW_TIME: float = 0.15            # 信任传播验证时间窗 (秒)
 DISTANT_INTERP_ISLAND_THRESHOLD: int = 30  # 孤岛检测距离阈值 (km/h)
 REF_INTERP_MAX_KMH_DIFF: int = 50    # 插值参考值最大允许偏差 (km/h)
+REF_MIN_DIFF: float = 3.0            # 参考值最小偏差：raw 与插值差 < 此值时不设参考（raw 自洽）
 MANUAL_REF_CONFIDENCE_MAX: int = 40  # 手动模式构建参考值的置信度上限
 
 # ═══════════════════ Viterbi 后处理 ═══════════════════

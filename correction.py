@@ -18,7 +18,7 @@ from ocr_engine import extract_speed_value, build_speed_candidates, Flag
 from viterbi import viterbi_correct
 from config import (
     MPS_TO_KMH,
-    FILL_MAX_PASSES, CORRECTION_MIN_DIFF,
+    FILL_MAX_PASSES, CORRECTION_MIN_DIFF, MANUAL_CORRECTION_MIN_DIFF,
     MANUAL_CORRECT_THRESHOLD, AUTO_CORRECT_THRESHOLD,
     AUTO_SMOOTH_CLUSTER_MAX, AUTO_SMOOTH_DEVIATION_MULT,
     VITERBI_TRUSTED_BOUNDARY_CONFIDENCE, CORRECTION_MAX_ROUNDS,
@@ -34,7 +34,7 @@ from config import (
     REF_GUARD_PHYSICS_MIN, REF_GUARD_LINEARITY_MIN,
     DISTANT_INTERP_MIN_TIME, DISTANT_INTERP_ISLAND_THRESHOLD,
     FORCE_MEDIAN_WINDOW_TIME,
-    REF_INTERP_MAX_KMH_DIFF, MANUAL_REF_CONFIDENCE_MAX,
+    REF_INTERP_MAX_KMH_DIFF, MANUAL_REF_CONFIDENCE_MAX, REF_MIN_DIFF,
     VITERBI_POST_TRUST_THRESHOLD, TRUST_WINDOW_FALLBACK_MAX_DV,
     TRUST_WINDOW_TIME, FILL_CONFIDENCE_THRESHOLD, FILL_CANDIDATE_MAX_DIFF,
     FINAL_CONF_BLEND_PHASE1, FINAL_CONF_BLEND_VITERBI,
@@ -78,26 +78,45 @@ def _interp_candidate(i: int, rows: list, pinned_set: set, times: list,
 def _local_interp(i: int, rows: list, observations: list, times: list,
                   max_speed_kmh: float, fps: float = 1.0,
                   min_distance: int = 0,
-                  exclude_flags: set[int] | None = None) -> float | None:
+                  exclude_flags: set[int] | None = None,
+                  max_accel_mps2: float | None = None) -> float | None:
     """Interpolation using nearest 3+ digit neighbors (no trust required).
 
     If min_distance > 0, skips past neighbors within that many frames
     to find anchors outside a consistency island.
     If exclude_flags is given, anchors with those flag values are skipped
     (e.g. FILL_INTERP frames whose values are interpolation guesses and
-    must not contaminate later references)."""
+    must not contaminate later references).
+    If max_accel_mps2 is given, anchors must be physically consistent with
+    their immediate neighbors — a single wrong OCR value (e.g. 2744=17 vs
+    neighbors 170) must not become an interpolation anchor."""
     n = len(rows)
+    dv_frame = None
+    if max_accel_mps2 is not None and n >= 2:
+        dt_frame = times[1] - times[0] if times[1] > times[0] else 1.0 / max(fps, 1.0)
+        dv_frame = max_accel_mps2 * dt_frame * MPS_TO_KMH
+
+    def _valid_anchor(j: int) -> bool:
+        if not (j < len(observations) and observations[j] and rows[j][2] > 0):
+            return False
+        if exclude_flags and rows[j][3] in exclude_flags:
+            return False
+        if dv_frame is not None:
+            # 锚点与其紧邻有效帧（±2 帧）的差必须在物理范围内
+            for k in (j - 1, j + 1):
+                if 0 <= k < n and rows[k][2] >= 0:
+                    dt = abs(times[j] - times[k]) if times[k] != times[j] else 1.0 / max(fps, 1.0)
+                    if abs(rows[j][2] - rows[k][2]) > max_accel_mps2 * dt * MPS_TO_KMH * 2:
+                        return False
+        return True
+
     la = None
     for j in range(i - 1 - min_distance, -1, -1):
-        if j < len(observations) and observations[j] and rows[j][2] > 0:
-            if exclude_flags and rows[j][3] in exclude_flags:
-                continue
+        if _valid_anchor(j):
             la = j; break
     ra = None
     for j in range(i + 1 + min_distance, n):
-        if j < len(observations) and observations[j] and rows[j][2] > 0:
-            if exclude_flags and rows[j][3] in exclude_flags:
-                continue
+        if _valid_anchor(j):
             ra = j; break
     if la is None or ra is None:
         return None
@@ -187,7 +206,8 @@ def _generate_candidates(fi: int, rows: list, observations: list, raw_frames: li
                          max_speed_kmh: float, reocr_cache: dict,
                          split_results: dict[int, str] | None,
                          reocr_only: bool, fps: float,
-                         confidence_score: float) -> list[float]:
+                         confidence_score: float,
+                         max_accel_mps2: float | None = None) -> list[float]:
     raw_val = rows[fi][2]
     protected: list[float] = []
     protected_set: set[float] = set()
@@ -232,7 +252,7 @@ def _generate_candidates(fi: int, rows: list, observations: list, raw_frames: li
     if needs_interp:
         interp_val = _interp_candidate(fi, rows, pinned_set, times, max_speed_kmh, fps=fps)
         if interp_val is None:
-            interp_val = _local_interp(fi, rows, observations, times, max_speed_kmh, fps=fps)
+            interp_val = _local_interp(fi, rows, observations, times, max_speed_kmh, fps=fps, max_accel_mps2=max_accel_mps2)
         if interp_val is not None and interp_val not in protected_set and interp_val not in other_set:
             if raw_val < 0:
                 protected.append(interp_val); protected_set.add(interp_val)
@@ -412,7 +432,7 @@ def _auto_align_pass(rows: list, observations: list, times: list,
         cur_v = rows[i][2]
         # 参考插值排除所有自动修正帧（FILL/REOCR_AUTO/PARTIAL）：
         # 对齐基准只能来自未修正的原始值或信任锚点，避免被污染的修正值二次传播
-        interp = _local_interp(i, rows, observations, times, max_speed_kmh, fps=fps,
+        interp = _local_interp(i, rows, observations, times, max_speed_kmh, fps=fps, max_accel_mps2=max_accel_mps2,
                                exclude_flags={Flag.FILL_INTERP, Flag.REOCR_AUTO,
                                               Flag.PARTIAL_AUTO})
         if interp is None:
@@ -460,10 +480,16 @@ def _auto_align_pass(rows: list, observations: list, times: list,
 
 def _force_median_smooth(rows: list, times: list, max_speed_kmh: float,
                      max_accel_mps2: float, fps: float = 1.0,
-                     notes: dict[int, str] | None = None) -> int:
-    """Auto mode only: aggressive median-filter smoothing on ALL frames
-    regardless of flags. Goal is to minimize max_dv (frame-to-frame
-    speed change), not to match truth values.
+                     notes: dict[int, str] | None = None,
+                     corrected_only: bool = False) -> int:
+    """Median-filter smoothing pass.
+
+    Auto mode: on ALL frames regardless of flags — goal is to minimize
+    max_dv (frame-to-frame speed change), not to match truth values.
+    Manual mode (corrected_only=True): only on auto-corrected frames
+    (REOCR_AUTO/FILL), with the window restricted to RAW/trusted values —
+    pulls Viterbi/fill ramps back to correct neighbors without touching
+    correct raw frames.
 
     Uses iterative time-window sliding median: if the center value deviates
     from the local median by more than max_dv_per_frame * threshold_mult, it gets
@@ -482,10 +508,18 @@ def _force_median_smooth(rows: list, times: list, max_speed_kmh: float,
             v = rows[i][2]
             if v < 0:
                 continue
+            if corrected_only and not Flag.is_corrected(rows[i][3]):
+                continue  # 手动模式：只处理 Viterbi/fill 修正过的帧
             # Time-based median window
             med_look = max(1, int(FORCE_MEDIAN_WINDOW_TIME / max((times[1] - times[0]) if n >= 2 else 1/30, 1e-3)))
-            neighbors = [rows[j][2] for j in range(i - med_look, i + med_look + 1)
-                         if 0 <= j < n and rows[j][2] >= 0 and rows[j][3] != Flag.FILL_INTERP]
+            if corrected_only:
+                # 窗口只留原始值/信任锚点，排除所有自动修正值（避免互相确认）
+                neighbors = [rows[j][2] for j in range(i - med_look, i + med_look + 1)
+                             if 0 <= j < n and rows[j][2] >= 0
+                             and (rows[j][3] == Flag.RAW or Flag.is_trusted(rows[j][3]))]
+            else:
+                neighbors = [rows[j][2] for j in range(i - med_look, i + med_look + 1)
+                             if 0 <= j < n and rows[j][2] >= 0 and rows[j][3] != Flag.FILL_INTERP]
             if len(neighbors) < 3:
                 continue
             neighbors.sort()
@@ -577,7 +611,8 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
     for idx, fi in enumerate(sorted(correction_frames)):
         cands = _generate_candidates(fi, rows, observations, raw_frames, ocr, pinned_set,
             times, max_speed_kmh, cache, split_results, reocr_only=reocr_only,
-            fps=fps, confidence_score=conf_by_idx.get(fi, 50))
+            fps=fps, confidence_score=conf_by_idx.get(fi, 50),
+            max_accel_mps2=max_accel_mps2)
         if cands: candidates_by_frame[fi] = cands
         if progress_fn and total_correct > 0: progress_fn(idx + 1, total_correct)
 
@@ -643,16 +678,16 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
     if log_fn and n_filtered > 0:
         log_fn(f"  Filtered hundreds variants from {n_filtered} consistent 3-digit frames")
 
-    # Auto mode: build reference values for ALL non-trusted frames.
-    # Makes Viterbi prefer physics-based interpolation, catching more
-    # errors at the cost of potentially small over-corrections.
-    # Manual mode: only for very low confidence (conservative).
+    # Build reference values for ALL non-trusted frames (both modes).
+    # Manual mode previously limited this to conf<40, which left conf 40-70
+    # frames without reference protection — Viterbi's transition cost then
+    # pulled them into wrong ramps (measured 2731-cluster / 1115-cluster).
     #
-    # Guard: skip internally consistent frames (physics>=90 AND linearity>=90
-    # AND accel>=70). These frames agree with both their immediate neighbors
-    # AND the global speed profile — the raw OCR is almost certainly correct.
-    # Applying interpolation references to them causes false positives like
-    # 168→68 (subtract 100) across real speed jumps.
+    # Guard 1: skip internally consistent frames (physics>=90 AND linearity>=90
+    # AND accel>=70) — raw OCR almost certainly correct.
+    # Guard 2 (REF_MIN_DIFF): if raw already agrees with interpolation (<3),
+    # the frame is self-consistent — no reference (else Viterbi would be
+    # pulled off a correct raw by a ±1-2 off interpolation).
     reference_values: dict[int, float] = {}
     for i in range(n):
         if i in pinned_set or Flag.is_trusted(rows[i][3]): continue
@@ -663,44 +698,44 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
         if p >= REF_GUARD_PHYSICS_MIN and l >= REF_GUARD_LINEARITY_MIN and a >= 70:
             # All signals healthy → trust OCR, skip interpolation
             continue
-        if mode == "auto":
-            score = conf_by_idx.get(i, 50)
-            raw_v = rows[i][2]
-            ref = _local_interp(i, rows, observations, times, max_speed_kmh, fps=fps)
-            # For suspected island interiors (accel <= 15), the nearest
-            # neighbors may also be wrong. Try distant interpolation
-            # that skips past the island to reach correct anchor frames.
-            # Also add the distant interpolation as a candidate so Viterbi
-            # has a correct option to choose from.
-            if a <= ACCEL_SCORE_ISLAND_INTERIOR + 5 and raw_v > 0:
-                dt_frame = (times[1] - times[0]) if n >= 2 else 1/60
-                min_frames = max(1, int(DISTANT_INTERP_MIN_TIME / dt_frame))
-                distant = _local_interp(i, rows, observations, times, max_speed_kmh,
-                                        fps=fps, min_distance=min_frames)
-                if distant is not None and abs(distant - raw_v) > DISTANT_INTERP_ISLAND_THRESHOLD:
-                    # Island detected: local cluster differs from distant anchors
-                    ref = distant
-                    # Add distant interp as candidate if not already present
-                    if i in candidates_by_frame:
-                        if distant not in candidates_by_frame[i]:
-                            candidates_by_frame[i].append(distant)
-                    elif distant != raw_v:
-                        candidates_by_frame[i] = [raw_v, distant]
-            if ref is None:
-                ref = _interp_candidate(i, rows, pinned_set, times, max_speed_kmh, fps=fps)
-            # Safety: if interpolation is far from raw OCR (>50 km/h), the
-            # interpolation likely crosses a real speed change. Skip it to
-            # prevent false corrections (e.g., 168→68 across a speed jump).
-            # Exception: island interiors (sg <= 20) where large discrepancies
-            # are expected and indicate the raw value is wrong.
-            if ref is not None and raw_v > 0 and abs(ref - raw_v) > REF_INTERP_MAX_KMH_DIFF and a > ACCEL_SCORE_ISLAND_INTERIOR + 10:
-                ref = None
-            if ref is not None: reference_values[i] = ref
-        elif conf_by_idx.get(i, 50) < MANUAL_REF_CONFIDENCE_MAX:
-            ref = _local_interp(i, rows, observations, times, max_speed_kmh, fps=fps)
-            if ref is None:
-                ref = _interp_candidate(i, rows, pinned_set, times, max_speed_kmh, fps=fps)
-            if ref is not None: reference_values[i] = ref
+        raw_v = rows[i][2]
+        ref = _local_interp(i, rows, observations, times, max_speed_kmh, fps=fps, max_accel_mps2=max_accel_mps2)
+        # For suspected island interiors (accel <= 15), the nearest
+        # neighbors may also be wrong. Try distant interpolation
+        # that skips past the island to reach correct anchor frames.
+        # Auto mode only: manual mode keeps local references only —
+        # distant anchors may be contaminated (measured 2750-2758 ramp
+        # from a wrong distant ref at accel=10).
+        if mode == "auto" and a <= ACCEL_SCORE_ISLAND_INTERIOR + 5 and raw_v > 0:
+            dt_frame = (times[1] - times[0]) if n >= 2 else 1/60
+            min_frames = max(1, int(DISTANT_INTERP_MIN_TIME / dt_frame))
+            distant = _local_interp(i, rows, observations, times, max_speed_kmh,
+                                    fps=fps, min_distance=min_frames,
+                                    max_accel_mps2=max_accel_mps2)
+            if distant is not None and abs(distant - raw_v) > DISTANT_INTERP_ISLAND_THRESHOLD:
+                # Island detected: local cluster differs from distant anchors
+                ref = distant
+                # Add distant interp as candidate so Viterbi has a
+                # correct option to choose from.
+                if i in candidates_by_frame:
+                    if distant not in candidates_by_frame[i]:
+                        candidates_by_frame[i].append(distant)
+                elif distant != raw_v:
+                    candidates_by_frame[i] = [raw_v, distant]
+        if ref is None:
+            ref = _interp_candidate(i, rows, pinned_set, times, max_speed_kmh, fps=fps)
+        # Safety: if interpolation is far from raw OCR (>50 km/h), the
+        # interpolation likely crosses a real speed change. Skip it to
+        # prevent false corrections (e.g., 168→68 across a speed jump).
+        # Exception: island interiors (sg <= 20) where large discrepancies
+        # are expected and indicate the raw value is wrong.
+        if ref is not None and raw_v > 0 and abs(ref - raw_v) > REF_INTERP_MAX_KMH_DIFF and a > ACCEL_SCORE_ISLAND_INTERIOR + 10:
+            ref = None
+        # Guard 2: raw already agrees with interpolation → frame is
+        # self-consistent; a reference would only pull it ±1-2 off.
+        if ref is not None and raw_v > 0 and abs(ref - raw_v) < REF_MIN_DIFF:
+            ref = None
+        if ref is not None: reference_values[i] = ref
 
     trusted_set = pinned_set.copy()
     for i in range(n):
@@ -713,11 +748,31 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
     # ── When island candidates are present, limit to 1 round ──
     # Multi-round Viterbi can undo island corrections (r1 fixes 113→213,
     # r2 sees transition tension with uncorrected neighbors & reverts).
-    max_rounds = 1 if n_island_cands > 0 else CORRECTION_MAX_ROUNDS
-    if log_fn and n_island_cands > 0:
-        log_fn(f"  Island mode: {n_island_cands} frames with distant-interp, max {max_rounds} round(s)")
+    # Manual mode: single round only — round 2+ trust propagation lets
+    # wrong ramps confirm each other (r1 2747→11, r2 marks 2748 HT=11,
+    # then r2 ramps 2749-2758 toward it).
+    max_rounds = 1 if (n_island_cands > 0 or mode == "manual") else CORRECTION_MAX_ROUNDS
+    if log_fn and max_rounds == 1:
+        log_fn(f"  Island/manual mode: max 1 Viterbi round")
 
     for round_num in range(max_rounds):
+        # 手动模式：插值自洽帧锚定 raw（单候选）。
+        # 帧的 raw 与物理插值一致（差 < REF_MIN_DIFF）说明 raw 高可信；
+        # 若不锚定，Viterbi 转移代价会把它们拉进错误斜坡
+        # （实测 2749 raw=171 被改 71，随后 2750-2760 链式斜坡）。
+        if mode == "manual":
+            for _i in range(n):
+                _c = candidates_by_frame.get(_i)
+                if not _c or len(_c) <= 1:
+                    continue
+                _rv = rows[_i][2]
+                if _rv <= 0:
+                    continue
+                _ip = _local_interp(_i, rows, observations, times, max_speed_kmh,
+                                    fps=fps, max_accel_mps2=max_accel_mps2)
+                if _ip is not None and abs(_ip - _rv) < REF_MIN_DIFF:
+                    candidates_by_frame[_i] = [_rv]
+
         viterbi_result = viterbi_correct(rows, candidates_by_frame, confidence_scores,
             times, max_speed_kmh, max_accel_mps2, trusted_indices=trusted_set,
             reference_values=reference_values)
@@ -726,7 +781,11 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
         for fi, new_val in sorted(viterbi_result['corrected'].items()):
             if fi in pinned_set or Flag.is_trusted(rows[fi][3]): continue
             old_val = rows[fi][2]
-            if abs(new_val - old_val) <= CORRECTION_MIN_DIFF: continue
+            # 手动模式：±1 微调视为噪声（Viterbi 转移代价偏好平滑，会把
+            # 正确的 raw 微调 1-2）。手动模式只提交 ≥2 km/h 的实质修正；
+            # 自动模式保留小步长（平滑优先）。
+            min_diff = CORRECTION_MIN_DIFF if mode == "auto" else MANUAL_CORRECTION_MIN_DIFF
+            if abs(new_val - old_val) <= min_diff: continue
             rows[fi][2] = new_val
             if rows[fi][3] == Flag.RAW: rows[fi][3] = Flag.REOCR_AUTO
             if notes is not None: notes[fi] = f"viterbi(r{round_num+1}): {old_val:.0f}→{new_val:.0f}"
@@ -742,19 +801,20 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
             vc = viterbi_conf.get(i, 50)
             if vc < VITERBI_POST_TRUST_THRESHOLD and i in candidates_by_frame and len(candidates_by_frame[i]) > 1: continue
             trust_look = max(1, int(TRUST_WINDOW_TIME / max((times[1] - times[0]) if n >= 2 else 1/30, 1e-3)))
+            # 验证必须包含 REOCR_AUTO 邻居：跳过它们会留下验证空洞，
+            # 使严重错值（如 2744=17 vs 邻居 170）被错误标 HT，随后成为
+            # fill 的插值锚点并污染整段（2731-2761 斜坡的根因）。
             left_ok = True
             for j in range(i - 1, max(-1, i - 1 - trust_look), -1):
                 if j < 0: break
                 nbr_v = rows[j][2]
                 if nbr_v < 0: continue
-                if rows[j][3] == Flag.REOCR_AUTO: continue
                 if abs(v - nbr_v) > (i - j) * _dv: left_ok = False; break
             if not left_ok: continue
             right_ok = True
             for j in range(i + 1, min(n, i + 1 + trust_look)):
                 nbr_v = rows[j][2]
                 if nbr_v < 0: continue
-                if rows[j][3] == Flag.REOCR_AUTO: continue
                 if abs(nbr_v - v) > (j - i) * _dv: right_ok = False; break
             if not right_ok: continue
             rows[i][3] = Flag.HIGH_TRUST; trusted_set.add(i); round_trusted += 1
@@ -790,11 +850,13 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
     if log_fn and n_aligned > 0:
         log_fn(f"  Auto-align: {n_aligned} frames nudged")
 
-    # ── Auto mode only: forced SG smoothing ──
-    # Ignores all flags, applies aggressive median-filter smoothing
-    # to minimize max_dv (frame-to-frame speed change).
+    # ── Median smoothing ──
+    # Auto mode: aggressive, ALL frames (minimize max_dv).
+    # Manual mode: conservative, only auto-corrected frames (clean up
+    # Viterbi/fill ramps against RAW/trusted neighbors — protects d=0).
     if force_smooth:
-        n_forced = _force_median_smooth(rows, times, max_speed_kmh, max_accel_mps2, fps, notes)
+        n_forced = _force_median_smooth(rows, times, max_speed_kmh, max_accel_mps2, fps, notes,
+                                        corrected_only=(mode == "manual"))
         if log_fn and n_forced > 0:
             log_fn(f"  Force-SG: {n_forced} frame-nudges applied")
 
