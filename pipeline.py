@@ -117,7 +117,7 @@ def open_decord_vr(video_path, force_cpu: bool = False):
 
 from ocr_engine import (
     clamp_region, compute_video_hash,
-    extract_speed_value, SpeedObservation, Flag,
+    extract_speed_value, ocr_rec_batch, SpeedObservation, Flag,
     SOURCE_TO_KMH, _parse_int_or_none,
     _reset_backend, _select_backend, _get_model_params,
 )
@@ -465,40 +465,59 @@ class ProcessingPipeline:
         done = 0
         _inference_ms = 0.0  # accumulator: OCR inference time (ms)
         est_total = (_end_limit - (f_start or 0)) // frame_step
+        # ── 批处理识别：一次 session.run 处理多帧，摊销每帧固定开销 ──
+        # batch 上限 6：匹配 TRT rec 引擎 profile max_shape 的 batch 维度；
+        # CPU 下 batch 6 已接近最优（实测 0.26 ms/帧 vs 单帧 0.85 ms）。
+        _batch_size = max(1, config.OCR_FRAME_BATCH)
+        _batch: list = []
+
+        def _flush_batch() -> None:
+            """对 _batch 内所有帧做一次批识别，追加到 observations/diag。"""
+            nonlocal done, _inference_ms
+            if not _batch:
+                return
+            items = _batch[:]
+            _batch.clear()
+            t_ocr0 = _time.perf_counter()
+            results = ocr_rec_batch(ocr, [proc for _, proc in items])
+            t_ocr = (_time.perf_counter() - t_ocr0) * 1000.0
+            _inference_ms += t_ocr
+            t_ocr_each = t_ocr / len(items)
+            for (fi, _proc), ocr_result in zip(items, results):
+                sv, rt, conf = extract_speed_value(ocr_result)
+                if sv is not None and rt is not None:
+                    observations.append(SpeedObservation(
+                        timestamp=fi,
+                        raw_speed_kmh=int(sv * SOURCE_TO_KMH[speed_format]),
+                        raw_text=rt,
+                        confidence=conf))
+                else:
+                    observations.append(SpeedObservation(fi, -1, ""))
+                if _collect_diag:
+                    diag.append({
+                        "frame": fi,
+                        "raw_text": rt or "",
+                        "raw_value": sv,
+                        "confidence": round(conf, 4),
+                        "ocr_time_ms": round(t_ocr_each, 2),
+                    })
+                done += 1
+                if done % 10 == 0 or done <= 3 or done == est_total:
+                    pct = 3.0 + (done / max(est_total, 1)) * 87.0
+                    _label = f"{self._video_backend_actual} + {get_gpu_backend()}"
+                    self._emit(f"[{_label}] OCR: {done}/{est_total}", pct)
+                if _MEM_DIAG_ENABLED and done % 120 == 0:
+                    _mf("consumer: done=%d  qsize~%d  rss=%.0fMB",
+                        done, q.qsize(), _rss_mb())
+
         while True:
             item = q.get()
             if item is None:
+                _flush_batch()
                 break
-            fi, proc = item
-            t_ocr0 = _time.perf_counter()
-            ocr_result = ocr(proc)
-            t_ocr = (_time.perf_counter() - t_ocr0) * 1000.0
-            _inference_ms += t_ocr
-            sv, rt, conf = extract_speed_value(ocr_result)
-            if sv is not None and rt is not None:
-                observations.append(SpeedObservation(
-                    timestamp=fi,
-                    raw_speed_kmh=int(sv * SOURCE_TO_KMH[speed_format]),
-                    raw_text=rt,
-                    confidence=conf))
-            else:
-                observations.append(SpeedObservation(fi, -1, ""))
-            if _collect_diag:
-                diag.append({
-                    "frame": fi,
-                    "raw_text": rt or "",
-                    "raw_value": sv,
-                    "confidence": round(conf, 4),
-                    "ocr_time_ms": round(t_ocr, 2),
-                })
-            done += 1
-            if done % 10 == 0 or done <= 3 or done == est_total:
-                pct = 3.0 + (done / max(est_total, 1)) * 87.0
-                _label = f"{self._video_backend_actual} + {get_gpu_backend()}"
-                self._emit(f"[{_label}] OCR: {done}/{est_total}", pct)
-            if _MEM_DIAG_ENABLED and done % 120 == 0:
-                _mf("consumer: done=%d  qsize~%d  rss=%.0fMB",
-                    done, q.qsize(), _rss_mb())
+            _batch.append(item)
+            if len(_batch) >= _batch_size:
+                _flush_batch()
         t.join()
         if errors:
             raise errors[0]

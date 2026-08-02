@@ -22,6 +22,7 @@ DEFAULT_BUFFER_SIZE: int = 16          # 生产者-消费者队列缓冲大小
 DEFAULT_LOG_LEVEL: str = "normal"      # 日志级别 (normal / detailed / debug)
 DEFAULT_CORRECTION_MODE: str = "auto"  # 纠错模式 (auto / manual)
 OCR_REC_BATCH_NUM: int = 12            # OCR 识别批处理大小
+OCR_FRAME_BATCH: int = 6               # 帧批处理大小（≤6 兼容 TRT profile 上限）
 
 # ═══════════════════ 图表颜色 ═══════════════════
 COLOR_BLUE: str = "#2196F3"
