@@ -225,10 +225,13 @@ _EXCLUDE_BINARIES = {
     'avdevice-60.dll', 'avfilter-9.dll', 'postproc-57.dll',
     # opencv (removed from project, exclude if caught transitively)
     'opencv_world480.dll', 'opencv_world490.dll',
-    # FFmpeg 4.x DLLs (PyPI decord; self-built decord uses 5.x)
+    # Stale FFmpeg DLLs (PyPI decord 4.x + previous self-build 5.x)
     'avcodec-58.dll', 'avformat-58.dll', 'avutil-56.dll',
     'avfilter-7.dll', 'avdevice-58.dll', 'swresample-3.dll',
     'swscale-5.dll', 'postproc-55.dll',
+    'avcodec-59.dll', 'avformat-59.dll', 'avutil-57.dll',
+    'avfilter-8.dll', 'avdevice-59.dll', 'swresample-4.dll',
+    'swscale-6.dll', 'postproc-56.dll',
     # opencv bundled FFmpeg (decord handles all video I/O)
     'opencv_videoio_ffmpeg500_64.dll', 'opencv_videoio_ffmpeg490_64.dll',
     'opencv_videoio_ffmpeg480_64.dll',
@@ -248,9 +251,9 @@ coll = COLLECT(
     upx_exclude=[
         'onnxruntime.dll',
         'onnxruntime_providers_shared.dll',
-        # decord FFmpeg 5.x DLLs (UPX may corrupt)
-        'avcodec-59.dll', 'avformat-59.dll', 'avutil-57.dll',
-        'swresample-4.dll', 'swscale-6.dll',
+        # decord FFmpeg 8.x DLLs (UPX may corrupt)
+        'avcodec-62.dll', 'avformat-62.dll', 'avutil-60.dll',
+        'swresample-6.dll', 'swscale-9.dll',
     ],
     name='RaceVideoToLog',
 )

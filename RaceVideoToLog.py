@@ -68,8 +68,8 @@ def main() -> None:
                         for a in parser._actions if a.dest != "help"}
         for key, val in csv_settings.items():
             dest = csv_field_dest(key)
-            if dest is None:
-                continue
+            if dest is None or not hasattr(args, dest):
+                continue  # read-only fields (fps/codec) or unknown — skip
             cur = getattr(args, dest)
             if cur != _defaults.get(dest):
                 continue  # user explicitly overrode — skip
