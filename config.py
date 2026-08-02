@@ -124,6 +124,7 @@ VITERBI_POST_TRUST_THRESHOLD: int = 70     # Viterbi 后信任判定最低分数
 TRUST_WINDOW_FALLBACK_MAX_DV: float = 8.0  # 信任窗口 fallback max_dv (km/h)
 TRUST_NEIGHBOR_SEARCH_WINDOW: int = 3      # 信任传播邻居搜索窗口（每侧3帧）
 FILL_CONFIDENCE_THRESHOLD: int = 30        # Fill 阶段的置信度阈值
+FILL_CANDIDATE_MAX_DIFF: int = 12          # fill 候选优先的最大差值（与插值的距离保护）
 FINAL_CONF_BLEND_PHASE1: float = 0.7       # 最终置信度中 Phase 1 权重
 FINAL_CONF_BLEND_VITERBI: float = 0.3      # 最终置信度中 Viterbi 权重
 

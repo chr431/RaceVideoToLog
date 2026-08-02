@@ -36,7 +36,7 @@ from config import (
     FORCE_MEDIAN_WINDOW_TIME,
     REF_INTERP_MAX_KMH_DIFF, MANUAL_REF_CONFIDENCE_MAX,
     VITERBI_POST_TRUST_THRESHOLD, TRUST_WINDOW_FALLBACK_MAX_DV,
-    TRUST_WINDOW_TIME, FILL_CONFIDENCE_THRESHOLD,
+    TRUST_WINDOW_TIME, FILL_CONFIDENCE_THRESHOLD, FILL_CANDIDATE_MAX_DIFF,
     FINAL_CONF_BLEND_PHASE1, FINAL_CONF_BLEND_VITERBI,
 )
 
@@ -77,19 +77,27 @@ def _interp_candidate(i: int, rows: list, pinned_set: set, times: list,
 
 def _local_interp(i: int, rows: list, observations: list, times: list,
                   max_speed_kmh: float, fps: float = 1.0,
-                  min_distance: int = 0) -> float | None:
+                  min_distance: int = 0,
+                  exclude_flags: set[int] | None = None) -> float | None:
     """Interpolation using nearest 3+ digit neighbors (no trust required).
 
     If min_distance > 0, skips past neighbors within that many frames
-    to find anchors outside a consistency island."""
+    to find anchors outside a consistency island.
+    If exclude_flags is given, anchors with those flag values are skipped
+    (e.g. FILL_INTERP frames whose values are interpolation guesses and
+    must not contaminate later references)."""
     n = len(rows)
     la = None
     for j in range(i - 1 - min_distance, -1, -1):
         if j < len(observations) and observations[j] and rows[j][2] > 0:
+            if exclude_flags and rows[j][3] in exclude_flags:
+                continue
             la = j; break
     ra = None
     for j in range(i + 1 + min_distance, n):
         if j < len(observations) and observations[j] and rows[j][2] > 0:
+            if exclude_flags and rows[j][3] in exclude_flags:
+                continue
             ra = j; break
     if la is None or ra is None:
         return None
@@ -245,11 +253,23 @@ def _generate_candidates(fi: int, rows: list, observations: list, raw_frames: li
 def _fill_unrecoverable(rows: list, pinned_set: set, error_set: set, times: list,
                         max_speed_kmh: float, max_accel_mps2: float, fps: float = 1.0,
                         progress_fn: "Callable | None" = None,
-                        notes: dict[int, str] | None = None) -> None:
+                        notes: dict[int, str] | None = None,
+                        candidates_by_frame: dict[int, list[float]] | None = None,
+                        conservative: bool = False) -> None:
+    """Fill frames that Viterbi could not recover.
+
+    conservative=True (manual mode): only fill truly unreadable frames
+    (raw<0 or raw>max_speed). Readable-but-wrong frames keep their raw
+    value so outliers stay visible for manual correction — interpolation
+    guesses trade small bias for a smooth-but-wrong ramp.
+    """
     n = len(rows)
     sorted_errors = sorted(i for i in error_set if i not in pinned_set and not Flag.is_trusted(rows[i][3]))
     total = len(sorted_errors)
     for idx, i in enumerate(sorted_errors):
+        raw_v = rows[i][2]
+        if conservative and 0 <= raw_v <= max_speed_kmh:
+            continue  # 可读帧保留原始值，离群留给人工
         la = None
         for j in range(i - 1, -1, -1):
             if Flag.is_trusted(rows[j][3]) and 0 <= rows[j][2] <= max_speed_kmh:
@@ -262,18 +282,34 @@ def _fill_unrecoverable(rows: list, pinned_set: set, error_set: set, times: list
                 ra = j; break
         left_dt = max(times[i] - lt, 1e-3)
         left_max_dv = max_accel_mps2 * left_dt * MPS_TO_KMH
+        lo, hi = 0.0, max_speed_kmh
+        interp = lv
         if ra is not None:
             rv = rows[ra][2]; rt = rows[ra][0] / fps
             right_dt = max(rt - times[i], 1e-3)
             right_max_dv = max_accel_mps2 * right_dt * MPS_TO_KMH
-            lo = max(0.0, lv - left_max_dv, rv - right_max_dv)
-            hi = min(max_speed_kmh, lv + left_max_dv, rv + right_max_dv)
+            lo = max(lo, lv - left_max_dv, rv - right_max_dv)
+            hi = min(hi, lv + left_max_dv, rv + right_max_dv)
             interp = lv + (rv - lv) * (left_dt / max(left_dt + right_dt, 1e-3))
-            val = round(max(lo, min(hi, interp)))
         else:
-            lo = max(0.0, lv - left_max_dv)
-            hi = min(max_speed_kmh, lv + left_max_dv)
-            val = round(max(lo, min(hi, lv)))
+            lo = max(lo, lv - left_max_dv)
+            hi = min(hi, lv + left_max_dv)
+        if hi < lo:  # 锚点物理不可达（急刹）：收敛到可达区间中点，避免越界
+            val = int((lo + hi) / 2 + 0.5)
+        else:
+            # 候选优先：re-OCR 读出的正确值（物理可达且接近插值时）优于纯插值猜测
+            # 距离保护：re-OCR 错误候选（如 132 vs 插值 112）不得覆盖合理插值
+            cands = candidates_by_frame.get(i) if candidates_by_frame else None
+            val = None
+            if cands:
+                in_range = [c for c in cands
+                            if lo - 0.5 <= c <= hi + 0.5
+                            and abs(c - interp) <= FILL_CANDIDATE_MAX_DIFF]
+                if in_range:
+                    # 选最接近插值点的候选（re-OCR 值优先，插值作为 tie-break）
+                    val = min(in_range, key=lambda c: abs(c - interp))
+            if val is None:
+                val = int(max(lo, min(hi, interp)) + 0.5)  # +0.5: 避免 banker's rounding
         rows[i][2] = int(val)
         if rows[i][3] == Flag.RAW:
             rows[i][3] = Flag.FILL_INTERP
@@ -374,7 +410,11 @@ def _auto_align_pass(rows: list, observations: list, times: list,
             continue
 
         cur_v = rows[i][2]
-        interp = _local_interp(i, rows, observations, times, max_speed_kmh, fps=fps)
+        # 参考插值排除所有自动修正帧（FILL/REOCR_AUTO/PARTIAL）：
+        # 对齐基准只能来自未修正的原始值或信任锚点，避免被污染的修正值二次传播
+        interp = _local_interp(i, rows, observations, times, max_speed_kmh, fps=fps,
+                               exclude_flags={Flag.FILL_INTERP, Flag.REOCR_AUTO,
+                                              Flag.PARTIAL_AUTO})
         if interp is None:
             # Try trusted-neighbor interpolation as fallback
             pinned_set = {j for j in range(n) if Flag.is_trusted(rows[j][3])}
@@ -444,7 +484,8 @@ def _force_median_smooth(rows: list, times: list, max_speed_kmh: float,
                 continue
             # Time-based median window
             med_look = max(1, int(FORCE_MEDIAN_WINDOW_TIME / max((times[1] - times[0]) if n >= 2 else 1/30, 1e-3)))
-            neighbors = [rows[j][2] for j in range(i - med_look, i + med_look + 1) if 0 <= j < n and rows[j][2] >= 0]
+            neighbors = [rows[j][2] for j in range(i - med_look, i + med_look + 1)
+                         if 0 <= j < n and rows[j][2] >= 0 and rows[j][3] != Flag.FILL_INTERP]
             if len(neighbors) < 3:
                 continue
             neighbors.sort()
@@ -732,7 +773,8 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
         for fill_pass in range(FILL_MAX_PASSES):
             if not remaining_errors: break
             _fill_unrecoverable(rows, pinned_set, remaining_errors, times,
-                max_speed_kmh, max_accel_mps2, fps, progress_fn=progress_fn, notes=notes)
+                max_speed_kmh, max_accel_mps2, fps, progress_fn=progress_fn, notes=notes,
+                candidates_by_frame=candidates_by_frame)
             if log_fn: log_fn(f"  Fill pass {fill_pass+1}: {len(remaining_errors)} frames")
             remaining_errors = {i for i in range(n)
                 if i not in trusted_set and i not in pinned_set
@@ -742,7 +784,7 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
     n_smoothed = _smoothness_pass(rows, times, max_speed_kmh, max_accel_mps2, fps, notes)
     if log_fn and n_smoothed > 0: log_fn(f"  Smoothness: {n_smoothed} spikes smoothed")
 
-    # ── SG-guided alignment (both modes) ──
+    # ── SG-guided alignment (both modes; reference excludes FILL frames) ──
     n_aligned = _auto_align_pass(rows, observations, times, max_speed_kmh,
                                  max_accel_mps2, fps, confidence_scores, notes)
     if log_fn and n_aligned > 0:
