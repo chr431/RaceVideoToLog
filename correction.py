@@ -500,6 +500,12 @@ def _force_median_smooth(rows: list, times: list, max_speed_kmh: float,
     total_smoothed = 0
     dry_passes = 0  # consecutive passes with very few changes
 
+    # 窗口值来源：手动（corrected_only）只留原始/信任锚点（清理斜坡时
+    # 排除自动修正值，避免互相确认）；自动全帧平滑（排除 FILL 猜测值）。
+    window_ok = ((lambda r: r[3] == Flag.RAW or Flag.is_trusted(r[3]))
+                 if corrected_only else
+                 (lambda r: r[3] != Flag.FILL_INTERP))
+
     for _pass in range(FORCE_MEDIAN_MAX_ITERATIONS):
         changed = 0
         for i in range(2, n - 2):
@@ -510,14 +516,8 @@ def _force_median_smooth(rows: list, times: list, max_speed_kmh: float,
                 continue  # 手动模式：只处理 Viterbi/fill 修正过的帧
             # Time-based median window
             med_look = max(1, int(FORCE_MEDIAN_WINDOW_TIME / max((times[1] - times[0]) if n >= 2 else 1/30, 1e-3)))
-            if corrected_only:
-                # 窗口只留原始值/信任锚点，排除所有自动修正值（避免互相确认）
-                neighbors = [rows[j][2] for j in range(i - med_look, i + med_look + 1)
-                             if 0 <= j < n and rows[j][2] >= 0
-                             and (rows[j][3] == Flag.RAW or Flag.is_trusted(rows[j][3]))]
-            else:
-                neighbors = [rows[j][2] for j in range(i - med_look, i + med_look + 1)
-                             if 0 <= j < n and rows[j][2] >= 0 and rows[j][3] != Flag.FILL_INTERP]
+            neighbors = [rows[j][2] for j in range(i - med_look, i + med_look + 1)
+                         if 0 <= j < n and rows[j][2] >= 0 and window_ok(rows[j])]
             if len(neighbors) < 3:
                 continue
             neighbors.sort()
