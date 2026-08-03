@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QStackedWidget, QSpinBox,
 )
 from PySide6.QtCore import Qt
-from qfluentwidgets import (PushButton, PrimaryPushButton, CompactSpinBox,
+from qfluentwidgets import (PushButton, PrimaryPushButton, CompactSpinBox, isDarkTheme,
     RadioButton, CheckBox, BodyLabel, Slider, CaptionLabel)
 from widget_utils import make_static_card, setup_chart_zoom_pan, make_int_spinbox
 
