@@ -15,11 +15,24 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 from qfluentwidgets import (PushButton, PrimaryPushButton, CompactSpinBox,
     RadioButton, CheckBox, BodyLabel, Slider, CaptionLabel)
-from widget_utils import make_static_card, setup_chart_zoom_pan
+from widget_utils import make_static_card, setup_chart_zoom_pan, make_int_spinbox
 
 from analysis import parse_csv, smooth_data, plot_segmented
 import config
 from config import (COLOR_BLUE, COLOR_ORANGE, COLOR_GREEN, MPS_TO_KMH, chart_colors)
+
+
+def _shift_csv(times, dists, speeds, flags, offset: int):
+    """按帧偏移做循环卷绕（一整圈语义）：负偏移 = 前 |offset| 帧移到末尾。
+
+    offset 单位为帧（CSV 行索引位移），越界部分卷绕到另一端。
+    返回新顺序的 (times, dists, speeds, flags)，不修改原数据。
+    """
+    if not offset or not times:
+        return times, dists, speeds, flags
+    k = (-offset) % len(times)
+    return (times[k:] + times[:k], dists[k:] + dists[:k],
+            speeds[k:] + speeds[:k], flags[k:] + flags[:k])
 
 
 def _read_fps(path: str) -> float:
@@ -82,12 +95,8 @@ class AnalysisTab:
             self._labels.append(lbl)
             sl.addWidget(lbl)
             off_label = CaptionLabel("偏移")
-            off_spin = QSpinBox()
-            off_spin.setRange(-99999, 99999)
-            off_spin.setValue(0)
-            off_spin.setFixedWidth(84)
-            off_spin.setSuffix(" 帧")
-            off_spin.setToolTip("帧偏移：正数整体右移，负数整体左移（对齐起跑线等）。不修改 CSV 内容。")
+            off_spin = make_int_spinbox(-99999, 99999, 0, 84)
+            off_spin.setToolTip("帧偏移（循环）：正数右移、负数左移，越界部分卷绕到另一端。 不修改 CSV 内容。")
             off_spin.valueChanged.connect(
                 lambda v, idx=i: (self._offsets.__setitem__(idx, v), self._invalidate_and_render()))
             sl.addWidget(off_label)
@@ -261,9 +270,30 @@ class AnalysisTab:
         delta_text.set_text(f"← 拖拽选择范围查看{delta_label}")
 
         # ── 悬停竖线 + 最近数据点速度（仅 v-t / v-x，Δt-x 保持原样）──
+        # blit 增量重绘：只重画竖线和文本，避免整图重绘（数据点多时跟手）
         import bisect
         hover_line = ax.axvline(0, color=config.COLOR_GRAY, linewidth=0.8,
                                 linestyle="--", alpha=0.7, visible=False)
+        hover_bg = [None]
+
+        def _save_hover_bg(event: object) -> None:
+            if event.canvas is canvas:
+                try:
+                    hover_bg[0] = canvas.copy_from_bbox(ax.bbox)
+                except Exception:
+                    hover_bg[0] = None
+
+        def _hover_redraw() -> None:
+            if hover_bg[0] is not None:
+                try:
+                    canvas.restore_region(hover_bg[0])
+                    ax.draw_artist(hover_line)
+                    ax.draw_artist(delta_text)
+                    canvas.blit(ax.bbox)
+                    return
+                except Exception:
+                    pass
+            canvas.draw_idle()
 
         def _on_motion(event: object) -> None:
             if is_dtx:
@@ -273,7 +303,7 @@ class AnalysisTab:
                 hover_line.set_visible(False)
                 if not selected:
                     delta_text.set_text(f"← 拖拽选择范围查看{delta_label}")
-                canvas.draw_idle()
+                _hover_redraw()
                 return
             if selected:
                 hover_line.set_visible(False)  # 拖选后保持区间信息
@@ -294,9 +324,10 @@ class AnalysisTab:
                 v = all_y[i][pos]
                 lines.append(f"{n}: {v:.0f} km/h" if v >= 0 else f"{n}: 无效")
             delta_text.set_text(chr(10).join(lines) if lines else "")
-            canvas.draw_idle()
+            _hover_redraw()
 
         canvas.mpl_connect("motion_notify_event", _on_motion)
+        canvas.mpl_connect("draw_event", _save_hover_bg)
 
         # 滚轮缩放 + 右键平移
         setup_chart_zoom_pan(ax, canvas, throttle_ms=0)
@@ -349,11 +380,10 @@ class AnalysisTab:
                     return
                 t1, d1, s1, _ = parse_csv(self._csvs[0])
                 t2, d2, s2, _ = parse_csv(self._csvs[1])
-                # 帧偏移（GUI only）：时间轴平移对齐起跑线，不改 CSV 内容
-                if self._offsets[0] and self._fps[0] > 0:
-                    t1 = [x + self._offsets[0] / self._fps[0] for x in t1]
-                if self._offsets[1] and self._fps[1] > 0:
-                    t2 = [x + self._offsets[1] / self._fps[1] for x in t2]
+                # 帧偏移（GUI only，循环卷绕）：时间轴循环平移对齐起跑线，
+                # 越界部分卷绕到另一端（一整圈语义）；不修改 CSV 内容。
+                t1, d1, s1, _ = _shift_csv(t1, d1, s1, self._offsets[0])
+                t2, d2, s2, _ = _shift_csv(t2, d2, s2, self._offsets[1])
                 t2_interp = np.interp(d1, d2, t2)
                 dt = np.array(t1) - t2_interp
                 all_x[0] = d1; all_y[0] = dt.tolist()
@@ -370,9 +400,13 @@ class AnalysisTab:
                         times, dists, speeds, flags = parse_csv(csv_path)
                         self._fps[i] = _read_fps(csv_path)
                         name = Path(csv_path).stem
+                        # 循环卷绕偏移（帧 = 索引位移），v-x 时新 t=0 点为 x=0
+                        times, dists, speeds, flags = _shift_csv(
+                            times, dists, speeds, flags, self._offsets[i])
                         x_data = times if is_vt else dists
-                        if is_vt and self._offsets[i] and self._fps[i] > 0:
-                            x_data = [x + self._offsets[i] / self._fps[i] for x in x_data]
+                        if not is_vt and self._offsets[i]:
+                            base = dists[0]
+                            x_data = [d - base for d in dists]
                         all_x[i] = x_data; all_y[i] = speeds
                         all_flags[i] = flags
                         all_raw[i] = (x_data, speeds, flags)

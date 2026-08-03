@@ -205,6 +205,77 @@ class ReviewDialog(QDialog):
     def _setup_chart_zoom_pan(self, ax, canvas) -> None:
         self._user_zoomed_ref, self._saved_limits = setup_chart_zoom_pan(
             ax, canvas, throttle_ms=40)
+        self._setup_hover(ax, canvas)
+
+    def _setup_hover(self, ax, canvas) -> None:
+        """悬停竖线 + 左上角显示鼠标位置最近数据点的速度（blit 增量重绘）。
+
+        图表 clear 重建后需重新挂载（_redraw_chart rebuild 分支调用）。
+        """
+        import bisect
+        # 断开旧的 motion handler（重建时避免重复连接）
+        for cid in getattr(self, '_hover_cids', []):
+            try:
+                canvas.mpl_disconnect(cid)
+            except Exception:
+                pass
+        hover_line = ax.axvline(0, color=config.COLOR_GRAY, linewidth=0.8,
+                                linestyle="--", alpha=0.7, visible=False)
+        hover_text = ax.text(0.02, 0.97, "", transform=ax.transAxes,
+                             va="top", fontsize=9, color=config.COLOR_FG_LIGHT,
+                             bbox=dict(boxstyle="round,pad=0.3",
+                                       facecolor="white", alpha=0.8))
+        hover_bg = [None]
+
+        def _save_bg(event) -> None:
+            if event.canvas is canvas:
+                try:
+                    hover_bg[0] = canvas.copy_from_bbox(ax.bbox)
+                except Exception:
+                    hover_bg[0] = None
+
+        def _redraw() -> None:
+            if hover_bg[0] is not None:
+                try:
+                    canvas.restore_region(hover_bg[0])
+                    ax.draw_artist(hover_line)
+                    ax.draw_artist(hover_text)
+                    canvas.blit(ax.bbox)
+                    return
+                except Exception:
+                    pass
+            canvas.draw_idle()
+
+        def _on_motion(event) -> None:
+            cache = getattr(self, '_chart_cache', None)
+            if event.xdata is None:
+                hover_line.set_visible(False)
+                hover_text.set_text("")
+                _redraw()
+                return
+            if not cache:
+                return
+            times = cache.get('times') or []
+            speeds = cache.get('speeds') or []
+            if not times:
+                return
+            pos = bisect.bisect_left(times, event.xdata)
+            if pos >= len(times):
+                pos = len(times) - 1
+            elif pos > 0 and abs(times[pos - 1] - event.xdata) < abs(times[pos] - event.xdata):
+                pos -= 1
+            hover_line.set_visible(True)
+            hover_line.set_xdata([event.xdata, event.xdata])
+            v = speeds[pos]
+            hover_text.set_text(f"#{int(times[pos])}: {v:.0f} km/h"
+                                if v >= 0 else f"#{int(times[pos])}: 无效")
+            _redraw()
+
+        cids = [canvas.mpl_connect("motion_notify_event", _on_motion),
+                canvas.mpl_connect("draw_event", _save_bg)]
+        self._hover_cids = cids
+        self._hover_line = hover_line
+        self._hover_text = hover_text
 
     def _redraw_chart(self, ax=None, fig=None) -> None:
         if ax is None:
@@ -245,6 +316,7 @@ class ReviewDialog(QDialog):
         if needs_rebuild:
             ax.clear()
             self._chart_params = {'dark': dark, 'bg': bg, 'fg': fg}
+            self._setup_hover(ax, self._canvas)
             self._chart_artists = {}
 
             # 低置信度背景 span
