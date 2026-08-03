@@ -219,6 +219,7 @@ class ModPlotWidget(pg.PlotWidget):
     """
 
     sig_drag_range = Signal(float, float)
+    sig_drag_click = Signal(float)
 
     def __init__(self, *args, **kwargs):
         vb = _RegionViewBox()
@@ -226,6 +227,7 @@ class ModPlotWidget(pg.PlotWidget):
         super().__init__(*args, **kwargs)
         self._region_vb = vb
         vb.sig_drag_range.connect(self.sig_drag_range)
+        vb.sig_drag_click.connect(self.sig_drag_click)
 
     def wheelEvent(self, ev):
         mods = ev.modifiers()

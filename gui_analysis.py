@@ -266,7 +266,7 @@ class AnalysisTab:
             xmin_v, xmax_v = vb.viewRange()[0]
             ymin_v, ymax_v = vb.viewRange()[1]
             delta_text.setPos(xmax_v, ymax_v)  # 右上角
-            delta_text.setVisible(bool(text))
+            delta_text.setVisible(True)  # 常驻右上（提示或统计）
 
         # ── 悬停竖线 + 最近点速度（仅 v-t / v-x）──
         hover_line = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen(
@@ -350,6 +350,7 @@ class AnalysisTab:
         delta_text.setAnchor((1, 1))
         delta_text.setPos(xmax0, 0)
         delta_text.setText("← 右键拖拽选择范围，点击选区外取消")
+        delta_text.setVisible(True)  # 初始提示可见
 
     def _render(self) -> None:
         """高性能渲染：缓存 CSV 解析结果，smooth 变化时仅更新线数据。
