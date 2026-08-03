@@ -10,7 +10,7 @@ import numpy as np
 
 from PySide6.QtWidgets import (
     QWidget, QFileDialog, QMessageBox, QHBoxLayout, QVBoxLayout, QGridLayout,
-    QStackedWidget, QLineEdit,
+    QStackedWidget,
 )
 from PySide6.QtCore import Qt
 from qfluentwidgets import (PushButton, PrimaryPushButton, CompactSpinBox,
@@ -179,7 +179,7 @@ class AnalysisTab:
 
 
     def _setup_chart_interactions(self, ax, canvas, all_x, all_y, is_dtx, is_vt,
-                                    delta_label, label, name1, name2):
+                                    delta_label, label):
         """配置图表交互：SpanSelector 范围选择 + 缩放/平移。"""
         delta_text = ax.text(0.02, 0.97, "", transform=ax.transAxes,
             va="top", fontsize=9, color="#333333",
@@ -276,7 +276,7 @@ class AnalysisTab:
             all_y: list[list[float]] = [[], [], []]
             all_flags: list[list[int]] = [[], [], []]
             all_raw: list = [None, None, None]
-            name1 = name2 = label = ""
+            label = ""
             has_data = False
 
             if is_dtx:

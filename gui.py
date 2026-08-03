@@ -22,7 +22,7 @@ from PySide6.QtGui import (
 
 from ocr_engine import (
     VideoMetadata, Flag,
-    codec_from_fourcc, format_duration,
+    format_duration,
     _reset_backend, _select_backend, _get_model_params,
 )
 from gui_analysis import AnalysisTab
@@ -55,7 +55,6 @@ class RaceVideoToLogApp(QMainWindow):
         self._preview_frame_no: int = 0
         self._throttle_timer: QTimer | None = None
         self.ocr_engine: "RapidOCR | None" = None
-        self.ocr_engines: list = []
 
         self._export_thread: ExportThread | None = None
         self.correction_mode: str = config.DEFAULT_CORRECTION_MODE
@@ -288,10 +287,6 @@ class RaceVideoToLogApp(QMainWindow):
         def _update_icon(dark: bool) -> None:
             self._theme_btn.setText("☀" if not dark else "☾")
         ThemeManager.register(_update_icon)
-        # 数据分析 matplotlib
-        if hasattr(self, "_analysis_tab"):
-            tab = self._analysis_tab
-            ThemeManager.register(lambda dark: tab._sync_figure_theme())
 
     def _toggle_theme(self) -> None:
         from qfluentwidgets import qconfig
@@ -525,10 +520,10 @@ class RaceVideoToLogApp(QMainWindow):
         return RapidOCR(params=all_params)
 
     def _release_engines(self) -> None:
-        for e in ([self.ocr_engine] if self.ocr_engine else []) + self.ocr_engines:
+        for e in ([self.ocr_engine] if self.ocr_engine else []):
             try: del e
             except Exception: pass
-        self.ocr_engine = None; self.ocr_engines.clear()
+        self.ocr_engine = None
         import gc; gc.collect()
 
     # ═══════════════════ 导出 ═══════════════════
@@ -705,7 +700,6 @@ class RaceVideoToLogApp(QMainWindow):
         out = getattr(self, "_review_output_path", None)
         if pipeline is None or out is None:
             return
-        from gui_review import ReviewDialog
         rows = pipeline._rows
         confidences = getattr(pipeline, '_confidences', None)
         if confidences is None:

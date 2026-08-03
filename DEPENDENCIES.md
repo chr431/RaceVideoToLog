@@ -24,7 +24,7 @@
 | cuda-python | 13.3.1 | [cuda-python](https://pypi.org/project/cuda-python/) | CUDA Python 绑定（~33MB） |
 | CUDA Toolkit | 12.9 | [NVIDIA 官网](https://developer.nvidia.com/cuda-downloads) | 提供 cudart, cublas 等 DLL（系统 PATH） |
 
-**注意**：`tensorrt` 通过 `setup_venv.bat` 以 `--no-deps` 安装，只装 Python 绑定。`tensorrt_cu13_libs`（~2.2GB DLL）被排除，DLL 从系统 PATH 加载。
+**注意**：`tensorrt_cu13_bindings`（Python 绑定，~1MB）通过 `setup_venv.bat` 的 `pip install -e ".[gpu]"` 安装。`tensorrt` 元包及 `tensorrt_cu13_libs`（~2.2GB DLL）被有意排除，运行时 DLL 从系统 PATH（CUDA/TensorRT 安装目录）加载。
 
 ## 打包工具
 

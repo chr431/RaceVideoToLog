@@ -92,13 +92,16 @@ def print_result(r):
     print(f"  Exact: {r['exact_pct']:.1f}%  Errors>0.5: {r['errors_05']} ({r['errors_05_pct']:.1f}%)  Errors>5: {r['errors_5']}")
 
 def update_config(**kwargs):
-    """Temporarily update config.py LCS constants."""
+    """Temporarily update config.py constants. Unmatched keys warn (no silent no-op)."""
     with open(CONFIG, 'r', encoding='utf-8') as f:
         original = f.read()
     content = original
+    import re
     for key, val in kwargs.items():
-        import re
-        content = re.sub(rf'^{key}:.*$', f'{key}: {val}', content, flags=re.MULTILINE)
+        new_content, n = re.subn(rf'^{key}:.*$', f'{key}: {val}', content, flags=re.MULTILINE)
+        if n == 0:
+            print(f'[WARN] config key not found (no-op): {key}')
+        content = new_content
     with open(CONFIG, 'w', encoding='utf-8') as f:
         f.write(content)
     return original
@@ -116,8 +119,8 @@ if __name__ == "__main__":
             {"VITERBI_OBS_WEIGHT": "float = 0.4", "VITERBI_ACCEL_WEIGHT": "float = 1.2"},
             {"ERROR_DETECT_ACCEL_SPIKE_WEIGHT": "float = 0.30"},
             {"ERROR_DETECT_ACCEL_SPIKE_WEIGHT": "float = 0.50"},
-            {"ERROR_DETECT_SG_DEVIATION_WEIGHT": "float = 0.10"},
-            {"ERROR_DETECT_SG_DEVIATION_WEIGHT": "float = 0.20"},
+            {"ERROR_DETECT_LINEARITY_WEIGHT": "float = 0.10"},
+            {"ERROR_DETECT_LINEARITY_WEIGHT": "float = 0.20"},
             {"AUTO_CORRECT_THRESHOLD": "int = 70"},
             {"AUTO_CORRECT_THRESHOLD": "int = 90"},
         ]

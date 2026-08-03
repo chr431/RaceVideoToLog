@@ -5,7 +5,6 @@ __version__ = "2.7.0"
 
 # ═══════════════════ 物理常量 ═══════════════════
 MPS_TO_KMH: float = 3.6          # m/s → km/h 转换因子
-KMH_TO_MPS: float = 1.0 / 3.6    # km/h → m/s 转换因子
 
 # ═══════════════════ 用户可配置默认值 ═══════════════════
 DEFAULT_BACKEND: str = "auto"           # GPU 后端 (auto / tensorrt / cpu)
@@ -97,7 +96,6 @@ AUTO_ALIGN_DIFF_MIN_KMH: int = 5         # auto-align 最小修正量 (km/h)
 AUTO_ALIGN_DIFF_MAX_KMH: int = 25        # auto-align 最大修正量 (km/h)
 AUTO_ALIGN_NUDGE_FACTOR: float = 0.8     # auto-align 向插值修正的比例
 AUTO_ALIGN_MIN_CHANGE_KMH: int = 3       # auto-align 最小提交变化量 (km/h)
-AUTO_ALIGN_FALLBACK_MAX_DV: float = 4.0  # 无法获取 fps 时的 fallback max_dv (km/h)
 
 # ═══════════════════ Force-Median 平滑参数 ═══════════════════
 FORCE_MEDIAN_MAX_ITERATIONS: int = 15     # _force_median_smooth 最大迭代轮数
@@ -123,7 +121,6 @@ REF_MIN_DIFF: float = 3.0            # 参考值最小偏差：raw 与插值差 
 # ═══════════════════ Viterbi 后处理 ═══════════════════
 VITERBI_POST_TRUST_THRESHOLD: int = 70     # Viterbi 后信任判定最低分数
 TRUST_WINDOW_FALLBACK_MAX_DV: float = 8.0  # 信任窗口 fallback max_dv (km/h)
-TRUST_NEIGHBOR_SEARCH_WINDOW: int = 3      # 信任传播邻居搜索窗口（每侧3帧）
 FILL_CONFIDENCE_THRESHOLD: int = 30        # Fill 阶段的置信度阈值
 FILL_CANDIDATE_MAX_DIFF: int = 12          # fill 候选优先的最大差值（与插值的距离保护）
 FINAL_CONF_BLEND_PHASE1: float = 0.7       # 最终置信度中 Phase 1 权重

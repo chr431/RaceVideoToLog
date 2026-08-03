@@ -126,7 +126,7 @@ def main() -> None:
 	elif video_name == "test.mp4": max_speed, max_accel = 260.0, 50.0
 	else: max_speed, max_accel = 400.0, 50.0
 
-	mode = sys.argv[1] if len(sys.argv) > 1 else "--baseline"
+	mode = "--baseline" if len(sys.argv) == 1 or "--baseline" in sys.argv else sys.argv[1]
 	is_manual = "--manual" in sys.argv
 	run_mode = "manual" if is_manual else "auto"
 

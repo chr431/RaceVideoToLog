@@ -79,7 +79,6 @@ _decord_build\
 # backend=CPU, model=v6_tiny, reocr_model=v6_small, video_backend=decord/GPU
 # stats: total=7223, trusted=7090, corrected=118
 # timing: ocr=17.0s, decode=16.6s, inference=15.7s, correction=4.5s
-frame,distance,speed_kmh,flag
 362,0.00,257,21
 ```
 
@@ -104,7 +103,7 @@ python RaceVideoToLog.py [video] [options]
 可选参数:
   --roi X1 Y1 X2 Y2              识别范围（CLI 必需）
   --format {m/s,km/h,mile/h}     速度单位 (默认: km/h)
-  --div N                        采样间隔 1/N (默认: 1)
+  --div N                        采样间隔 1/N (默认: 2)
   --max-speed N                  最大速度 km/h (默认: 400)
   --max-accel N                  最大加速度 m/s² (默认: 50)
   --target-h N                   OCR 高度 px (默认: 48)

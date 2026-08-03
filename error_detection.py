@@ -15,7 +15,6 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-import numpy as np
 
 from config import (
     MPS_TO_KMH,

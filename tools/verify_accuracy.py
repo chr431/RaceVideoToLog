@@ -138,7 +138,6 @@ def run_pipeline(video_path: str, truth_csv: str, output_path: str) -> None:
 
 
 def main() -> None:
-    headless = "--headless" in sys.argv
 
     truth_csv = "ground_truth_csv/test4_truth.csv"
     video = "test4.mp4"  # adjust path as needed

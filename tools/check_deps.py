@@ -18,12 +18,12 @@ DEPS = {
 
 # GPU 加速（可选，版本跟踪）
 GPU_DEPS = {
-    "tensorrt": "10.16.1.11",
+    "tensorrt_cu13_bindings": "10.16.1.11",
     "cuda-python": "13.3.1",
 }
 # 仅跟踪指定主版本（None = 跟踪所有版本）
 PIN_MAJOR = {
-    "tensorrt": "10",  # 仅跟踪 10.x，跳过 11.x
+    "tensorrt_cu13_bindings": "10",  # 仅跟踪 10.x，跳过 11.x
 }
 
 # 打包

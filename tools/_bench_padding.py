@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import cv2
 import numpy as np
 
-from ocr_engine import _ensure_rapidocr_imported, _get_model_params, extract_speed_value
+from ocr_engine import _init_rapidocr, _get_model_params, extract_speed_value
 from gpu_setup import select_backend, get_engine_params, get_engine_type
 from pipeline import _preprocess_standard
 
@@ -50,7 +50,7 @@ def _patch_ocr(ocr, use_preprocess_img: bool, use_vertical_padding: bool):
 
 def _create_ocr():
     """Create a fresh RapidOCR instance for the given backend and model."""
-    _ensure_rapidocr_imported()
+    _init_rapidocr()
     from rapidocr import RapidOCR
     engine_params = get_engine_params()
     et = get_engine_type()
