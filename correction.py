@@ -647,6 +647,36 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
 
     candidates_by_frame: dict[int, list[float]] = {}
     total_correct = len(correction_frames)
+
+    # ── re-OCR 批量预热：候选生成前一次性批推理所有未缓存帧 ──
+    # _multi_height_ocr 逐帧调用会浪费 session.run 固定开销（~3x 慢）。
+    # 先批量预处理+推理填 cache，逐帧循环全部命中。
+    if raw_frames and ocr is not None:
+        from video_utils import _preprocess_standard
+        from ocr_engine import ocr_rec_batch, extract_speed_value as _esv
+        _batch_frames: list[int] = []
+        _batch_procs: list = []
+        for fi in sorted(correction_frames):
+            if fi >= len(raw_frames):
+                continue
+            crop_bgr = raw_frames[fi][1]
+            if crop_bgr is None or crop_bgr.size == 0:
+                continue
+            raw = crop_bgr.data.tobytes() if hasattr(crop_bgr, 'data') else crop_bgr.tobytes()
+            ck = hash(raw[:256])
+            if ck in cache:
+                continue
+            _batch_frames.append(fi)
+            _batch_procs.append(_preprocess_standard(crop_bgr, 48, 0, max_width=max_width))
+        if _batch_procs:
+            _results = ocr_rec_batch(ocr, _batch_procs)
+            for fi, res in zip(_batch_frames, _results):
+                sv, rt, _conf = _esv(res)
+                if sv is not None and sv <= max_speed_kmh:
+                    crop_bgr = raw_frames[fi][1]
+                    raw = crop_bgr.data.tobytes() if hasattr(crop_bgr, 'data') else crop_bgr.tobytes()
+                    cache[hash(raw[:256])] = {int(sv)}
+
     for idx, fi in enumerate(sorted(correction_frames)):
         cands = _generate_candidates(fi, rows, observations, raw_frames, ocr, pinned_set,
             times, max_speed_kmh, cache, split_results, reocr_only=reocr_only,
