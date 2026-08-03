@@ -1,0 +1,41 @@
+"""共享常量：Flag 枚举与 OCR 数字正则。"""
+from __future__ import annotations
+import re
+
+
+class Flag:
+    """速度数据 flag 值 — 统一标记每帧数据的来源和可信度。
+
+    信任层级（由低到高）:
+        RAW (0)           — 原始 OCR 值，未经修正
+        REOCR_AUTO (11)   — 重 OCR 自动修正
+        FILL_INTERP (12)  — 物理插值填充
+        PARTIAL_AUTO (13) — 部分数字模式推断修正
+        HIGH_TRUST (21)   — Viterbi+物理验证，自动高可信帧
+        PINNED (22)       — 用户手动修正，绝对真值
+        CONFIRMED_SEG (23)— 用户确认的段内帧
+    """
+    RAW: int = 0
+    REOCR_AUTO: int = 11
+    FILL_INTERP: int = 12
+    PARTIAL_AUTO: int = 13
+    HIGH_TRUST: int = 21
+    PINNED: int = 22
+    CONFIRMED_SEG: int = 23
+
+    @classmethod
+    def is_corrected(cls, flag: int) -> bool:
+        """是否为自动纠错帧 (10-19)。"""
+        return 10 <= flag <= 19
+
+    @classmethod
+    def is_trusted(cls, flag: int) -> bool:
+        """是否为高可信帧 — HIGH_TRUST / PINNED / CONFIRMED_SEG (20-29)。"""
+        return 20 <= flag <= 29
+
+    @classmethod
+    def is_anchor(cls, flag: int) -> bool:
+        """[Deprecated] Backward-compat alias for is_trusted()."""
+        return cls.is_trusted(flag)
+
+OCR_NUMBER_RE = re.compile(r"\d+(?:[\.,]\d+)?")  # noqa: E305
