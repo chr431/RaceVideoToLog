@@ -558,9 +558,9 @@ class RaceVideoToLogApp(QMainWindow):
                     "  .venv\\Scripts\\pip install cuda-python tensorrt")
         try:
             import decord  # noqa: F401
-        except ModuleNotFoundError:
-            QMessageBox.critical(self, "decord 未安装",
-                "视频解码需要 decord。\n\n"
+        except ImportError:
+            QMessageBox.critical(self, "decord 加载失败",
+                "视频解码需要 decord（GPU API 已动态加载，无需 NVIDIA 驱动）。\n\n"
                 "安装方法：pip install decord")
             self._finish_export()
             return

@@ -69,6 +69,8 @@ except Exception:
     pass  # tensorrt not installed
 
 # decord（NVDEC 硬件加速视频解码）
+# GPU API（CUDA 驱动 / NVCUVID / NVML）已改为运行时动态加载（nv_gpu_dyn），
+# decord.dll 导入表无 NVIDIA 依赖 → 无驱动设备自动回退 CPU 解码。
 tmp_ret = collect_all('decord')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
