@@ -295,22 +295,8 @@ class ReviewDialog(QDialog):
             self._setup_hover(plot)
             self._chart_artists = {}
 
-            # 低置信度区间（不可移动的 LinearRegionItem）
-            done = set()
-            for s, e in self._low_confidence_regions():
-                key = (s, e)
-                if key not in done:
-                    done.add(key)
-                    # pen=pg.mkPen(None)（NoPen 透明）而非 None：
-                    # pen=None 会让 InfiniteLine 回落到默认黄色 (200,200,100)
-                    region = pg.LinearRegionItem(
-                        values=(times[s], times[min(e, len(times) - 1)]),
-                        orientation='vertical', movable=False,
-                        brush=make_brush(COLOR_ORANGE, 20),
-                        pen=pg.mkPen(None))
-                    plot.addItem(region)
-
             # 灰色/橙色散点（大数据：ScatterPlotItem 原生高性能）
+            # 低置信度帧以橙色散点标记，不再画背景高亮区域
             gray_c = COLOR_LIGHT_GRAY if not dark else COLOR_LIGHTER_GRAY
             gx, gy, gi, ox, oy, oi = [], [], [], [], [], []
             for i in range(len(times)):
@@ -333,12 +319,12 @@ class ReviewDialog(QDialog):
             plot.addItem(orange)
             self._chart_artists['bg_orange'] = orange
 
-            # 修正蓝点 + 当前帧红点（红点 ≈ 灰点 2 倍直径，白描边区分）
-            corr = pg.ScatterPlotItem(size=8, brush=pg.mkBrush(COLOR_BLUE),
+            # 修正蓝点 + 当前帧红点（白描边区分）
+            corr = pg.ScatterPlotItem(size=6, brush=pg.mkBrush(COLOR_BLUE),
                                       pen=pg.mkPen('w', width=1.0))
             plot.addItem(corr)
             self._chart_artists['corrections'] = corr
-            cur = pg.ScatterPlotItem(size=8, brush=pg.mkBrush(COLOR_RED),
+            cur = pg.ScatterPlotItem(size=6, brush=pg.mkBrush(COLOR_RED),
                                      pen=pg.mkPen('w', width=1.5))
             plot.addItem(cur)
             self._chart_artists['cur_highlight'] = cur

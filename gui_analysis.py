@@ -362,10 +362,12 @@ class AnalysisTab:
         if xmax0 <= xmin0:
             xmax0 = xmin0 + 1.0
         self._region = None
-        # mkBrush 会丢弃 alpha → 用 make_brush 显式构造半透明填充
+        # mkBrush 会丢弃 alpha → 用 make_brush 显式构造半透明填充；
+        # 边界线用深蓝（默认黄色与主题不搭）
         self._region = pg.LinearRegionItem(values=(xmin0, xmax0), orientation='vertical',
                                            movable=True,
-                                           brush=make_brush(config.COLOR_BLUE, 20))
+                                           brush=make_brush(config.COLOR_BLUE, 20),
+                                           pen=pg.mkPen("#1565C0"))
         self._h_region = lambda r: _update_delta_text()
         self._h_region_sig = self._region.sigRegionChanged
         self._region.sigRegionChanged.connect(self._h_region)
