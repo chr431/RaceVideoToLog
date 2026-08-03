@@ -304,35 +304,16 @@ class AnalysisTab:
         import bisect
         hover_line = ax.axvline(0, color=config.COLOR_GRAY, linewidth=0.8,
                                 linestyle="--", alpha=0.7, visible=False)
-        hover_bg = [None]
-
-        def _save_hover_bg(event: object) -> None:
-            if event.canvas is canvas:
-                try:
-                    hover_bg[0] = canvas.copy_from_bbox(ax.bbox)
-                except Exception:
-                    hover_bg[0] = None
-
         _hover_last = [0.0]
         import time as _time
 
         def _hover_redraw() -> None:
+            # 完整重绘 + 40ms 节流：blit 增量绘制在 Qt 后端有闪烁，
+            # 全量 draw_idle 在节流下稳定且足够跟手
             now = _time.time()
-            if now - _hover_last[0] < 0.016:
-                return  # 节流：~60fps 上限
+            if now - _hover_last[0] < 0.04:
+                return
             _hover_last[0] = now
-            # 抑制 stale：防止 matplotlib 空闲循环自动整图重绘（导致抖动）
-            hover_line.stale = False
-            delta_text.stale = False
-            if hover_bg[0] is not None:
-                try:
-                    canvas.restore_region(hover_bg[0])
-                    ax.draw_artist(hover_line)
-                    ax.draw_artist(delta_text)
-                    canvas.blit(ax.bbox)
-                    return
-                except Exception:
-                    pass
             canvas.draw_idle()
 
         def _on_motion(event: object) -> None:
@@ -367,7 +348,6 @@ class AnalysisTab:
             _hover_redraw()
 
         canvas.mpl_connect("motion_notify_event", _on_motion)
-        canvas.mpl_connect("draw_event", _save_hover_bg)
 
         # 滚轮缩放 + 右键平移
         setup_chart_zoom_pan(ax, canvas, throttle_ms=0)

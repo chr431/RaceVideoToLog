@@ -7,6 +7,9 @@ import numpy as np
 from config import (CONSISTENCY_TIME_WINDOW, CONSISTENCY_DECAY_TAU,
     CONSISTENCY_PINNED_WEIGHT)
 
+# Savitzky-Golay 卷积系数缓存（按 (window, polyorder) 复用）
+_sg_coeff_cache: dict = {}
+
 
 def _savgol_filter_np(y: "np.ndarray", window_length: int, polyorder: int) -> "np.ndarray":
     """纯 numpy Savitzky-Golay 滤波 — 预计算卷积系数，O(N) 复杂度。

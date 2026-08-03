@@ -225,35 +225,15 @@ class ReviewDialog(QDialog):
                              va="top", fontsize=9, color=config.COLOR_FG_LIGHT,
                              bbox=dict(boxstyle="round,pad=0.3",
                                        facecolor="white", alpha=0.8))
-        hover_bg = [None]
-
-        def _save_bg(event) -> None:
-            if event.canvas is canvas:
-                try:
-                    hover_bg[0] = canvas.copy_from_bbox(ax.bbox)
-                except Exception:
-                    hover_bg[0] = None
-
         _hover_last = [0.0]
         import time as _time
 
         def _redraw() -> None:
+            # 完整重绘 + 40ms 节流（blit 在 Qt 后端闪烁，全量绘制更稳定）
             now = _time.time()
-            if now - _hover_last[0] < 0.016:
-                return  # 节流：~60fps 上限
+            if now - _hover_last[0] < 0.04:
+                return
             _hover_last[0] = now
-            # 抑制 stale：防止 matplotlib 空闲循环自动整图重绘（抖动）
-            hover_line.stale = False
-            hover_text.stale = False
-            if hover_bg[0] is not None:
-                try:
-                    canvas.restore_region(hover_bg[0])
-                    ax.draw_artist(hover_line)
-                    ax.draw_artist(hover_text)
-                    canvas.blit(ax.bbox)
-                    return
-                except Exception:
-                    pass
             canvas.draw_idle()
 
         def _on_motion(event) -> None:
@@ -281,8 +261,7 @@ class ReviewDialog(QDialog):
                                 if v >= 0 else f"#{int(times[pos])}: 无效")
             _redraw()
 
-        cids = [canvas.mpl_connect("motion_notify_event", _on_motion),
-                canvas.mpl_connect("draw_event", _save_bg)]
+        cids = [canvas.mpl_connect("motion_notify_event", _on_motion)]
         self._hover_cids = cids
         self._hover_line = hover_line
         self._hover_text = hover_text
