@@ -207,6 +207,27 @@ class ProcessingPipeline:
         self._confidences: list[dict] = []
         self.last_output_path: Path | None = None
 
+    # ── 公开只读属性（消除跨模块私有访问）──
+    @property
+    def timing(self) -> dict[str, float]:
+        return self._timing
+
+    @property
+    def rows(self) -> list:
+        return self._rows
+
+    @property
+    def observations(self) -> list:
+        return self._observations
+
+    @property
+    def raw_frames(self) -> list:
+        return self._raw_frames
+
+    @property
+    def confidences(self) -> list:
+        return self._confidences
+
     # ═══════════════ 公开接口 ═══════════════
 
     def run_auto(self, output_path: str | Path, reocr_only: bool = True,

@@ -617,16 +617,7 @@ class RaceVideoToLogApp(QMainWindow):
             QMessageBox.warning(self, "参数错误", "请检查数值参数。"); return
 
         # 断开旧线程信号，防止泄漏到新线程
-        if self._export_thread is not None:
-            try:
-                self._export_thread.progress_updated.disconnect()
-                self._export_thread.finished.disconnect()
-                self._export_thread.error_occurred.disconnect()
-                self._export_thread.cancelled.disconnect()
-                self._export_thread.pipeline_ready.disconnect()
-            except (TypeError, RuntimeError):
-                pass
-            self._export_thread = None
+        self._teardown_export_thread()
 
         self._export_btn.setEnabled(False); self._cancel_btn.setEnabled(True)
 
@@ -695,14 +686,16 @@ class RaceVideoToLogApp(QMainWindow):
         out = getattr(self, "_review_output_path", None)
         if pipeline is None or out is None:
             return
-        rows = pipeline._rows
-        confidences = getattr(pipeline, '_confidences', None)
+        rows = pipeline.rows
+        confidences = getattr(pipeline, 'confidences', None)
         if confidences is None:
             from correction import compute_confidence
-            confidences = compute_confidence(rows, pipeline._observations,
+            confidences = compute_confidence(rows, pipeline.observations,
                 pipeline._max_speed, pipeline._max_accel)
-        dlg = ReviewDialog(self, rows, pipeline._observations,
-            pipeline._raw_frames, confidences,
+        # 传入 rows 深副本：对话框内的预览修改不会泄漏到主数据；
+        # 只有 get_corrections() 的确认项在关闭后单点写回。
+        dlg = ReviewDialog(self, [r[:] for r in rows], pipeline.observations,
+            pipeline.raw_frames, confidences,
             pipeline._max_speed, pipeline._max_accel,
             review_scope=review_scope)
         if dlg.exec() == QDialog.DialogCode.Accepted:
@@ -724,18 +717,13 @@ class RaceVideoToLogApp(QMainWindow):
             return
         self._finish_export(); self._status_label.setText("已取消。")
 
+    def _teardown_export_thread(self) -> None:
+        """拆除导出线程：断开全部信号并释放引用（幂等）。"""
+        self._teardown_export_thread()
+
     def _finish_export(self) -> None:
         self._export_btn.setEnabled(True); self._cancel_btn.setEnabled(False)
-        if self._export_thread is not None:
-            try:
-                self._export_thread.progress_updated.disconnect()
-                self._export_thread.finished.disconnect()
-                self._export_thread.error_occurred.disconnect()
-                self._export_thread.cancelled.disconnect()
-                self._export_thread.pipeline_ready.disconnect()
-            except (TypeError, RuntimeError):
-                pass
-            self._export_thread = None
+        self._teardown_export_thread()
         # Release pipeline memory (raw_frames etc.) on cancel/error
         pipeline = getattr(self, "_pipeline", None)
         if pipeline is not None:
@@ -743,12 +731,12 @@ class RaceVideoToLogApp(QMainWindow):
             _log = logging.getLogger("RaceVideoToLog.gui")
             try:
                 from pipeline import _rss_mb, _sum_nbytes
-                _raw_mb = _sum_nbytes([x[1] for x in pipeline._raw_frames]) / 1e6
+                _raw_mb = _sum_nbytes([x[1] for x in pipeline.raw_frames]) / 1e6
                 _log.info("[MEM] _finish_export PRE-clear: raw_frames=%d(%.1fMB) rss=%.0fMB",
-                    len(pipeline._raw_frames), _raw_mb, _rss_mb())
+                    len(pipeline.raw_frames), _raw_mb, _rss_mb())
             except Exception:
                 pass
-            pipeline._raw_frames.clear()
+            pipeline.raw_frames.clear()
             if getattr(pipeline, '_diag', None):
                 pipeline._diag.clear()
             import gc; gc.collect()
