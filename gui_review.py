@@ -200,9 +200,11 @@ class ReviewDialog(QDialog):
         self._redraw_chart(plot)
         return plot
 
-    def _on_range_changed(self, vb) -> None:
+    def _on_range_changed(self, mask) -> None:
+        """用户手动缩放/平移后记录视图范围。
+        sigRangeChangedManually 发射的是轴启用掩码（list），取范围用 self._plot。"""
         self._user_zoomed = True
-        self._saved_range = vb.viewRange()
+        self._saved_range = self._plot.plotItem.vb.viewRange()
 
     def _setup_hover(self, plot) -> None:
         """悬停竖线 + 左上角最近点速度（pyqtgraph 原生 InfiniteLine + TextItem）。"""

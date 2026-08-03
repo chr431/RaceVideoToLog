@@ -128,14 +128,20 @@ class ModPlotWidget(pg.PlotWidget):
         xr = vb.viewRange()[0]
         yr = vb.viewRange()[1]
         if mods & Qt.KeyboardModifier.ControlModifier:
+            mask = [False, True]
             ym = (yr[0] + yr[1]) / 2
             vb.setYRange(ym - (ym - yr[0]) * s, ym + (yr[1] - ym) * s, padding=0)
         elif mods & Qt.KeyboardModifier.ShiftModifier:
+            mask = [True, False]
             xm = (xr[0] + xr[1]) / 2
             vb.setXRange(xm - (xm - xr[0]) * s, xm + (xr[1] - xm) * s, padding=0)
         else:
+            mask = [True, True]
             xm = (xr[0] + xr[1]) / 2
             vb.setXRange(xm - (xm - xr[0]) * s, xm + (xr[1] - xm) * s, padding=0)
             ym = (yr[0] + yr[1]) / 2
             vb.setYRange(ym - (ym - yr[0]) * s, ym + (yr[1] - ym) * s, padding=0)
+        # 自实现缩放绕过了 ViewBox.wheelEvent → 补发手动变更信号
+        # （审核窗口依赖它记录视图范围，避免重绘时被 autoRange 重置）
+        self._region_vb.sigRangeChangedManually.emit(mask)
         ev.accept()
