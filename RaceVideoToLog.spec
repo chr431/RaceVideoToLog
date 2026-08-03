@@ -73,8 +73,9 @@ tmp_ret = collect_all('decord')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 # PySide6 (Qt 6 GUI) — 只收集核心模块 + qfluentwidgets 依赖
+# QtOpenGL 为 pyqtgraph 0.14 必需（OpenGLHelpers），显式收集
 for _qt_mod in ['PySide6.QtWidgets', 'PySide6.QtCore', 'PySide6.QtGui',
-                 'PySide6.QtXml', 'PySide6.QtSvg']:
+                 'PySide6.QtXml', 'PySide6.QtSvg', 'PySide6.QtOpenGL']:
     _qt_ret = collect_all(_qt_mod)
     datas += _qt_ret[0]; binaries += _qt_ret[1]; hiddenimports += _qt_ret[2]
 
@@ -209,12 +210,12 @@ _EXCLUDE_BINARIES = {
     'onnxruntime_providers_cuda.dll',
     'tcl86t.dll', 'tk86t.dll', '_tkinter.pyd',
     # Qt6 未使用模块（仅用 Widgets/Core/Gui）
+    # Qt6OpenGL* 必须保留：pyqtgraph 0.14 OpenGLHelpers import PySide6.QtOpenGL
     'opengl32sw.dll', 'avcodec-61.dll',
     'Qt6Quick.dll', 'Qt6Qml.dll', 'Qt6Pdf.dll',
     'Qt6Network.dll', 'Qt6Multimedia.dll',
     'Qt6Sql.dll', 'Qt6Test.dll',
     'Qt6QuickWidgets.dll', 'Qt6QmlModels.dll', 'Qt6QmlWorkerScript.dll',
-    'Qt6OpenGL.dll', 'Qt6OpenGLWidgets.dll',
     'Qt6PrintSupport.dll', 'Qt6WebChannel.dll',
     'Qt6WebEngine.dll', 'Qt6WebEngineCore.dll', 'Qt6WebEngineQuick.dll',
     'Qt6Designer.dll', 'Qt6Help.dll', 'Qt6UiTools.dll',
