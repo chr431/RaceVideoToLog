@@ -119,7 +119,6 @@ TRUST_WINDOW_TIME: float = 0.15            # 信任传播验证时间窗 (秒)
 DISTANT_INTERP_ISLAND_THRESHOLD: int = 30  # 孤岛检测距离阈值 (km/h)
 REF_INTERP_MAX_KMH_DIFF: int = 50    # 插值参考值最大允许偏差 (km/h)
 REF_MIN_DIFF: float = 3.0            # 参考值最小偏差：raw 与插值差 < 此值时不设参考（raw 自洽）
-MANUAL_REF_CONFIDENCE_MAX: int = 40  # 手动模式构建参考值的置信度上限
 
 # ═══════════════════ Viterbi 后处理 ═══════════════════
 VITERBI_POST_TRUST_THRESHOLD: int = 70     # Viterbi 后信任判定最低分数

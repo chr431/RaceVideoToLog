@@ -4,12 +4,13 @@ Receives per-frame confidence from Phase 1 (error_detection), interprets
 the scores, and applies corrections using Viterbi DP + fill + smoothness.
 
 Both modes share the same full pipeline (fill, smoothness, auto-align).
-Auto mode additionally runs _force_median_smooth — iterative time-window median
-filter on ALL frames to minimize max_dv (frame-to-frame speed change).
+Mode differences are expressed by ModeProfile (auto: smoothness-first,
+manual: precision-first d=0 protection).
 """
 from __future__ import annotations
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -34,7 +35,7 @@ from config import (
     REF_GUARD_PHYSICS_MIN, REF_GUARD_LINEARITY_MIN,
     DISTANT_INTERP_MIN_TIME, DISTANT_INTERP_ISLAND_THRESHOLD,
     FORCE_MEDIAN_WINDOW_TIME,
-    REF_INTERP_MAX_KMH_DIFF, MANUAL_REF_CONFIDENCE_MAX, REF_MIN_DIFF,
+    REF_INTERP_MAX_KMH_DIFF, REF_MIN_DIFF,
     VITERBI_POST_TRUST_THRESHOLD, TRUST_WINDOW_FALLBACK_MAX_DV,
     TRUST_WINDOW_TIME, FILL_CONFIDENCE_THRESHOLD, FILL_CANDIDATE_MAX_DIFF,
     FINAL_CONF_BLEND_PHASE1, FINAL_CONF_BLEND_VITERBI,
@@ -44,6 +45,44 @@ if TYPE_CHECKING:
     from rapidocr import RapidOCR
 
 logger = logging.getLogger("RaceVideoToLog.correction")
+
+
+# ═══════════════════ 模式策略 ═══════════════════
+
+@dataclass(frozen=True)
+class ModeProfile:
+    """模式策略：集中表达自动/手动模式的全部差异。
+
+    auto   — 平滑优先：修正阈值宽（conf<70）、Viterbi 多轮、允许小步长
+             微调、distant 参考、最终全帧中值平滑。
+    manual — 精确优先（d=0）：只修 conf<40 的帧、单轮 Viterbi、
+             拒绝 ±1 噪声微调、不用 distant 参考、只清理修正帧斜坡。
+    """
+    correct_threshold: int      # 进入纠正的置信度阈值
+    viterbi_min_diff: float     # Viterbi 最小提交差值（噪声微调保护）
+    max_rounds: int             # Viterbi 轮数上限
+    distant_ref: bool           # 是否使用远距离插值参考
+    force_sg_corrected: bool    # forceSG 只处理自动修正帧（True=手动）
+    force_smooth: bool          # 是否执行最终中值平滑
+
+
+_AUTO_PROFILE = ModeProfile(
+    correct_threshold=AUTO_CORRECT_THRESHOLD,
+    viterbi_min_diff=CORRECTION_MIN_DIFF,
+    max_rounds=CORRECTION_MAX_ROUNDS,
+    distant_ref=True,
+    force_sg_corrected=False,
+    force_smooth=True,
+)
+
+_MANUAL_PROFILE = ModeProfile(
+    correct_threshold=MANUAL_CORRECT_THRESHOLD,
+    viterbi_min_diff=MANUAL_CORRECTION_MIN_DIFF,
+    max_rounds=1,
+    distant_ref=False,
+    force_sg_corrected=True,
+    force_smooth=False,
+)
 
 
 # ═══════════════════ Helpers ═══════════════════
@@ -587,9 +626,8 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
         if rows[pi][3] < Flag.HIGH_TRUST: rows[pi][3] = Flag.PINNED
     pinned_set = pinned
     cache: dict = reocr_cache if reocr_cache is not None else {}
-    correct_threshold = MANUAL_CORRECT_THRESHOLD if mode == "manual" else AUTO_CORRECT_THRESHOLD
-    # Auto mode additionally gets force_smooth at the end.
-    force_smooth = (mode == "auto")
+    profile = _MANUAL_PROFILE if mode == "manual" else _AUTO_PROFILE
+    correct_threshold = profile.correct_threshold
 
     conf_by_idx: dict[int, float] = {}
     for c in confidence_scores: conf_by_idx[c['index']] = c['score']
@@ -703,7 +741,7 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
         # that skips past the island to reach correct anchor frames.
         # Auto mode only: manual mode measured regressions (893/1708/1709
         # pulled to wrong distant refs even with anchor validity).
-        if mode == "auto" and a <= ACCEL_SCORE_ISLAND_INTERIOR + 5 and raw_v > 0:
+        if profile.distant_ref and a <= ACCEL_SCORE_ISLAND_INTERIOR + 5 and raw_v > 0:
             dt_frame = (times[1] - times[0]) if n >= 2 else 1/60
             min_frames = max(1, int(DISTANT_INTERP_MIN_TIME / dt_frame))
             distant = _local_interp(i, rows, observations, times, max_speed_kmh,
@@ -748,7 +786,7 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
     # Manual mode: single round only — round 2+ trust propagation lets
     # wrong ramps confirm each other (r1 2747→11, r2 marks 2748 HT=11,
     # then r2 ramps 2749-2758 toward it).
-    max_rounds = 1 if (n_island_cands > 0 or mode == "manual") else CORRECTION_MAX_ROUNDS
+    max_rounds = 1 if n_island_cands > 0 else profile.max_rounds
     if log_fn and max_rounds == 1:
         log_fn(f"  Island/manual mode: max 1 Viterbi round")
 
@@ -781,7 +819,7 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
             # 手动模式：±1 微调视为噪声（Viterbi 转移代价偏好平滑，会把
             # 正确的 raw 微调 1-2）。手动模式只提交 ≥2 km/h 的实质修正；
             # 自动模式保留小步长（平滑优先）。
-            min_diff = CORRECTION_MIN_DIFF if mode == "auto" else MANUAL_CORRECTION_MIN_DIFF
+            min_diff = profile.viterbi_min_diff
             if abs(new_val - old_val) <= min_diff: continue
             rows[fi][2] = new_val
             if rows[fi][3] == Flag.RAW: rows[fi][3] = Flag.REOCR_AUTO
@@ -851,9 +889,9 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
     # Auto mode: aggressive, ALL frames (minimize max_dv).
     # Manual mode: conservative, only auto-corrected frames (clean up
     # Viterbi/fill ramps against RAW/trusted neighbors — protects d=0).
-    if force_smooth:
+    if profile.force_smooth:
         n_forced = _force_median_smooth(rows, times, max_speed_kmh, max_accel_mps2, fps, notes,
-                                        corrected_only=(mode == "manual"))
+                                        corrected_only=profile.force_sg_corrected)
         if log_fn and n_forced > 0:
             log_fn(f"  Force-SG: {n_forced} frame-nudges applied")
 
