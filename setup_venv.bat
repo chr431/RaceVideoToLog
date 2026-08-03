@@ -54,37 +54,56 @@ echo.
 set _DECORD_DIR=.venv\Lib\site-packages\decord
 set _COPIED=0
 
-if exist "_decord_build\decord.dll" (
-    echo Found _decord_build\ - installing self-built decord ...
-    for %%f in (_decord_build\*.dll _decord_build\ffprobe.exe) do (
-        copy /Y "%%f" "%_DECORD_DIR%\" >nul
-    )
-    set _COPIED=1
-) else if exist "..\decord\build\Release\decord.dll" (
-    echo Found ..\decord\build\Release\ - copying from sibling repo ...
-    copy /Y "..\decord\build\Release\decord.dll" "%_DECORD_DIR%\" >nul
-    if exist "..\ffmpeg5\bin\*.dll" (
-        copy /Y "..\ffmpeg5\bin\*.dll"      "%_DECORD_DIR%\" >nul
-        copy /Y "..\ffmpeg5\bin\ffprobe.exe" "%_DECORD_DIR%\" >nul
-    )
-    set _COPIED=1
-)
+rem 用 goto 分支替代 if 括号块内的 for 循环（cmd 的括号解析 bug
+rem 会使嵌套 for 报 ". was unexpected at this time."）。
+if exist "_decord_build\decord.dll" goto :use_decord_build
+if exist "..\decord\build\Release\decord.dll" goto :use_decord_sibling
+goto :decord_missing
 
+:use_decord_build
+echo Found _decord_build\ - installing self-built decord ...
+rem 先清理 PyPI decord 自带的 FFmpeg 4.x DLL（避免与 FFmpeg 8 DLL 混杂）
+del /q "%_DECORD_DIR%\avcodec-58.dll" "%_DECORD_DIR%\avformat-58.dll" "%_DECORD_DIR%\avutil-56.dll" 2>nul
+del /q "%_DECORD_DIR%\avfilter-7.dll" "%_DECORD_DIR%\avdevice-58.dll" "%_DECORD_DIR%\swresample-3.dll" "%_DECORD_DIR%\swscale-5.dll" "%_DECORD_DIR%\postproc-55.dll" 2>nul
+for %%f in (_decord_build\*.dll _decord_build\ffprobe.exe) do copy /Y "%%f" "%_DECORD_DIR%\" >nul
+set _COPIED=1
+goto :decord_done
 if %_COPIED%==1 (
     echo   Self-built decord installed - GPU decode ready.
 ) else (
-    echo [WARNING] Self-built decord not found.
-    echo   Falling back to PyPI decord (CPU-only, high memory).
-    echo.
-    echo   To enable GPU decode:
-    echo     1. Build decord with -DUSE_CUDA=ON (see repo wiki)
-    echo     2. Copy decord.dll + FFmpeg 5.x DLLs + ffprobe.exe to _decord_build\
-    echo     3. Re-run this script
+    echo [WARNING] Self-built decord not found - using PyPI CPU version.
+)
+set _COPIED=1
+goto :decord_done
+
+:decord_missing
+echo [WARNING] Self-built decord not found.
+echo   Falling back to PyPI decord (CPU-only, high memory).
+echo.
+echo   To enable GPU decode:
+echo     1. Build decord with -DUSE_CUDA=ON (see repo wiki)
+echo     2. Copy decord.dll + FFmpeg 5.x DLLs + ffprobe.exe to _decord_build\
+echo     3. Re-run this script
+goto :decord_done
+
+:decord_done
+if %_COPIED%==1 (
+    echo   Self-built decord installed - GPU decode ready.
+) else (
+    echo [WARNING] Self-built decord not found - using PyPI CPU version.
 )
 
 echo.
 echo Installing GPU Python bindings (thin wrappers, ~few MB) ...
 .venv\Scripts\python -m pip install -e ".[gpu]"
+echo.
+echo Removing PySide6-Addons (qfluentwidgets 依赖 PySide6 meta 包会拉入 Addons，
+echo 运行只需 Essentials；Addons 含 QtWebEngine 等 ~400MB 冗余) ...
+.venv\Scripts\python -m pip uninstall -y PySide6-Addons >nul 2>&1
+rem PySide6 打包缺陷：Addons RECORD 误含 Essentials 的 Qt6Core.dll，
+rem 卸载后强制重装 Essentials 恢复（否则 QtCore 加载失败）。
+.venv\Scripts\python -m pip install --force-reinstall --no-deps PySide6-Essentials -q
+
 echo   GPU video decode (NVDEC) is ready - only requires an NVIDIA GPU with drivers.
 echo   GPU OCR (TensorRT) requires CUDA Toolkit + TensorRT installed and on PATH.
 echo   Without them, CPU OCR will be used automatically.
