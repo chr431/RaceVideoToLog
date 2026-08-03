@@ -153,6 +153,12 @@ class AnalysisTab:
         plot.showGrid(x=True, y=True, alpha=0.2)
         plot.hideButtons()
         plot.setMenuEnabled(False)
+        # 上/右框线（只画线，不显示刻度与数值）
+        for _ax in ('top', 'right'):
+            plot.getPlotItem().showAxis(_ax)
+            _a = plot.getPlotItem().getAxis(_ax)
+            _a.setStyle(showValues=False)
+            _a.setTicks([])
         self._plot = plot
         layout.addWidget(plot, 1)
         self._ready = True
@@ -168,7 +174,7 @@ class AnalysisTab:
         if plot is None:
             return
         plot.setBackground(bg)
-        for ax_name in ('left', 'bottom'):
+        for ax_name in ('left', 'bottom', 'top', 'right'):
             ax_item = plot.getPlotItem().getAxis(ax_name)
             ax_item.setTextPen(fg)
             ax_item.setPen(fg)
@@ -302,6 +308,20 @@ class AnalysisTab:
         plot.addItem(hover_text, ignoreBounds=True)
         self._hover_text = hover_text
         self._hover_text_visible = False
+        # 钉在视图左上角：缩放/平移时跟随，不出现拖后腿跳回
+        if getattr(self, '_pin_hover_text', None) is not None:
+            try:
+                plot_item.vb.sigRangeChanged.disconnect(self._pin_hover_text)
+            except (TypeError, RuntimeError):
+                pass
+
+        def _pin_hover_text(*args) -> None:
+            xmin_v, xmax_v = plot_item.vb.viewRange()[0]
+            ymin_v, ymax_v = plot_item.vb.viewRange()[1]
+            hover_text.setPos(xmin_v, ymax_v)
+
+        self._pin_hover_text = _pin_hover_text
+        plot_item.vb.sigRangeChanged.connect(_pin_hover_text)
         import bisect
 
         def _on_mouse_moved(pos) -> None:
@@ -331,9 +351,6 @@ class AnalysisTab:
             hover_line.setPos(x)
             hover_line.setVisible(True)
             hover_text.setText(chr(10).join(lines) if lines else "")
-            xmin_v, xmax_v = vb.viewRange()[0]
-            ymin_v, ymax_v = vb.viewRange()[1]
-            hover_text.setPos(xmin_v, ymax_v)
             hover_text.setVisible(bool(lines))
             self._hover_text_visible = bool(lines)
 
@@ -531,7 +548,7 @@ class AnalysisTab:
             plot.setLabel('bottom', xlabel, color=fg)
             plot.setLabel('left', ylabel, color=fg)
             plot.setTitle(title, color=fg)
-            for ax_name in ('left', 'bottom'):
+            for ax_name in ('left', 'bottom', 'top', 'right'):
                 ax_item = plot.getPlotItem().getAxis(ax_name)
                 ax_item.setTextPen(fg)
                 ax_item.setPen(fg)

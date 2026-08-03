@@ -188,6 +188,12 @@ class ReviewDialog(QDialog):
         plot.showGrid(x=True, y=True, alpha=0.15 if dark else 0.25)
         plot.hideButtons()
         plot.setMenuEnabled(False)
+        # 上/右框线（只画线，不显示刻度与数值）
+        for _ax in ('top', 'right'):
+            plot.getPlotItem().showAxis(_ax)
+            _a = plot.getPlotItem().getAxis(_ax)
+            _a.setStyle(showValues=False)
+            _a.setTicks([])
         vb = plot.getPlotItem().getViewBox()
         vb.setMouseEnabled(x=True, y=True)  # 滚轮缩放 + 左键拖拽平移（原生）
         self._plot = plot
@@ -221,7 +227,15 @@ class ReviewDialog(QDialog):
         plot.addItem(self._hover_text, ignoreBounds=True)
         if not hasattr(self, '_hover_connected'):
             plot.scene().sigMouseMoved.connect(self._on_hover_moved)
+            plot.plotItem.vb.sigRangeChanged.connect(self._pin_hover_text)
             self._hover_connected = True
+
+    def _pin_hover_text(self, *args) -> None:
+        """悬停文字钉在视图左上角：缩放/平移时跟随，不拖后腿跳回。"""
+        vb = self._plot.plotItem.vb
+        xmin, xmax = vb.viewRange()[0]
+        ymin, ymax = vb.viewRange()[1]
+        self._hover_text.setPos(xmin, ymax)
 
     def _on_hover_moved(self, pos) -> None:
         plot = self._plot
@@ -249,9 +263,6 @@ class ReviewDialog(QDialog):
         text = (f"#{int(times[idx])}: {v:.0f} km/h"
                 if v >= 0 else f"#{int(times[idx])}: 无效")
         self._hover_text.setText(text)
-        xmin, xmax = vb.viewRange()[0]
-        ymin, ymax = vb.viewRange()[1]
-        self._hover_text.setPos(xmin, ymax)
         self._hover_text.setVisible(True)
 
     def _redraw_chart(self, plot=None) -> None:
@@ -294,10 +305,13 @@ class ReviewDialog(QDialog):
                 key = (s, e)
                 if key not in done:
                     done.add(key)
+                    # pen=pg.mkPen(None)（NoPen 透明）而非 None：
+                    # pen=None 会让 InfiniteLine 回落到默认黄色 (200,200,100)
                     region = pg.LinearRegionItem(
                         values=(times[s], times[min(e, len(times) - 1)]),
                         orientation='vertical', movable=False,
-                        brush=make_brush(COLOR_ORANGE, 20))
+                        brush=make_brush(COLOR_ORANGE, 20),
+                        pen=pg.mkPen(None))
                     plot.addItem(region)
 
             # 灰色/橙色散点（大数据：ScatterPlotItem 原生高性能）
@@ -323,21 +337,21 @@ class ReviewDialog(QDialog):
             plot.addItem(orange)
             self._chart_artists['bg_orange'] = orange
 
-            # 修正蓝点 + 当前帧红点
-            corr = pg.ScatterPlotItem(size=12, brush=pg.mkBrush(COLOR_BLUE),
-                                      pen=pg.mkPen('w', width=0.5))
+            # 修正蓝点 + 当前帧红点（红点 ≈ 灰点 2 倍直径，白描边区分）
+            corr = pg.ScatterPlotItem(size=8, brush=pg.mkBrush(COLOR_BLUE),
+                                      pen=pg.mkPen('w', width=1.0))
             plot.addItem(corr)
             self._chart_artists['corrections'] = corr
-            cur = pg.ScatterPlotItem(size=12, brush=pg.mkBrush(COLOR_RED),
-                                     pen=pg.mkPen('w', width=0.5))
+            cur = pg.ScatterPlotItem(size=8, brush=pg.mkBrush(COLOR_RED),
+                                     pen=pg.mkPen('w', width=1.5))
             plot.addItem(cur)
             self._chart_artists['cur_highlight'] = cur
             self._update_corr_and_cur(times)
 
-            # 轴样式
+            # 轴样式（含上/右框线）
             plot.setLabel('bottom', '帧', color=fg)
             plot.setLabel('left', '速度 (km/h)', color=fg)
-            for ax_name in ('left', 'bottom'):
+            for ax_name in ('left', 'bottom', 'top', 'right'):
                 ax_item = plot.getPlotItem().getAxis(ax_name)
                 ax_item.setTextPen(fg)
                 ax_item.setPen(fg)
