@@ -755,24 +755,24 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
     if log_fn and max_rounds == 1:
         log_fn(f"  Island/manual mode: max 1 Viterbi round")
 
-    for round_num in range(max_rounds):
-        # 手动模式：插值自洽帧锚定 raw（单候选）。
-        # 帧的 raw 与物理插值一致（差 < REF_MIN_DIFF）说明 raw 高可信；
-        # 若不锚定，Viterbi 转移代价会把它们拉进错误斜坡
-        # （实测 2749 raw=171 被改 71，随后 2750-2760 链式斜坡）。
-        if mode == "manual":
-            for _i in range(n):
-                _c = candidates_by_frame.get(_i)
-                if not _c or len(_c) <= 1:
-                    continue
-                _rv = rows[_i][2]
-                if _rv <= 0:
-                    continue
-                _ip = _local_interp(_i, rows, observations, times, max_speed_kmh,
-                                    fps=fps, max_accel_mps2=max_accel_mps2)
-                if _ip is not None and abs(_ip - _rv) < REF_MIN_DIFF:
-                    candidates_by_frame[_i] = [_rv]
+    # ── 自洽帧锚定 raw（单候选）— 两种模式统一 ──
+    # raw 与物理插值一致（差 < REF_MIN_DIFF）说明该帧 raw 高可信；
+    # 若不锚定，Viterbi 转移代价会把它们拉进错误斜坡
+    # （实测 2749 raw=171 被改 71，随后 2750-2760 链式斜坡）。
+    # 锚定在 Viterbi 前一次性完成（候选不随 round 变化）。
+    for _i in range(n):
+        _c = candidates_by_frame.get(_i)
+        if not _c or len(_c) <= 1:
+            continue
+        _rv = rows[_i][2]
+        if _rv <= 0:
+            continue
+        _ip = _local_interp(_i, rows, observations, times, max_speed_kmh,
+                            fps=fps, max_accel_mps2=max_accel_mps2)
+        if _ip is not None and abs(_ip - _rv) < REF_MIN_DIFF:
+            candidates_by_frame[_i] = [_rv]
 
+    for round_num in range(max_rounds):
         viterbi_result = viterbi_correct(rows, candidates_by_frame, confidence_scores,
             times, max_speed_kmh, max_accel_mps2, trusted_indices=trusted_set,
             reference_values=reference_values)
