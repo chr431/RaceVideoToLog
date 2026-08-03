@@ -1,5 +1,38 @@
 # Release Notes
 
+## v2.7.2 (2026-08-03)
+
+### 算法精度提升（ground truth 验证，CPU 同口径）
+
+手动模式 d=0 全面达到/超过自动模式（test2 手动 +6.0pp）；test2 自动 >5 误差 20→0。
+关键修复：信任传播验证空洞、插值锚点物理验证、自洽帧锚定、fill 候选优先。
+
+| 组合 | v2.7.1 d=0 | v2.7.2 d=0 | v2.7.1 >5 | v2.7.2 >5 |
+|------|-----------|-----------|-----------|-----------|
+| test 自动 | 98.1% | 97.6% | 2 | 6 |
+| test 手动 | 96.2% | **97.6%** | 32 | **4** |
+| test2 自动 | 96.2% | **98.7%** | 20 | **3** |
+| test2 手动 | 92.9% | **99.1%** | 19 | **5** |
+
+### 性能
+
+- 批处理 OCR 推理（-40% 推理时间；total 22.8s → 17.5s）
+- 新 decord 构建（GPU NDArrayPool）：管线 decode 15.9s → 10.9s
+
+### 结构重构
+
+- ocr_engine.py 拆分 6 模块（constants/csv_io/ocr_text/signals/video_utils）
+- correction.py：ModeProfile 收敛模式差异；锚点验证/自洽锚定提升为固有机制
+- GUI：PreviewWidget 提取、主题回调泄漏修复、ReviewDialog 深副本（修复预览值泄漏）
+- 死代码清理、工具修复、文档/CI 同步
+
+### 其他
+
+- ground_truth 升级 v2.7 标准格式（实测 fps + codec + 整数行 + max_width）
+- test5_ref 置信度更新
+
+---
+
 ## v2.7.0 (2026-08-01)
 
 ### 自建 decord：GPU 解码 + 内存修复
