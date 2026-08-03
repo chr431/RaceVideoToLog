@@ -10,16 +10,25 @@ import numpy as np
 
 from PySide6.QtWidgets import (
     QWidget, QFileDialog, QMessageBox, QHBoxLayout, QVBoxLayout, QGridLayout,
-    QStackedWidget,
+    QStackedWidget, QSpinBox,
 )
 from PySide6.QtCore import Qt
 from qfluentwidgets import (PushButton, PrimaryPushButton, CompactSpinBox,
-    RadioButton, CheckBox, BodyLabel, Slider)
+    RadioButton, CheckBox, BodyLabel, Slider, CaptionLabel)
 from widget_utils import make_static_card, setup_chart_zoom_pan
 
 from analysis import parse_csv, smooth_data, plot_segmented
 import config
 from config import (COLOR_BLUE, COLOR_ORANGE, COLOR_GREEN, MPS_TO_KMH, chart_colors)
+
+
+def _read_fps(path: str) -> float:
+    """读取 CSV 头的 fps（偏移秒数换算用）。"""
+    from csv_io import parse_csv_header
+    try:
+        return float(parse_csv_header(path).get("fps", "0"))
+    except (ValueError, TypeError):
+        return 0.0
 
 
 class AnalysisTab:
@@ -44,6 +53,8 @@ class AnalysisTab:
         self._last_mode: str | None = None
         self._smooth_str: int = 0
         self._span_selector = None
+        self._offsets: list[int] = [0, 0, 0]  # 每行 CSV 的帧偏移（仅 GUI）
+        self._fps: list[float] = [0.0, 0.0, 0.0]  # 每行 CSV 的 fps（偏移换算用）
 
         self._build_tab()
 
@@ -70,6 +81,17 @@ class AnalysisTab:
             lbl = BodyLabel("未导入")
             self._labels.append(lbl)
             sl.addWidget(lbl)
+            off_label = CaptionLabel("偏移")
+            off_spin = QSpinBox()
+            off_spin.setRange(-99999, 99999)
+            off_spin.setValue(0)
+            off_spin.setFixedWidth(84)
+            off_spin.setSuffix(" 帧")
+            off_spin.setToolTip("帧偏移：正数整体右移，负数整体左移（对齐起跑线等）。不修改 CSV 内容。")
+            off_spin.valueChanged.connect(
+                lambda v, idx=i: (self._offsets.__setitem__(idx, v), self._invalidate_and_render()))
+            sl.addWidget(off_label)
+            sl.addWidget(off_spin)
             cl.addWidget(slot, 0, i)
 
 
@@ -238,6 +260,44 @@ class AnalysisTab:
             button=1)
         delta_text.set_text(f"← 拖拽选择范围查看{delta_label}")
 
+        # ── 悬停竖线 + 最近数据点速度（仅 v-t / v-x，Δt-x 保持原样）──
+        import bisect
+        hover_line = ax.axvline(0, color=config.COLOR_GRAY, linewidth=0.8,
+                                linestyle="--", alpha=0.7, visible=False)
+
+        def _on_motion(event: object) -> None:
+            if is_dtx:
+                return
+            selected = getattr(self._span_selector, 'visible', False)
+            if event.xdata is None:
+                hover_line.set_visible(False)
+                if not selected:
+                    delta_text.set_text(f"← 拖拽选择范围查看{delta_label}")
+                canvas.draw_idle()
+                return
+            if selected:
+                hover_line.set_visible(False)  # 拖选后保持区间信息
+                return
+            hover_line.set_visible(True)
+            hover_line.set_xdata([event.xdata, event.xdata])
+            lines = []
+            for i in range(3):
+                xd = all_x[i]
+                if not xd:
+                    continue
+                pos = bisect.bisect_left(xd, event.xdata)
+                if pos >= len(xd):
+                    pos = len(xd) - 1
+                elif pos > 0 and abs(xd[pos - 1] - event.xdata) < abs(xd[pos] - event.xdata):
+                    pos -= 1
+                n = Path(self._csvs[i] or "").stem
+                v = all_y[i][pos]
+                lines.append(f"{n}: {v:.0f} km/h" if v >= 0 else f"{n}: 无效")
+            delta_text.set_text(chr(10).join(lines) if lines else "")
+            canvas.draw_idle()
+
+        canvas.mpl_connect("motion_notify_event", _on_motion)
+
         # 滚轮缩放 + 右键平移
         setup_chart_zoom_pan(ax, canvas, throttle_ms=0)
 
@@ -265,7 +325,7 @@ class AnalysisTab:
         colors = [COLOR_BLUE, COLOR_ORANGE, COLOR_GREEN]
 
         # ── 检测是否需要完全重建 ──
-        csv_key = tuple(self._csvs)
+        csv_key = (tuple(self._csvs), tuple(self._offsets))
         last_key = getattr(self, '_render_cache_key', None)
         needs_rebuild = (csv_key != last_key or mode != getattr(self, '_render_last_mode', '') or show_cd != getattr(self, '_render_last_cd', None))
         smooth_changed = (smooth_str != getattr(self, '_render_last_smooth', -1))
@@ -289,6 +349,11 @@ class AnalysisTab:
                     return
                 t1, d1, s1, _ = parse_csv(self._csvs[0])
                 t2, d2, s2, _ = parse_csv(self._csvs[1])
+                # 帧偏移（GUI only）：时间轴平移对齐起跑线，不改 CSV 内容
+                if self._offsets[0] and self._fps[0] > 0:
+                    t1 = [x + self._offsets[0] / self._fps[0] for x in t1]
+                if self._offsets[1] and self._fps[1] > 0:
+                    t2 = [x + self._offsets[1] / self._fps[1] for x in t2]
                 t2_interp = np.interp(d1, d2, t2)
                 dt = np.array(t1) - t2_interp
                 all_x[0] = d1; all_y[0] = dt.tolist()
@@ -303,8 +368,11 @@ class AnalysisTab:
                         continue
                     try:
                         times, dists, speeds, flags = parse_csv(csv_path)
+                        self._fps[i] = _read_fps(csv_path)
                         name = Path(csv_path).stem
                         x_data = times if is_vt else dists
+                        if is_vt and self._offsets[i] and self._fps[i] > 0:
+                            x_data = [x + self._offsets[i] / self._fps[i] for x in x_data]
                         all_x[i] = x_data; all_y[i] = speeds
                         all_flags[i] = flags
                         all_raw[i] = (x_data, speeds, flags)

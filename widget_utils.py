@@ -75,11 +75,27 @@ def setup_chart_zoom_pan(ax, canvas, throttle_ms: int = 40):
             _last_draw[0] = now
 
     def _on_scroll(event: object) -> None:
+        # 修饰键：Ctrl+滚轮缩放纵轴，Shift+滚轮缩放横轴，无修饰双轴缩放
+        from PySide6.QtCore import Qt
+        mods = Qt.KeyboardModifier.NoModifier
+        gui_ev = getattr(event, 'guiEvent', None)
+        if gui_ev is not None:
+            try:
+                mods = gui_ev.modifiers()
+            except Exception:
+                pass
         s = 0.85 if getattr(event, 'button', '') == 'up' else 1.15
-        xl = ax.get_xlim(); yl = ax.get_ylim()
-        xm = (xl[0] + xl[1]) / 2; ym = (yl[0] + yl[1]) / 2
-        ax.set_xlim(xm - (xm - xl[0]) * s, xm + (xl[1] - xm) * s)
-        ax.set_ylim(ym - (ym - yl[0]) * s, ym + (yl[1] - ym) * s)
+        if mods & Qt.KeyboardModifier.ControlModifier:
+            yl = ax.get_ylim(); ym = (yl[0] + yl[1]) / 2
+            ax.set_ylim(ym - (ym - yl[0]) * s, ym + (yl[1] - ym) * s)
+        elif mods & Qt.KeyboardModifier.ShiftModifier:
+            xl = ax.get_xlim(); xm = (xl[0] + xl[1]) / 2
+            ax.set_xlim(xm - (xm - xl[0]) * s, xm + (xl[1] - xm) * s)
+        else:
+            xl = ax.get_xlim(); yl = ax.get_ylim()
+            xm = (xl[0] + xl[1]) / 2; ym = (yl[0] + yl[1]) / 2
+            ax.set_xlim(xm - (xm - xl[0]) * s, xm + (xl[1] - xm) * s)
+            ax.set_ylim(ym - (ym - yl[0]) * s, ym + (yl[1] - ym) * s)
         user_zoomed[0] = True
         saved_limits["xlim"] = tuple(ax.get_xlim())
         saved_limits["ylim"] = tuple(ax.get_ylim())
