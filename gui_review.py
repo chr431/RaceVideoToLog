@@ -234,7 +234,17 @@ class ReviewDialog(QDialog):
                 except Exception:
                     hover_bg[0] = None
 
+        _hover_last = [0.0]
+        import time as _time
+
         def _redraw() -> None:
+            now = _time.time()
+            if now - _hover_last[0] < 0.016:
+                return  # 节流：~60fps 上限
+            _hover_last[0] = now
+            # 抑制 stale：防止 matplotlib 空闲循环自动整图重绘（抖动）
+            hover_line.stale = False
+            hover_text.stale = False
             if hover_bg[0] is not None:
                 try:
                     canvas.restore_region(hover_bg[0])

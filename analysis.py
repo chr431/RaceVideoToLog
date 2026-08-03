@@ -120,10 +120,32 @@ def plot_segmented(ax: "Axes", x: "np.ndarray | list[float]", y: "np.ndarray | l
 
     - red (#F44336): auto-corrected (flag 11-19)
     - green (#81C784): high-trust or pinned (flag >= 20)
+
+    循环卷绕数据（帧偏移后 x 非单调）自动在下降跳变处断线分段，
+    避免跨圈连线。
     """
     red = "#F44336"
     green = "#81C784"
 
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    flags = list(flags)
+
+    # 卷绕断点：x 下降处（每段独立 smooth + 绘制）
+    breaks = [0]
+    for i in range(1, len(x)):
+        if x[i] < x[i - 1]:
+            breaks.append(i)
+    breaks.append(len(x))
+    for si in range(len(breaks) - 1):
+        s, e = breaks[si], breaks[si + 1]
+        _plot_segment(ax, x[s:e], y[s:e], flags[s:e], normal_color,
+                      show_red, smooth_strength, red, green)
+
+
+def _plot_segment(ax, x, y, flags, normal_color, show_red, smooth_strength,
+                  red, green) -> None:
+    """单段绘制：平滑 + 主曲线 + 红绿着色（plot_segmented 的分段子函数）。"""
     if smooth_strength > 0:
         x, y = smooth_data(x, y, smooth_strength)
 

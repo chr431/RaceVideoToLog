@@ -35,6 +35,21 @@ def _shift_csv(times, dists, speeds, flags, offset: int):
             speeds[k:] + speeds[:k], flags[k:] + flags[:k])
 
 
+def _plot_wrapped(ax, x, y, color, lw=0.8):
+    """绘制可能循环卷绕的数据：x 下降跳变处断线（两段绘制，避免跨圈连线）。"""
+    x = list(x); y = list(y)
+    brk = None
+    for i in range(1, len(x)):
+        if x[i] < x[i - 1]:
+            brk = i
+            break
+    if brk is None:
+        ax.plot(x, y, color=color, linewidth=lw)
+    else:
+        ax.plot(x[:brk], y[:brk], color=color, linewidth=lw)
+        ax.plot(x[brk:], y[brk:], color=color, linewidth=lw)
+
+
 def _read_fps(path: str) -> float:
     """读取 CSV 头的 fps（偏移秒数换算用）。"""
     from csv_io import parse_csv_header
@@ -68,6 +83,7 @@ class AnalysisTab:
         self._span_selector = None
         self._offsets: list[int] = [0, 0, 0]  # 每行 CSV 的帧偏移（仅 GUI）
         self._fps: list[float] = [0.0, 0.0, 0.0]  # 每行 CSV 的 fps（偏移换算用）
+        self._offset_timer: QTimer | None = None
 
         self._build_tab()
 
@@ -98,7 +114,7 @@ class AnalysisTab:
             off_spin = make_int_spinbox(-99999, 99999, 0, 84)
             off_spin.setToolTip("帧偏移（循环）：正数右移、负数左移，越界部分卷绕到另一端。 不修改 CSV 内容。")
             off_spin.valueChanged.connect(
-                lambda v, idx=i: (self._offsets.__setitem__(idx, v), self._invalidate_and_render()))
+                lambda v, idx=i: self._schedule_offset_render(idx, v))
             sl.addWidget(off_label)
             sl.addWidget(off_spin)
             cl.addWidget(slot, 0, i)
@@ -209,6 +225,20 @@ class AnalysisTab:
         self._last_mode = None
         self._render()
 
+    def _schedule_offset_render(self, idx: int, value: int) -> None:
+        """偏移 spinbox 变化：节流 150ms 后重建（拖动时不卡顿）。"""
+        from PySide6.QtCore import QTimer
+        self._offsets[idx] = value
+        if self._offset_timer is None:
+            self._offset_timer = QTimer(self)
+            self._offset_timer.setSingleShot(True)
+            self._offset_timer.timeout.connect(self._flush_offset_render)
+        self._offset_timer.start(150)
+
+    def _flush_offset_render(self) -> None:
+        self._offset_timer = None
+        self._invalidate_and_render()
+
     # ═══════════════════ 渲染 ═══════════════════
 
 
@@ -283,7 +313,17 @@ class AnalysisTab:
                 except Exception:
                     hover_bg[0] = None
 
+        _hover_last = [0.0]
+        import time as _time
+
         def _hover_redraw() -> None:
+            now = _time.time()
+            if now - _hover_last[0] < 0.016:
+                return  # 节流：~60fps 上限
+            _hover_last[0] = now
+            # 抑制 stale：防止 matplotlib 空闲循环自动整图重绘（导致抖动）
+            hover_line.stale = False
+            delta_text.stale = False
             if hover_bg[0] is not None:
                 try:
                     canvas.restore_region(hover_bg[0])
@@ -447,7 +487,7 @@ class AnalysisTab:
             if is_dtx:
                 d1 = all_x[0]; dt_list = all_y[0]
                 x_vals, y_vals = smooth_data(d1, dt_list, smooth_str) if smooth_str > 0 else (d1, dt_list)
-                line, = ax.plot(x_vals, y_vals, color=colors[0], linewidth=0.8)
+                _plot_wrapped(ax, x_vals, y_vals, colors[0])
                 self._chart_lines.append((line, 0, d1, dt_list, None))
                 ax.plot([], [], color=colors[0], linewidth=0.8, label=label)
             else:
@@ -517,7 +557,7 @@ class AnalysisTab:
             if is_dtx:
                 d1 = cache['all_x'][0]; dt_list = cache['all_y'][0]
                 x_vals, y_vals = smooth_data(d1, dt_list, smooth_str) if smooth_str > 0 else (d1, dt_list)
-                line, = ax.plot(x_vals, y_vals, color=colors[0], linewidth=0.8)
+                _plot_wrapped(ax, x_vals, y_vals, colors[0])
                 self._chart_lines.append((line, 0, d1, dt_list, None))
             else:
                 for i, raw in enumerate(all_raw):
