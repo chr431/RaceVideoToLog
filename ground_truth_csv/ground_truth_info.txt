@@ -19,3 +19,4 @@
 
 edit 1：添加test3_truth.csv、test2_truth.csv
 edit 2：添加test5_ref.csv
+edit 3：所有文件升级到2.7.0标准
