@@ -230,7 +230,7 @@ class AnalysisTab:
         from PySide6.QtCore import QTimer
         self._offsets[idx] = value
         if self._offset_timer is None:
-            self._offset_timer = QTimer(self)
+            self._offset_timer = QTimer()  # 无 parent：AnalysisTab 非 QObject
             self._offset_timer.setSingleShot(True)
             self._offset_timer.timeout.connect(self._flush_offset_render)
         self._offset_timer.start(150)
@@ -300,55 +300,25 @@ class AnalysisTab:
         delta_text.set_text(f"← 拖拽选择范围查看{delta_label}")
 
         # ── 悬停竖线 + 最近数据点速度（仅 v-t / v-x，Δt-x 保持原样）──
-        # blit 增量重绘：只重画竖线和文本，避免整图重绘（数据点多时跟手）
+        # Qt 覆盖层绘制（HoverOverlay）：绕开 matplotlib 重绘，零抖动零卡顿
         import bisect
-        hover_line = ax.axvline(0, color=config.COLOR_GRAY, linewidth=0.8,
-                                linestyle="--", alpha=0.7, visible=False)
-        hover_bg = [None]
-        _hover_last = [0.0]
-        import time as _time
-
-        def _save_hover_bg(event: object) -> None:
-            if event.canvas is canvas:
-                try:
-                    hover_bg[0] = canvas.copy_from_bbox(ax.bbox)
-                except Exception:
-                    hover_bg[0] = None
-
-        def _hover_redraw() -> None:
-            now = _time.time()
-            if now - _hover_last[0] < 0.016:
-                return  # 节流 ~60fps
-            _hover_last[0] = now
-            # 抑制 stale：防止 matplotlib 空闲循环自动整图重绘（抖动）
-            hover_line.stale = False
-            delta_text.stale = False
-            if hover_bg[0] is not None:
-                try:
-                    canvas.restore_region(hover_bg[0])
-                    ax.draw_artist(hover_line)
-                    ax.draw_artist(delta_text)
-                    canvas.blit(ax.bbox)
-                    return
-                except Exception:
-                    pass
-            canvas.draw_idle()
+        from widget_utils import HoverOverlay
+        overlay = HoverOverlay(canvas)
 
         def _on_motion(event: object) -> None:
             if is_dtx:
+                overlay.clear()
                 return
-            selected = getattr(self._span_selector, 'visible', False)
+            if getattr(self._span_selector, 'visible', False):
+                overlay.clear()  # 拖选后保持区间信息
+                return
             if event.xdata is None:
-                hover_line.set_visible(False)
-                if not selected:
-                    delta_text.set_text(f"← 拖拽选择范围查看{delta_label}")
-                _hover_redraw()
+                overlay.clear()
                 return
-            if selected:
-                hover_line.set_visible(False)  # 拖选后保持区间信息
+            try:
+                x_px, _ = ax.transData.transform((event.xdata, 0))
+            except Exception:
                 return
-            hover_line.set_visible(True)
-            hover_line.set_xdata([event.xdata, event.xdata])
             lines = []
             for i in range(3):
                 xd = all_x[i]
@@ -362,11 +332,13 @@ class AnalysisTab:
                 n = Path(self._csvs[i] or "").stem
                 v = all_y[i][pos]
                 lines.append(f"{n}: {v:.0f} km/h" if v >= 0 else f"{n}: 无效")
-            delta_text.set_text(chr(10).join(lines) if lines else "")
-            _hover_redraw()
+            overlay.set_hover(x_px, chr(10).join(lines) if lines else "")
+
+        def _clear_overlay(event: object) -> None:
+            overlay.clear()  # matplotlib 重绘后坐标失效，下次 motion 刷新
 
         canvas.mpl_connect("motion_notify_event", _on_motion)
-        canvas.mpl_connect("draw_event", _save_hover_bg)
+        canvas.mpl_connect("draw_event", _clear_overlay)
 
         # 滚轮缩放 + 右键平移
         setup_chart_zoom_pan(ax, canvas, throttle_ms=0)
@@ -439,15 +411,22 @@ class AnalysisTab:
                         times, dists, speeds, flags = parse_csv(csv_path)
                         self._fps[i] = _read_fps(csv_path)
                         name = Path(csv_path).stem
-                        # 循环卷绕偏移（帧 = 索引位移）；新起点同时归零：
-                        # v-t 的 t=0、v-x 的 x=0 都从卷绕后起点重新计算
+                        # 循环卷绕偏移（帧 = 索引位移）；周期取模重标起点：
+                        # 新 t=0 / x=0 起点，之后按圈周期卷绕（x/t 始终 >= 0，
+                        # 起点前的圈尾路段出现在末端 — 周期拓展语义）
+                        _lap_t = times[-1] - times[0] if len(times) > 1 else 0.0
+                        _lap_d = dists[-1] - dists[0] if len(dists) > 1 else 0.0
                         times, dists, speeds, flags = _shift_csv(
                             times, dists, speeds, flags, self._offsets[i])
                         if self._offsets[i]:
                             base_t = times[0]
                             base_d = dists[0]
-                            x_data = ([x - base_t for x in times]
-                                      if is_vt else [d - base_d for d in dists])
+                            if is_vt:
+                                x_data = [((x - base_t) % _lap_t) if _lap_t > 0 else (x - base_t)
+                                          for x in times]
+                            else:
+                                x_data = [((d - base_d) % _lap_d) if _lap_d > 0 else (d - base_d)
+                                          for d in dists]
                         else:
                             x_data = times if is_vt else dists
                         all_x[i] = x_data; all_y[i] = speeds

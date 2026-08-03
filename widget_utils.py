@@ -19,6 +19,11 @@ def make_static_card(parent=None):
     return w
 
 
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtWidgets import QWidget
+
+
 def make_int_spinbox(min_val: int, max_val: int, default: int, width: int = 70):
     """创建整数 CompactSpinBox：禁用浮点 flyout 面板。
 
@@ -128,3 +133,49 @@ def setup_chart_zoom_pan(ax, canvas, throttle_ms: int = 40):
     canvas.mpl_connect("motion_notify_event", _on_motion)
 
     return user_zoomed, saved_limits
+
+
+class HoverOverlay(QWidget):
+    """matplotlib 画布上的 Qt 覆盖层：悬停竖线 + 左上文本。
+
+    完全绕开 matplotlib 重绘（blit/全量重绘都有抖动或卡顿）：
+    竖线和文本由 Qt 直接绘制，鼠标移动只触发本 widget 的局部重绘。
+    """
+
+    def __init__(self, canvas, fg_color: str = "#333333",
+                 line_color: str = "#888888") -> None:
+        super().__init__(canvas)
+        self._canvas = canvas
+        self._x_px: float | None = None
+        self._text: str = ""
+        self._fg = QColor(fg_color)
+        self._line = QColor(line_color)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setGeometry(canvas.rect())
+        self.hide()
+
+    def set_hover(self, x_px: float, text: str) -> None:
+        """更新竖线像素位置与文本并局部重绘（Qt 层，无 matplotlib 开销）。"""
+        self._x_px = x_px
+        self._text = text
+        self.setGeometry(self._canvas.rect())
+        self.show()
+        self.update()
+
+    def clear(self) -> None:
+        self.hide()
+
+    def paintEvent(self, event) -> None:
+        if self._x_px is None:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        pen = QPen(self._line, 1)
+        pen.setStyle(Qt.PenStyle.DashLine)
+        p.setPen(pen)
+        p.drawLine(int(self._x_px), 0, int(self._x_px), self.height())
+        if self._text:
+            p.setPen(self._fg)
+            p.drawText(8, 14, self._text)
+        p.end()
