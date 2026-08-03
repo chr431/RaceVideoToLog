@@ -79,20 +79,18 @@ def _local_interp(i: int, rows: list, observations: list, times: list,
                   max_speed_kmh: float, fps: float = 1.0,
                   min_distance: int = 0,
                   exclude_flags: set[int] | None = None,
-                  max_accel_mps2: float | None = None) -> float | None:
-    """Interpolation using nearest 3+ digit neighbors (no trust required).
+                  max_accel_mps2: float = 0.0) -> float | None:
+    """Interpolation using nearest valid neighbors.
 
-    If min_distance > 0, skips past neighbors within that many frames
-    to find anchors outside a consistency island.
-    If exclude_flags is given, anchors with those flag values are skipped
-    (e.g. FILL_INTERP frames whose values are interpolation guesses and
-    must not contaminate later references).
-    If max_accel_mps2 is given, anchors must be physically consistent with
-    their immediate neighbors — a single wrong OCR value (e.g. 2744=17 vs
-    neighbors 170) must not become an interpolation anchor."""
+    Anchors are always physically validated: a candidate anchor must be
+    consistent with its immediate neighbors (±2 frames within max_accel) —
+    a single wrong OCR value (e.g. 2744=17 vs neighbors 170) must not
+    become an interpolation anchor.  exclude_flags additionally skips
+    anchors carrying those flag values (e.g. auto-corrected frames whose
+    values are guesses, not observations)."""
     n = len(rows)
-    dv_frame = None
-    if max_accel_mps2 is not None and n >= 2:
+    dv_frame = 0.0
+    if n >= 2:
         dt_frame = times[1] - times[0] if times[1] > times[0] else 1.0 / max(fps, 1.0)
         dv_frame = max_accel_mps2 * dt_frame * MPS_TO_KMH
 
@@ -101,7 +99,7 @@ def _local_interp(i: int, rows: list, observations: list, times: list,
             return False
         if exclude_flags and rows[j][3] in exclude_flags:
             return False
-        if dv_frame is not None:
+        if dv_frame > 0:
             # 锚点与其紧邻有效帧（±2 帧）的差必须在物理范围内
             for k in (j - 1, j + 1):
                 if 0 <= k < n and rows[k][2] >= 0:
