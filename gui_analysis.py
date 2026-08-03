@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 from qfluentwidgets import (PushButton, PrimaryPushButton, CompactSpinBox, isDarkTheme,
     RadioButton, CheckBox, BodyLabel, Slider, CaptionLabel)
-from widget_utils import make_static_card, setup_chart_zoom_pan, make_int_spinbox
+from widget_utils import make_static_card, setup_chart_zoom_pan, make_int_spinbox, ModPlotWidget
 
 from analysis import parse_csv, smooth_data
 import config
@@ -147,7 +147,7 @@ class AnalysisTab:
         # ── Matplotlib 画布 ──
         import pyqtgraph as pg
         pg.setConfigOptions(antialias=False)
-        plot = _ModPlotWidget()
+        plot = ModPlotWidget()
         plot.setBackground(chart_colors(isDarkTheme())[0])
         plot.showGrid(x=True, y=True, alpha=0.2)
         plot.hideButtons()
@@ -265,8 +265,8 @@ class AnalysisTab:
             vb = plot_item.vb
             xmin_v, xmax_v = vb.viewRange()[0]
             ymin_v, ymax_v = vb.viewRange()[1]
-            delta_text.setPos(xmin_v, ymax_v)
-            delta_text.setVisible(bool(text) or self._hover_text_visible)
+            delta_text.setPos(xmax_v, ymax_v)  # 右上角
+            delta_text.setVisible(bool(text))
 
         # ── 悬停竖线 + 最近点速度（仅 v-t / v-x）──
         hover_line = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen(
@@ -314,16 +314,23 @@ class AnalysisTab:
 
         plot.scene().sigMouseMoved.connect(_on_mouse_moved)
 
-        # 拖选 region（隐藏于初始，拖拽显示）
+        # 拖选 region：初始覆盖全数据范围（拖 handles 调整，统计实时更新）
+        xs_all = [x for xd in all_x for x in xd]
+        xmin0 = min(xs_all) if xs_all else 0.0
+        xmax0 = max(xs_all) if xs_all else 1.0
+        if xmax0 <= xmin0:
+            xmax0 = xmin0 + 1.0
         self._region = None
-        self._region = pg.LinearRegionItem(values=(0, 0), orientation='vertical',
+        self._region = pg.LinearRegionItem(values=(xmin0, xmax0), orientation='vertical',
                                            movable=True, brush=pg.mkBrush(
                                                config.COLOR_BLUE, alpha=40))
-        self._region.setVisible(False)
         self._region.sigRegionChanged.connect(lambda r: _update_delta_text())
         plot.addItem(self._region)
-
-        delta_text.setText("← 拖拽选择范围查看" + delta_label)
+        # 拖选统计文本放右上（悬停文本在左上，避免重叠）
+        delta_text.setAnchor((1, 1))
+        xmax_v = max(xmax0, xmax0)
+        delta_text.setPos(xmax0, 0)
+        delta_text.setText("← 拖拽区间边界查看统计")
 
     def _render(self) -> None:
         """高性能渲染：缓存 CSV 解析结果，smooth 变化时仅更新线数据。
@@ -374,8 +381,8 @@ class AnalysisTab:
                 t2, d2, s2, _ = parse_csv(self._csvs[1])
                 # 帧偏移（GUI only，循环卷绕）：时间轴循环平移对齐起跑线，
                 # 越界部分卷绕到另一端（一整圈语义）；不修改 CSV 内容。
-                t1, d1, s1, _ = _shift_csv(t1, d1, s1, self._offsets[0])
-                t2, d2, s2, _ = _shift_csv(t2, d2, s2, self._offsets[1])
+                t1, d1, s1, f1 = _shift_csv(t1, d1, s1, [0]*len(s1), self._offsets[0])
+                t2, d2, s2, f2 = _shift_csv(t2, d2, s2, [0]*len(s2), self._offsets[1])
                 t2_interp = np.interp(d1, d2, t2)
                 dt = np.array(t1) - t2_interp
                 all_x[0] = d1; all_y[0] = dt.tolist()
@@ -492,7 +499,12 @@ class AnalysisTab:
             if not is_dtx:
                 saved = self._saved_limits.get(mode)
                 if saved is not None:
-                    plot.getPlotItem().vb.setRange(saved, padding=0)
+                    xr, yr = saved
+                    vb2 = plot.getPlotItem().vb
+                    vb2.setXRange(xr[0], xr[1], padding=0)
+                    vb2.setYRange(yr[0], yr[1], padding=0)
+                else:
+                    plot.getPlotItem().vb.autoRange()  # 新模式：自适应数据
 
             self._last_mode = mode
             self._sync_figure_theme()
@@ -550,23 +562,6 @@ class AnalysisTab:
 
 
 # ═══════════════════ pyqtgraph 绘制辅助 ═══════════════════
-
-class _ModPlotWidget(pg.PlotWidget):
-    """PlotWidget：Ctrl+滚轮缩放纵轴，Shift+滚轮缩放横轴，无修饰双轴。
-
-    继承原生 PlotWidget（plotItem/scene 关联完整），仅重写 wheelEvent。
-    """
-
-    def wheelEvent(self, ev):
-        mods = ev.modifiers()
-        if mods & Qt.KeyboardModifier.ControlModifier:
-            axis = 1  # y
-        elif mods & Qt.KeyboardModifier.ShiftModifier:
-            axis = 0  # x
-        else:
-            axis = None  # both
-        self.getPlotItem().getViewBox().wheelEvent(ev, axis)
-
 
 def _plot_wrapped_pg(plot, x, y, color, width=1.0):
     """绘制可能循环卷绕的数据：x 下降跳变处断线（分段绘制）。"""

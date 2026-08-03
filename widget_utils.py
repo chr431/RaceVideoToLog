@@ -22,6 +22,7 @@ def make_static_card(parent=None):
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QWidget
+import pyqtgraph as pg
 
 
 def make_int_spinbox(min_val: int, max_val: int, default: int, width: int = 70):
@@ -179,3 +180,33 @@ class HoverOverlay(QWidget):
             p.setPen(self._fg)
             p.drawText(8, 14, self._text)
         p.end()
+
+
+class ModPlotWidget(pg.PlotWidget):
+    """PlotWidget：Ctrl+滚轮缩放纵轴，Shift+滚轮缩放横轴，无修饰双轴。
+
+    pyqtgraph 0.14 的 ViewBox.wheelEvent 使用 PyQt5 旧 API (ev.delta())，
+    PySide6 下抛 AttributeError — 在此自实现缩放。
+    """
+
+    def wheelEvent(self, ev):
+        mods = ev.modifiers()
+        delta = ev.angleDelta().y()
+        if delta == 0:
+            return
+        s = 0.85 if delta > 0 else 1.15  # 上滚放大
+        vb = self.getPlotItem().getViewBox()
+        xr = vb.viewRange()[0]
+        yr = vb.viewRange()[1]
+        if mods & Qt.KeyboardModifier.ControlModifier:
+            ym = (yr[0] + yr[1]) / 2
+            vb.setYRange(ym - (ym - yr[0]) * s, ym + (yr[1] - ym) * s, padding=0)
+        elif mods & Qt.KeyboardModifier.ShiftModifier:
+            xm = (xr[0] + xr[1]) / 2
+            vb.setXRange(xm - (xm - xr[0]) * s, xm + (xr[1] - xm) * s, padding=0)
+        else:
+            xm = (xr[0] + xr[1]) / 2
+            vb.setXRange(xm - (xm - xr[0]) * s, xm + (xr[1] - xm) * s, padding=0)
+            ym = (yr[0] + yr[1]) / 2
+            vb.setYRange(ym - (ym - yr[0]) * s, ym + (yr[1] - ym) * s, padding=0)
+        ev.accept()

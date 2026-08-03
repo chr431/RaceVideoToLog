@@ -13,7 +13,7 @@ from PySide6.QtGui import QPixmap, QImage, QPalette, QColor
 from theme_manager import ThemeManager
 from qfluentwidgets import (BodyLabel, StrongBodyLabel, CaptionLabel,
     PrimaryPushButton, PushButton, isDarkTheme)
-from widget_utils import make_static_card, setup_chart_zoom_pan, disable_spin_flyout
+from widget_utils import make_static_card, setup_chart_zoom_pan, disable_spin_flyout, ModPlotWidget
 from config import (COLOR_RED, COLOR_ORANGE, COLOR_BLUE,
     COLOR_LIGHT_GRAY, COLOR_LIGHTER_GRAY, chart_colors,
     MANUAL_EDIT_ACCEL_WARNING)
@@ -181,7 +181,7 @@ class ReviewDialog(QDialog):
         pg.setConfigOptions(antialias=False)  # 大数据散点关闭抗锯齿
         dark = isDarkTheme()
         bg, fg = chart_colors(dark)
-        plot = pg.PlotWidget()
+        plot = ModPlotWidget()
         plot.setMinimumHeight(150)
         plot.setBackground(bg)
         plot.showGrid(x=True, y=True, alpha=0.15 if dark else 0.25)
@@ -341,7 +341,9 @@ class ReviewDialog(QDialog):
             self._update_corr_and_cur(times)
 
         if saved_range is not None:
-            vb.setRange(saved_range, padding=0)
+            xr, yr = saved_range
+            vb.setXRange(xr[0], xr[1], padding=0)
+            vb.setYRange(yr[0], yr[1], padding=0)
 
     def _update_corr_and_cur(self, times: list) -> None:
         """增量更新修正蓝点与当前帧红点（pyqtgraph setData 高效）。"""
