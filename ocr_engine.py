@@ -159,17 +159,51 @@ def _patch_rapidocr_init() -> None:
     logger.info("RapidOCR patched: det/cls model loading conditional on use_det/use_cls")
 
 
+def _rec_session_max_batch(ocr: "object") -> int | None:
+    """识别引擎优化 profile 的 batch 上限（仅 TRT 有，ONNX 返回 None）。
+
+    rapidocr 自建 TRT 引擎按固定 profile 构建（当前引擎 batch 上限 6），
+    超限提交 setInputShape 会报
+    "Set dimension [N,...] does not satisfy any optimization profiles"。
+    """
+    try:
+        session = ocr.text_rec.session
+    except AttributeError:
+        return None
+    if type(session).__name__ != "TRTInferSession":
+        return None
+    try:
+        engine = session.engine
+        input_name = engine.get_tensor_name(0)
+        profile = engine.get_tensor_profile_shape(input_name, 0)
+        return int(profile[2][0])  # max shape 的首维 = batch 上限
+    except Exception:
+        return None
+
+
 def ocr_rec_batch(ocr: "object", img_list: list) -> list:
     """批量识别：一次 session.run 处理多帧，按输入顺序返回结果。
 
     通过 RapidOCR 的 text_rec 直接批处理（跳过 __call__ 的
     load_img/preprocess/build_final_output 包装开销，实测 ~3.3x 提速）。
+    TRT 引擎的 profile 限制 batch 上限（如 6）→ 超限时自动分片提交。
     任一步骤失败时回退为逐帧调用，保证功能不受影响。
 
     Returns: list，每项兼容 extract_speed_value()（TextRecOutput 或等效对象）。
     """
     if not img_list:
         return []
+    max_batch = _rec_session_max_batch(ocr)
+    if max_batch and len(img_list) > max_batch:
+        results: list = []
+        for i in range(0, len(img_list), max_batch):
+            results.extend(_ocr_rec_batch_once(ocr, img_list[i:i + max_batch]))
+        return results
+    return _ocr_rec_batch_once(ocr, img_list)
+
+
+def _ocr_rec_batch_once(ocr: "object", img_list: list) -> list:
+    """单次批量识别（内部实现，batch 已确保在 profile 上限内）。"""
     try:
         from rapidocr.ch_ppocr_rec.typings import TextRecInput
         out = ocr.text_rec(TextRecInput(img=list(img_list), return_word_box=False))
