@@ -323,8 +323,9 @@ class AnalysisTab:
         self._region = None
         self._region = pg.LinearRegionItem(values=(xmin0, xmax0), orientation='vertical',
                                            movable=True, brush=pg.mkBrush(
-                                               config.COLOR_BLUE, alpha=40))
+                                               config.COLOR_BLUE, alpha=20))
         self._region.sigRegionChanged.connect(lambda r: _update_delta_text())
+        self._region.setVisible(False)  # 重绘后默认不选择，仅右键拖拽才绘制
         plot.addItem(self._region)
 
         def _on_drag_range(x0: float, x1: float) -> None:
@@ -334,12 +335,21 @@ class AnalysisTab:
             self._region.setRegion((x0, x1))
             self._region.setVisible(True)
 
+        def _on_drag_click(x: float) -> None:
+            """右键点击（无拖动）：若在选区外则取消选择。"""
+            if self._region.isVisible():
+                x0, x1 = self._region.getRegion()
+                if x < x0 or x > x1:
+                    self._region.setVisible(False)
+                    delta_text.setVisible(False)
+
         plot.sig_drag_range.connect(_on_drag_range)
+        plot.sig_drag_click.connect(_on_drag_click)
 
         # 拖选统计文本放右上（悬停文本在左上，避免重叠）
         delta_text.setAnchor((1, 1))
         delta_text.setPos(xmax0, 0)
-        delta_text.setText("← 右键拖拽选择范围")
+        delta_text.setText("← 右键拖拽选择范围，点击选区外取消")
 
     def _render(self) -> None:
         """高性能渲染：缓存 CSV 解析结果，smooth 变化时仅更新线数据。

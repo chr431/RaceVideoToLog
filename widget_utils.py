@@ -183,14 +183,25 @@ class HoverOverlay(QWidget):
 
 
 class _RegionViewBox(pg.ViewBox):
-    """ViewBox：右键拖拽 = 选择范围（左键平移保留）。"""
+    """ViewBox：右键拖拽 = 选择范围，右键点击（无移动）= 取消选择（左键平移保留）。"""
 
-    sig_drag_range = Signal(float, float)  # (x0, x1) 数据坐标
+    sig_drag_range = Signal(float, float)  # (x0, x1) 数据坐标（拖拽）
+    sig_drag_click = Signal(float)         # 单击位置数据坐标（点击）
 
     def mouseDragEvent(self, ev, axis=None):
         if ev.button() == Qt.MouseButton.RightButton:
             if ev.isStart():
                 self._drag_x0 = self.mapSceneToView(ev.buttonDownScenePos()).x()
+                self._drag_p0 = ev.buttonDownScenePos()
+            elif ev.isFinish():
+                p1 = ev.scenePos()
+                if p1 is not None and (p1 - self._drag_p0).manhattanLength() < 5:
+                    # 点击（无拖动）→ 取消选择信号
+                    x = self.mapSceneToView(p1).x()
+                    self.sig_drag_click.emit(x)
+                else:
+                    x1 = self.mapSceneToView(ev.scenePos()).x()
+                    self.sig_drag_range.emit(self._drag_x0, x1)
             else:
                 x1 = self.mapSceneToView(ev.scenePos()).x()
                 self.sig_drag_range.emit(self._drag_x0, x1)
