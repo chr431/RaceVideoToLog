@@ -91,7 +91,7 @@ class ReviewDialog(QDialog):
         chart_card = make_static_card()
         cl = QVBoxLayout(chart_card); cl.setContentsMargins(8, 8, 8, 4)
         cl.addWidget(CaptionLabel("速度曲线（点击数据点选帧，蓝点=已修正，橙点=低置信度，红圈=当前帧）"))
-        self._figure, self._ax, self._canvas = self._create_chart()
+        self._canvas = self._create_chart()
         cl.addWidget(self._canvas, 1)
         rl.addWidget(chart_card, 2)
 
@@ -177,96 +177,84 @@ class ReviewDialog(QDialog):
     # ═══════════════ 图表 ═══════════════
 
     def _create_chart(self):
-        from matplotlib.figure import Figure
-        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
-
-        fig = Figure(figsize=(8, 3.5), dpi=100, layout='tight')
-        fig.subplots_adjust(left=0.08, right=0.98, top=0.95, bottom=0.15)
-        ax = fig.add_subplot(111)
+        import pyqtgraph as pg
+        pg.setConfigOptions(antialias=False)  # 大数据散点关闭抗锯齿
         dark = isDarkTheme()
         bg, fg = chart_colors(dark)
-        fig.set_facecolor(bg)
-        ax.set_facecolor(bg)
+        plot = pg.PlotWidget()
+        plot.setMinimumHeight(150)
+        plot.setBackground(bg)
+        plot.showGrid(x=True, y=True, alpha=0.15 if dark else 0.25)
+        plot.hideButtons()
+        plot.setMenuEnabled(False)
+        vb = plot.getPlotItem().getViewBox()
+        vb.setMouseEnabled(x=True, y=True)  # 滚轮缩放 + 左键拖拽平移（原生）
+        self._plot = plot
         self._chart_params = {'dark': dark, 'bg': bg, 'fg': fg}
+        self._chart_artists = {}
+        self._saved_range = None
+        self._user_zoomed = False
+        vb.sigRangeChangedManually.connect(self._on_range_changed)
+        self._setup_hover(plot)
+        self._redraw_chart(plot)
+        return plot
 
-        from PySide6.QtWidgets import QSizePolicy
-        canvas = FigureCanvasQTAgg(fig)
-        canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        canvas.setMinimumHeight(150)
-        self._canvas = canvas
+    def _on_range_changed(self, vb) -> None:
+        self._user_zoomed = True
+        self._saved_range = vb.viewRange()
 
-        canvas.mpl_connect('pick_event', self._on_pick)
-        canvas.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+    def _setup_hover(self, plot) -> None:
+        """悬停竖线 + 左上角最近点速度（pyqtgraph 原生 InfiniteLine + TextItem）。"""
+        import pyqtgraph as pg
+        from PySide6.QtCore import Qt as _Qt
+        self._hover_line = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen(
+            config.COLOR_GRAY, width=1, style=_Qt.PenStyle.DashLine))
+        self._hover_line.setVisible(False)
+        plot.addItem(self._hover_line)
+        fg = chart_colors(isDarkTheme())[1]
+        self._hover_text = pg.TextItem("", color=fg, anchor=(0, 1))
+        self._hover_text.setVisible(False)
+        plot.addItem(self._hover_text, ignoreBounds=True)
+        if not hasattr(self, '_hover_connected'):
+            plot.scene().sigMouseMoved.connect(self._on_hover_moved)
+            self._hover_connected = True
 
-        self._setup_chart_zoom_pan(ax, canvas)
-        self._redraw_chart(ax, fig)
-        return fig, ax, canvas
-
-    def _setup_chart_zoom_pan(self, ax, canvas) -> None:
-        self._user_zoomed_ref, self._saved_limits = setup_chart_zoom_pan(
-            ax, canvas, throttle_ms=40)
-        self._setup_hover(ax, canvas)
-
-    def _setup_hover(self, ax, canvas) -> None:
-        """悬停竖线 + 左上角显示鼠标位置最近数据点的速度（Qt 覆盖层）。
-
-        图表 clear 重建后需重新挂载（_redraw_chart rebuild 分支调用）。
-        """
+    def _on_hover_moved(self, pos) -> None:
+        plot = self._plot
+        vb = plot.plotItem.vb
+        if not plot.sceneBoundingRect().contains(pos):
+            self._hover_line.setVisible(False)
+            self._hover_text.setVisible(False)
+            return
+        pt = vb.mapSceneToView(pos)
+        x = pt.x()
+        cache = getattr(self, '_chart_cache', None)
+        times = (cache or {}).get('times') or []
+        speeds = (cache or {}).get('speeds') or []
+        if not times:
+            return
         import bisect
-        from widget_utils import HoverOverlay
-        # 断开旧的 motion handler（重建时避免重复连接）
-        for cid in getattr(self, '_hover_cids', []):
-            try:
-                canvas.mpl_disconnect(cid)
-            except Exception:
-                pass
-        overlay = HoverOverlay(canvas)
+        idx = bisect.bisect_left(times, x)
+        if idx >= len(times):
+            idx = len(times) - 1
+        elif idx > 0 and abs(times[idx - 1] - x) < abs(times[idx] - x):
+            idx -= 1
+        v = speeds[idx]
+        self._hover_line.setPos(x)
+        self._hover_line.setVisible(True)
+        text = (f"#{int(times[idx])}: {v:.0f} km/h"
+                if v >= 0 else f"#{int(times[idx])}: 无效")
+        self._hover_text.setText(text)
+        xmin, xmax = vb.viewRange()[0]
+        ymin, ymax = vb.viewRange()[1]
+        self._hover_text.setPos(xmin, ymax)
+        self._hover_text.setVisible(True)
 
-        def _on_motion(event) -> None:
-            cache = getattr(self, '_chart_cache', None)
-            if event.xdata is None:
-                overlay.clear()
-                return
-            if not cache:
-                return
-            times = cache.get('times') or []
-            speeds = cache.get('speeds') or []
-            if not times:
-                return
-            try:
-                x_px, _ = ax.transData.transform((event.xdata, 0))
-            except Exception:
-                return
-            pos = bisect.bisect_left(times, event.xdata)
-            if pos >= len(times):
-                pos = len(times) - 1
-            elif pos > 0 and abs(times[pos - 1] - event.xdata) < abs(times[pos] - event.xdata):
-                pos -= 1
-            v = speeds[pos]
-            text = (f"#{int(times[pos])}: {v:.0f} km/h"
-                    if v >= 0 else f"#{int(times[pos])}: 无效")
-            overlay.set_hover(x_px, text)
-
-        def _clear_overlay(event) -> None:
-            overlay.clear()
-
-        cids = [canvas.mpl_connect("motion_notify_event", _on_motion),
-                canvas.mpl_connect("draw_event", _clear_overlay)]
-        self._hover_cids = cids
-
-    def _redraw_chart(self, ax=None, fig=None) -> None:
-        if ax is None:
-            ax = self._ax
-        if fig is None:
-            fig = self._figure
-
-        user_zoomed = (hasattr(self, '_user_zoomed_ref')
-                        and self._user_zoomed_ref[0])
-        saved_xlim = None
-        saved_ylim = None
-        if user_zoomed:
-            saved_xlim = self._saved_limits["xlim"]
-            saved_ylim = self._saved_limits["ylim"]
+    def _redraw_chart(self, plot=None) -> None:
+        if plot is None:
+            plot = self._plot
+        vb = plot.plotItem.vb
+        saved_range = self._saved_range if getattr(self, '_user_zoomed', False) else None
 
         dark = isDarkTheme()
         bg, fg = chart_colors(dark)
@@ -277,7 +265,6 @@ class ReviewDialog(QDialog):
 
         times = [r[0] for r in self._rows]  # 帧号
         speeds = [r[2] for r in self._rows]
-        # 检测数据是否变化（预览/修正改变 speed 时强制重建）
         prev_data = self._chart_cache.get('data_hash', 0) if hasattr(self, '_chart_cache') else 0
         data_hash = hash((len(times), times[0], times[-1],
                           sum(speeds), len(self._corrections)))
@@ -285,31 +272,33 @@ class ReviewDialog(QDialog):
         needs_rebuild = (prev_dark != dark or not hasattr(self, '_chart_cache')
                          or prev_corr != cur_corr or prev_data != data_hash)
 
-        # 低置信度区间（一次计算，复用）
         low_set = set()
         for s, e in self._low_confidence_regions():
             low_set.update(range(s, e + 1))
 
         if needs_rebuild:
-            ax.clear()
+            plot.clear()
             self._chart_params = {'dark': dark, 'bg': bg, 'fg': fg}
-            self._setup_hover(ax, self._canvas)
+            plot.setBackground(bg)
+            plot.showGrid(x=True, y=True, alpha=0.15 if dark else 0.25)
+            self._setup_hover(plot)
             self._chart_artists = {}
 
-            # 低置信度背景 span
+            # 低置信度区间（不可移动的 LinearRegionItem）
             done = set()
             for s, e in self._low_confidence_regions():
                 key = (s, e)
                 if key not in done:
                     done.add(key)
-                    ax.axvspan(times[s], times[min(e, len(times) - 1)],
-                                facecolor=COLOR_ORANGE, alpha=0.08, zorder=0)
+                    region = pg.LinearRegionItem(
+                        values=(times[s], times[min(e, len(times) - 1)]),
+                        orientation='vertical', movable=False,
+                        brush=pg.mkBrush(COLOR_ORANGE, alpha=20))
+                    plot.addItem(region)
 
-            # 拆成两个 scatter（各统一大小），避免每点不同大小导致的
-            # PathCollection 性能问题（统一大小可复用单一字形，6000 点缩放流畅）
+            # 灰色/橙色散点（大数据：ScatterPlotItem 原生高性能）
             gray_c = COLOR_LIGHT_GRAY if not dark else COLOR_LIGHTER_GRAY
-            gx, gy, gi = [], [], []
-            ox, oy, oi = [], [], []
+            gx, gy, gi, ox, oy, oi = [], [], [], [], [], []
             for i in range(len(times)):
                 if i in self._corrections:
                     continue
@@ -317,89 +306,67 @@ class ReviewDialog(QDialog):
                     ox.append(times[i]); oy.append(speeds[i]); oi.append(i)
                 else:
                     gx.append(times[i]); gy.append(speeds[i]); gi.append(i)
-            if gx:
-                self._chart_artists['bg_gray'] = ax.scatter(
-                    gx, gy, c=gray_c, s=4, alpha=0.4, zorder=1,
-                    rasterized=True, edgecolors='none',
-                    picker=True, pickradius=8)
-                self._chart_pick_gray = gi
-            if ox:
-                self._chart_artists['bg_orange'] = ax.scatter(
-                    ox, oy, c=COLOR_ORANGE, s=9, alpha=0.7, zorder=2,
-                    rasterized=True, edgecolors='none',
-                    picker=True, pickradius=8)
-                self._chart_pick_orange = oi
+            gray = pg.ScatterPlotItem(size=4, brush=pg.mkBrush(gray_c, alpha=100),
+                                      pen=None)
+            gray.setData(x=gx, y=gy, data=gi)
+            gray.sigClicked.connect(self._on_scatter_clicked)
+            plot.addItem(gray)
+            self._chart_artists['bg_gray'] = gray
+            orange = pg.ScatterPlotItem(size=9, brush=pg.mkBrush(COLOR_ORANGE, alpha=180),
+                                        pen=None)
+            orange.setData(x=ox, y=oy, data=oi)
+            orange.sigClicked.connect(self._on_scatter_clicked)
+            plot.addItem(orange)
+            self._chart_artists['bg_orange'] = orange
 
-            # 当前帧红点（小号实心+白边）
-            cur_fi = self._current_frame
-            if 0 <= cur_fi < len(times) and cur_fi not in self._corrections:
-                cur_v = self._rows[cur_fi][2]
-                if cur_v >= 0:
-                    self._chart_artists['cur_highlight'] = ax.scatter(
-                        [times[cur_fi]], [cur_v], c=COLOR_RED, s=12,
-                        zorder=6, edgecolors='white', linewidths=0.5)
-                else:
-                    self._chart_artists['cur_highlight'] = None
-            else:
-                self._chart_artists['cur_highlight'] = None
+            # 修正蓝点 + 当前帧红点
+            corr = pg.ScatterPlotItem(size=12, brush=pg.mkBrush(COLOR_BLUE),
+                                      pen=pg.mkPen('w', width=0.5))
+            plot.addItem(corr)
+            self._chart_artists['corrections'] = corr
+            cur = pg.ScatterPlotItem(size=12, brush=pg.mkBrush(COLOR_RED),
+                                     pen=pg.mkPen('w', width=0.5))
+            plot.addItem(cur)
+            self._chart_artists['cur_highlight'] = cur
+            self._update_corr_and_cur(times)
 
-            # 已修正帧蓝点（小号实心+白边）
-            cx, cy = self._get_correction_xy(times)
-            self._chart_artists['corrections'] = ax.scatter(
-                cx, cy, c=COLOR_BLUE, s=12, zorder=5, marker='o',
-                edgecolors='white', linewidths=0.5) if cx else None
-            # 当前帧已修正时，红点覆盖在蓝点上
-            if 0 <= cur_fi < len(times) and cur_fi in self._corrections:
-                cur_v = self._corrections[cur_fi]
-                if cur_v >= 0:
-                    self._chart_artists['cur_highlight'] = ax.scatter(
-                        [times[cur_fi]], [cur_v], c=COLOR_RED, s=12,
-                        zorder=6, edgecolors='white', linewidths=0.5)
-
-            ax.set_facecolor(bg)
-            fig.set_facecolor(bg)
-            ax.set_xlabel("帧", color=fg)
-            ax.set_ylabel("速度 (km/h)", color=fg)
-            ax.tick_params(colors=fg, labelsize=8)
-            from matplotlib.ticker import MaxNLocator
-            ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-            ax.yaxis.set_major_locator(MaxNLocator(integer=True))
-            ax.spines["bottom"].set_color(fg if dark else "#888")
-            ax.spines["left"].set_color(fg if dark else "#888")
-            ax.spines["top"].set_visible(False)
-            ax.spines["right"].set_visible(False)
-            ax.grid(True, alpha=0.15 if dark else 0.25)
-            ax.autoscale_view()
+            # 轴样式
+            plot.setLabel('bottom', '帧', color=fg)
+            plot.setLabel('left', '速度 (km/h)', color=fg)
+            for ax_name in ('left', 'bottom'):
+                ax_item = plot.getPlotItem().getAxis(ax_name)
+                ax_item.setTextPen(fg)
+                ax_item.setPen(fg)
         else:
-            # 增量更新：修正帧蓝点
-            cx, cy = self._get_correction_xy(times)
-            corr_artist = self._chart_artists.get('corrections')
-            if cx:
-                if corr_artist is None:
-                    self._chart_artists['corrections'] = ax.scatter(
-                        cx, cy, c=COLOR_BLUE, s=12, zorder=5, marker='o',
-                        edgecolors='white', linewidths=0.5)
-                else:
-                    corr_artist.set_offsets(np.column_stack([cx, cy]) if cx
-                                            else np.empty((0, 2)))
-            elif corr_artist is not None:
-                corr_artist.set_offsets(np.empty((0, 2)))
+            self._update_corr_and_cur(times)
 
-            # 更新当前帧红点
-            cur_hl = self._chart_artists.get('cur_highlight')
-            cur_fi = self._current_frame
-            if cur_hl is not None:
-                target = self._corrections.get(cur_fi, self._rows[cur_fi][2])
-                if 0 <= cur_fi < len(times) and target >= 0:
-                    cur_hl.set_offsets([[times[cur_fi], target]])
-                else:
-                    cur_hl.set_offsets(np.empty((0, 2)))
+        if saved_range is not None:
+            vb.setRange(saved_range, padding=0)
 
-        if user_zoomed and saved_xlim is not None and saved_ylim is not None:
-            ax.set_xlim(saved_xlim)
-            ax.set_ylim(saved_ylim)
+    def _update_corr_and_cur(self, times: list) -> None:
+        """增量更新修正蓝点与当前帧红点（pyqtgraph setData 高效）。"""
+        corr = self._chart_artists.get('corrections')
+        cur = self._chart_artists.get('cur_highlight')
+        if corr is None or cur is None:
+            return
+        cx = [times[fi] for fi in self._corrections if fi < len(times)]
+        cy = [self._corrections[fi] for fi in self._corrections if fi < len(times)]
+        corr.setData(x=cx, y=cy)
+        cur_fi = self._current_frame
+        target = self._corrections.get(cur_fi, self._rows[cur_fi][2]
+                                       if 0 <= cur_fi < len(self._rows) else -1)
+        if 0 <= cur_fi < len(times) and target >= 0:
+            cur.setData(x=[times[cur_fi]], y=[target])
+        else:
+            cur.setData(x=[], y=[])
 
-        self._canvas.draw_idle()
+    def _on_scatter_clicked(self, scatter, points) -> None:
+        """点击散点导航到对应帧（点数据里存帧号）。"""
+        for pt in points:
+            idx = pt.data()
+            if idx is not None:
+                self._navigate_to(idx)
+                break
 
     def _low_confidence_regions(self) -> list[tuple[int, int]]:
         """Use Phase 1 multi-signal confidence scores (inc. accel spikes)."""
@@ -482,22 +449,8 @@ class ReviewDialog(QDialog):
         if cur < len(self._rows) - 1:
             self._navigate_to(cur + 1)
 
-    def _on_pick(self, event) -> None:
-        mouse_btn = getattr(getattr(event, 'mouseevent', None), 'button', None)
-        if mouse_btn is not None and mouse_btn != 1:
-            return
-        ind = event.ind
-        if ind is None or len(ind) == 0:
-            return
-        # 根据 scatter 来源映射回 rows 索引
-        artist = event.artist
-        idx_map = None
-        if artist is self._chart_artists.get('bg_gray'):
-            idx_map = getattr(self, '_chart_pick_gray', None)
-        elif artist is self._chart_artists.get('bg_orange'):
-            idx_map = getattr(self, '_chart_pick_orange', None)
-        if idx_map is not None and ind[0] < len(idx_map):
-            self._navigate_to(idx_map[ind[0]])
+    # pick 已由 _on_scatter_clicked 处理（pyqtgraph sigClicked）
+
 
     @staticmethod
     def _speed_label(val: float) -> str:
