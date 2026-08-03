@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QDialog, QFileDialog, QMessageBox, QHBoxLayout, QVBoxLayout, QGridLayout,
 )
 from PySide6.QtCore import Qt, QTimer
-from widget_utils import make_static_card
+from widget_utils import make_static_card, disable_spin_flyout
 from PySide6.QtGui import (
     QPixmap, QImage, QPainter, QPen, QColor, QKeySequence, QShortcut,
 )
@@ -190,12 +190,7 @@ class RaceVideoToLogApp(QMainWindow):
         for s in [self.roi_x1, self.roi_y1, self.roi_x2, self.roi_y2]:
             s.setRange(0, 9999); s.setFixedWidth(80)
             s.valueChanged.connect(lambda v, spin=s: self._on_roi_spin(spin))
-            # Use shared utility for flyout disable
-            try:
-                s.compactSpinButton.clicked.disconnect()
-            except Exception:
-                pass
-            s._showFlyout = lambda: None
+            disable_spin_flyout(s)
         rgl.addWidget(CaptionLabel("左上 X"), 1, 0); rgl.addWidget(self.roi_x1, 2, 0)
         rgl.addWidget(CaptionLabel("左上 Y"), 1, 1); rgl.addWidget(self.roi_y1, 2, 1)
         rgl.addWidget(CaptionLabel("右下 X"), 1, 2); rgl.addWidget(self.roi_x2, 2, 2)
@@ -483,7 +478,7 @@ class RaceVideoToLogApp(QMainWindow):
 
     def _on_backend(self, _idx: int) -> None:
         _reset_backend(); self._release_engines()
-        keys = ["auto", "tensorrt", "cpu"]
+        keys = config.BACKEND_KEYS
         key = keys[self._settings["backend_combo"].currentIndex()]
         actual = _select_backend(key)
         _backend_labels = {"TensorRT": "TensorRT (GPU)", "CUDA": "CUDA (GPU)", "CPU": "CPU"}
@@ -501,7 +496,7 @@ class RaceVideoToLogApp(QMainWindow):
     def _create_ocr(self) -> "RapidOCR":
         from rapidocr import RapidOCR
         _reset_backend()
-        keys = ["auto", "tensorrt", "cpu"]
+        keys = config.BACKEND_KEYS
         key = keys[self._settings["backend_combo"].currentIndex()]
         _select_backend(key)
         from gpu_setup import get_engine_params, get_engine_type, get_setup_advice
@@ -574,7 +569,7 @@ class RaceVideoToLogApp(QMainWindow):
 
         # ── 下拉框字段 ──
         _combo_map = {
-            "backend":      (s["backend_combo"],      {"auto": 0, "tensorrt": 1, "cpu": 2}),
+            "backend":      (s["backend_combo"],      {k: i for i, k in enumerate(config.BACKEND_KEYS)}),
             "model":        (s["model_combo"],         {"v6_tiny": 0, "v6_small": 1}),
             "reocr_model":  (s["reocr_model_combo"],   {"v6_tiny": 1, "v6_small": 2}),
         }
@@ -616,7 +611,7 @@ class RaceVideoToLogApp(QMainWindow):
             fd = s["div_spin"].value(); th = s["target_h_spin"].value()
             mw = s["max_width_spin"].value()
             pp = s["pad_spin"].value(); nw = s["buffer_spin"].value()
-            be = ["auto", "tensorrt", "cpu"][s["backend_combo"].currentIndex()]
+            be = config.BACKEND_KEYS[s["backend_combo"].currentIndex()]
             log_level = ["normal", "detailed", "debug"][s["log_level_combo"].currentIndex()]
         except ValueError:
             QMessageBox.warning(self, "参数错误", "请检查数值参数。"); return

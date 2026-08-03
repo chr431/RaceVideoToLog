@@ -20,6 +20,10 @@ DEFAULT_MAX_WIDTH: int = 0              # 预处理最大宽度 px（0=不限）
 DEFAULT_BUFFER_SIZE: int = 16          # 生产者-消费者队列缓冲大小
 DEFAULT_LOG_LEVEL: str = "normal"      # 日志级别 (normal / detailed / debug)
 DEFAULT_CORRECTION_MODE: str = "auto"  # 纠错模式 (auto / manual)
+
+# ═══════════════════ 枚举值（CLI/GUI 单点定义） ═══════════════════
+BACKEND_KEYS: list[str] = ["auto", "tensorrt", "cpu"]
+BACKEND_LABELS: dict[str, str] = {"auto": "自动", "tensorrt": "TensorRT", "cpu": "CPU"}
 OCR_REC_BATCH_NUM: int = 12            # OCR 识别批处理大小
 OCR_FRAME_BATCH: int = 6               # 帧批处理大小（≤6 兼容 TRT profile 上限）
 
@@ -46,6 +50,7 @@ SOURCE_TO_KMH: dict[str, float] = {
     "km/h": 1.0,
     "mile/h": 1.609344,
 }
+SPEED_UNITS: list[str] = list(SOURCE_TO_KMH.keys())  # m/s, km/h, mile/h
 
 # ═══════════════════ GPU 后端公共 API ═══════════════════
 _gpu_backend: str = "CPU"

@@ -13,7 +13,7 @@ from PySide6.QtGui import QPixmap, QImage, QPalette, QColor
 from qfluentwidgets import (BodyLabel, StrongBodyLabel, CaptionLabel,
     PrimaryPushButton, PushButton, isDarkTheme)
 from theme_manager import ThemeManager
-from widget_utils import make_static_card, setup_chart_zoom_pan
+from widget_utils import make_static_card, setup_chart_zoom_pan, disable_spin_flyout
 from config import (COLOR_RED, COLOR_ORANGE, COLOR_BLUE,
     COLOR_LIGHT_GRAY, COLOR_LIGHTER_GRAY, chart_colors,
     MANUAL_EDIT_ACCEL_WARNING)
@@ -126,11 +126,7 @@ class ReviewDialog(QDialog):
         self._speed_edit.setRange(0, int(self._max_speed))
         self._speed_edit.setSuffix(" km/h")
         self._speed_edit.setSpecialValueText("(无效)")
-        try:
-            self._speed_edit.compactSpinButton.clicked.disconnect()
-        except Exception:
-            pass
-        self._speed_edit._showFlyout = lambda: None
+        disable_spin_flyout(self._speed_edit)
         self._speed_edit.valueChanged.connect(self._on_spinbox_changed)
         self._speed_edit.installEventFilter(self)
         cr.addWidget(self._speed_edit)

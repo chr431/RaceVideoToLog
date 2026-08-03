@@ -14,42 +14,6 @@ from collections.abc import Callable
 import numpy as np
 
 
-def _register_cuda_dll_dirs() -> None:
-    """Register CUDA Toolkit bin directories so decord can find cudart etc.
-
-    Scans the CUDA_PATH env var and system PATH for CUDA installations
-    and calls os.add_dll_directory() for each one found."""
-    if sys.platform != "win32":
-        return
-    _found: set[str] = set()
-    # 1) CUDA_PATH / CUDA_PATH_V* env vars
-    for _k, _v in _os.environ.items():
-        if _k.startswith("CUDA_PATH") and _v:
-            _bin = Path(_v) / "bin"
-            if _bin.is_dir():
-                _found.add(str(_bin))
-    # 2) Scan PATH for entries containing "CUDA" or "cuda" with cudart dll
-    for _entry in _os.environ.get("PATH", "").split(";"):
-        _p = _entry.strip()
-        if not _p:
-            continue
-        _lp = _p.lower().replace("\\", "/")
-        if ("cuda" in _lp and "bin" in _lp) or "nvidia" in _lp:
-            try:
-                if any(f.startswith("cudart64_") for f in _os.listdir(_p)
-                       if f.lower().endswith(".dll")):
-                    _found.add(_p)
-            except OSError:
-                pass
-    for _d in sorted(_found):
-        try:
-            _os.add_dll_directory(_d)
-        except OSError:
-            pass
-
-
-_register_cuda_dll_dirs()
-
 
 def _find_ffprobe() -> str | None:
     """Locate ffprobe.exe bundled alongside the decord package."""

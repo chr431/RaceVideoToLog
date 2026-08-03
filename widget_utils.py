@@ -28,13 +28,17 @@ def make_int_spinbox(min_val: int, max_val: int, default: int, width: int = 70):
     spin.setRange(min_val, max_val)
     spin.setValue(default)
     spin.setFixedWidth(width)
-    # 禁用点击时弹出的浮点输入面板
+    disable_spin_flyout(spin)
+    return spin
+
+
+def disable_spin_flyout(spin) -> None:
+    """禁用 CompactSpinBox 点击弹出的浮点输入面板（统一 flyout 禁用逻辑）。"""
     try:
         spin.compactSpinButton.clicked.disconnect()
     except Exception:
         pass
     spin._showFlyout = lambda: None
-    return spin
 
 
 def setup_chart_zoom_pan(ax, canvas, throttle_ms: int = 40):

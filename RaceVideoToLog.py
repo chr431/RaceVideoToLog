@@ -40,7 +40,7 @@ def main() -> None:
     parser.add_argument("--max-width", type=int, default=config.DEFAULT_MAX_WIDTH,
         help="预处理最大宽度 px（0=不限）。扁宽字体设为 96 可改善识别")
     parser.add_argument("--buffer", type=int, default=config.DEFAULT_BUFFER_SIZE)
-    parser.add_argument("--backend", choices=["auto","tensorrt","cpu"], default=config.DEFAULT_BACKEND)
+    parser.add_argument("--backend", choices=config.BACKEND_KEYS, default=config.DEFAULT_BACKEND)
     parser.add_argument("--video-backend", choices=["cv2","decord"], default="decord",
         help=argparse.SUPPRESS)  # deprecated; only decord is supported
     parser.add_argument("--ocr-model", choices=["v6_tiny", "v6_small"], default=config.DEFAULT_OCR_MODEL,
