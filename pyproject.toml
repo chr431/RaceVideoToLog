@@ -10,6 +10,8 @@ dependencies = [
     "matplotlib>=3.10",
     "PySide6-Essentials>=6.11",  # 只装核心模块，省 Addons (~300MB: QtWebEngine 等)
     "PySide6-Fluent-Widgets>=1.11",
+    "cuda-python",
+    "tensorrt_cu13_bindings>=10,<11",
     "decord",
     "pyclipper",
     "shapely",
@@ -18,10 +20,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
-gpu = [
-    "cuda-python",
-    "tensorrt_cu13_bindings>=10,<11",
-]
+# cuda-python / tensorrt_cu13_bindings 为主依赖：rapidocr TRT 引擎
+# import tensorrt (shim -> tensorrt_bindings) 与 decord GPU DLL 注册必需。
 # tensorrt (meta-package) is intentionally omitted: it pulls in
 # tensorrt_libs (~2.2 GB of DLLs).  Runtime DLLs are loaded from the
 # system (CUDA Toolkit + TensorRT on PATH).

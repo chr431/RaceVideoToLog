@@ -95,7 +95,7 @@ if %_COPIED%==1 (
 
 echo.
 echo Installing GPU Python bindings (thin wrappers, ~few MB) ...
-.venv\Scripts\python -m pip install -e ".[gpu]"
+.venv\Scripts\python -m pip install -e ".[dev]"
 echo.
 echo Removing PySide6-Addons (qfluentwidgets 依赖 PySide6 meta 包会拉入 Addons，
 echo 运行只需 Essentials；Addons 含 QtWebEngine 等 ~400MB 冗余) ...
