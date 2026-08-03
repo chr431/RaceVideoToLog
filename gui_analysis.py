@@ -597,6 +597,7 @@ def _plot_segmented_pg(plot, x, y, flags, color, show_red, smooth_strength):
     if smooth_strength > 0:
         x, y = smooth_data(x, y, smooth_strength)
     item = pg.PlotDataItem(pen=pg.mkPen(color, width=1.0))
+    item.setData(x, y)
     plot.addItem(item)
     segs = []
     if show_red and any(f >= 1 for f in flags):
