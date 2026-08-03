@@ -1,8 +1,8 @@
-﻿# RaceVideoToLog v2.5.0
-# video_hash=f06c6c70cc0bd633, video=test2.mp4
+﻿# RaceVideoToLog v2.7.0
+# video_hash=f06c6c70cc0bd633, video=test2.mp4, fps=57.123, codec=hevc
 # roi=880,940,960,988, format=km/h, frame_start=672, frame_end=4175
-# max_speed=400.0, max_accel=30.0, div=1, target_h=48, pad=0, buffer=16
-# backend=TensorRT, model=v6_tiny, reocr_model=v6_small, video_backend=cv2
+# max_speed=400.0, max_accel=30.0, div=1, target_h=48, pad=0, buffer=16, max_width=0
+# backend=TensorRT, model=v6_tiny, reocr_model=v6_small, video_backend=decord/GPU
 # pinned=26
 # stats: total=3503, trusted=2569, corrected=66
 # timing: ocr=11.7s, correction=0.7s, total=12.8s
