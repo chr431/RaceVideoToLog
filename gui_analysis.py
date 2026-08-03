@@ -172,6 +172,10 @@ class AnalysisTab:
             ax_item = plot.getPlotItem().getAxis(ax_name)
             ax_item.setTextPen(fg)
             ax_item.setPen(fg)
+        # 悬停/统计文字同步主题前景色（初始用 COLOR_FG_LIGHT 的话深色下不可见）
+        for t in (getattr(self, '_delta_text', None), getattr(self, '_hover_text', None)):
+            if t is not None:
+                t.setColor(fg)
 
     def _on_mode(self, mode: str) -> None:
         self._chart_mode = mode
@@ -221,8 +225,10 @@ class AnalysisTab:
 
         # ── 拖选区间统计（LinearRegionItem，原生高性能）──
         # anchor=(1, 0)：文字右上角贴住 pos（(1,1) 会把文字顶到视图外被裁掉）
-        delta_text = pg.TextItem("", color=config.COLOR_FG_LIGHT, anchor=(1, 0))
+        fg = chart_colors(isDarkTheme())[1]
+        delta_text = pg.TextItem("", color=fg, anchor=(1, 0))
         plot.addItem(delta_text, ignoreBounds=True)
+        self._delta_text = delta_text
 
         def _pin_delta_text(*args) -> None:
             """把统计文本钉在视图右上角（autoRange/缩放/平移后跟随）。"""
@@ -291,9 +297,10 @@ class AnalysisTab:
         hover_line.setVisible(False)
         plot.addItem(hover_line)
         # anchor=(0, 0)：文字左上角贴住 pos（(0,1) 同样会被顶到视图外）
-        hover_text = pg.TextItem("", color=config.COLOR_FG_LIGHT, anchor=(0, 0))
+        hover_text = pg.TextItem("", color=fg, anchor=(0, 0))
         hover_text.setVisible(False)
         plot.addItem(hover_text, ignoreBounds=True)
+        self._hover_text = hover_text
         self._hover_text_visible = False
         import bisect
 
