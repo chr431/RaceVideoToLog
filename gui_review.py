@@ -12,7 +12,6 @@ from PySide6.QtGui import QShortcut, QKeySequence
 from PySide6.QtGui import QPixmap, QImage, QPalette, QColor
 from qfluentwidgets import (BodyLabel, StrongBodyLabel, CaptionLabel,
     PrimaryPushButton, PushButton, isDarkTheme)
-from theme_manager import ThemeManager
 from widget_utils import make_static_card, setup_chart_zoom_pan, disable_spin_flyout
 from config import (COLOR_RED, COLOR_ORANGE, COLOR_BLUE,
     COLOR_LIGHT_GRAY, COLOR_LIGHTER_GRAY, chart_colors,
@@ -53,10 +52,10 @@ class ReviewDialog(QDialog):
 
     def _register_theme_callbacks(self) -> None:
         def _update(dark: bool) -> None:
-            bg = QColor("#1f1f1f" if dark else "#f5f5f5")
-            fg = QColor("#f0f0f0" if dark else "#000000")
+            bg = QColor(config.CANVAS_BG_DARK if dark else config.CANVAS_BG_LIGHT)
+            fg = QColor(config.CANVAS_FG_DARK if dark else config.CANVAS_FG_LIGHT)
             btn_bg = QColor("#3a3a3a" if dark else "#e8e8e8")
-            img_bg = "#111" if dark else "#e0e0e0"
+            img_bg = config.PREVIEW_BG if dark else config.PREVIEW_BG_LIGHT
             p = self.palette()
             for role, color in [(QPalette.ColorRole.Window, bg), (QPalette.ColorRole.Base, btn_bg),
                                 (QPalette.ColorRole.WindowText, fg), (QPalette.ColorRole.Text, fg),
@@ -65,7 +64,10 @@ class ReviewDialog(QDialog):
             self.setPalette(p)
             self._img_label.setStyleSheet(f"background-color: {img_bg}; border-radius: 4px;")
             if hasattr(self, '_figure'): self._redraw_chart()
-        ThemeManager.register(_update)
+        # 用 qconfig 信号 + receiver=self：对话框销毁时 Qt 自动断开，
+        # 不再泄漏（ThemeManager 静态回调列表只增不减）。
+        from qfluentwidgets import qconfig
+        qconfig.themeChanged.connect(_update, receiver=self)
         _update(isDarkTheme())
 
     def _build_ui(self) -> None:
@@ -100,7 +102,7 @@ class ReviewDialog(QDialog):
         self._img_label = QLabel("选择帧后显示")
         self._img_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._img_label.setMinimumSize(120, 80)
-        self._img_label.setStyleSheet("background-color: #111; border-radius: 4px;")
+        self._img_label.setStyleSheet(f"background-color: {config.PREVIEW_BG}; border-radius: 4px;")
         il.addWidget(self._img_label, 1)
         bottom_row.addWidget(img_card, 1)
 

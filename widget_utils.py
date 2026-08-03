@@ -32,6 +32,13 @@ def make_int_spinbox(min_val: int, max_val: int, default: int, width: int = 70):
     return spin
 
 
+def set_value_silent(spin, value) -> None:
+    """设置 spinbox 值但不触发 valueChanged（ROI 联动赋值统一用法）。"""
+    spin.blockSignals(True)
+    spin.setValue(value)
+    spin.blockSignals(False)
+
+
 def disable_spin_flyout(spin) -> None:
     """禁用 CompactSpinBox 点击弹出的浮点输入面板（统一 flyout 禁用逻辑）。"""
     try:

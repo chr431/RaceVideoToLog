@@ -164,13 +164,15 @@ class AnalysisTab:
         if path:
             self._csvs[index] = path
             self._labels[index].setText(Path(path).name)
-            self._saved_limits.clear()
-            self._last_mode = None
-            self._render()
+            self._invalidate_and_render()
 
     def _clear(self, index: int) -> None:
         self._csvs[index] = None
         self._labels[index].setText("未导入")
+        self._invalidate_and_render()
+
+    def _invalidate_and_render(self) -> None:
+        """清除缓存状态并重新渲染。"""
         self._saved_limits.clear()
         self._last_mode = None
         self._render()
@@ -182,7 +184,7 @@ class AnalysisTab:
                                     delta_label, label):
         """配置图表交互：SpanSelector 范围选择 + 缩放/平移。"""
         delta_text = ax.text(0.02, 0.97, "", transform=ax.transAxes,
-            va="top", fontsize=9, color="#333333",
+            va="top", fontsize=9, color=config.COLOR_FG_LIGHT,
             bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
 
         def _on_select(xmin: float, xmax: float) -> None:
@@ -374,7 +376,7 @@ class AnalysisTab:
             ax.set_title(title)
             ax.legend(loc="upper right"); ax.grid(True, alpha=0.3)
             if is_dtx:
-                ax.axhline(y=0, color="#888888", linewidth=1.2, linestyle="--", alpha=0.7)
+                ax.axhline(y=0, color=config.COLOR_GRAY, linewidth=1.2, linestyle="--", alpha=0.7)
 
             # ── 交互 ──
             self._setup_chart_interactions(ax, canvas, all_x, all_y,

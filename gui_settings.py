@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from qfluentwidgets import (
     CardWidget, ComboBox, LineEdit, RadioButton,
-    BodyLabel, StrongBodyLabel, CaptionLabel,
+    BodyLabel, StrongBodyLabel, CaptionLabel, PushButton,
 )
 
 from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QGridLayout
@@ -149,7 +149,3 @@ def build_settings_panel(parent) -> dict:
     ll.addStretch()
 
     return widgets
-
-
-# Re-export for convenience
-from qfluentwidgets import PushButton

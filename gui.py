@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QDialog, QFileDialog, QMessageBox, QHBoxLayout, QVBoxLayout, QGridLayout,
 )
 from PySide6.QtCore import Qt, QTimer
-from widget_utils import make_static_card, disable_spin_flyout
+from widget_utils import make_static_card, disable_spin_flyout, set_value_silent
 from PySide6.QtGui import (
     QPixmap, QImage, QPainter, QPen, QColor, QKeySequence, QShortcut,
 )
@@ -28,6 +28,7 @@ from ocr_engine import (
 from gui_analysis import AnalysisTab
 from gui_review import ReviewDialog
 from gui_export import ExportThread
+from gui_preview import PreviewWidget
 from gui_settings import build_settings_panel
 from theme_manager import ThemeManager
 
@@ -53,7 +54,9 @@ class RaceVideoToLogApp(QMainWindow):
         self.first_frame_qimg: QImage | None = None
         self._preview_vr: object | None = None  # decord VideoReader
         self._preview_frame_no: int = 0
-        self._throttle_timer: QTimer | None = None
+        self._throttle_timer = QTimer(self)
+        self._throttle_timer.setSingleShot(True)
+        self._throttle_timer.timeout.connect(self._show_throttled_frame)
         self.ocr_engine: "RapidOCR | None" = None
 
         self._export_thread: ExportThread | None = None
@@ -66,13 +69,6 @@ class RaceVideoToLogApp(QMainWindow):
         self._settings: dict = {}
 
         # 预览
-        self._preview_pm: QPixmap | None = None
-        self._drag_active: bool = False
-        self._drag_start: tuple = (0, 0)
-        self._preview_scale: float = 1.0
-        self._preview_ox: float = 0.0
-        self._preview_oy: float = 0.0
-        self._redraw_timer: QTimer | None = None  # ROI 拖拽重绘节流
 
         self._build_ui()
         self._connect_signals()
@@ -202,16 +198,9 @@ class RaceVideoToLogApp(QMainWindow):
         pv = make_static_card()
         pvl = QVBoxLayout(pv)
         pvl.addWidget(StrongBodyLabel("识别范围预览"))
-        self._preview_label = BodyLabel()
-        self._preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._preview_label.setMinimumSize(400, 300)
-        self._preview_label.setStyleSheet("background-color: #111; border-radius: 6px;")
-        self._preview_label.setMouseTracking(True)
-        self._preview_label.setCursor(Qt.CursorShape.CrossCursor)
-        self._preview_label.mousePressEvent = self._on_pv_press    # type: ignore[method-assign]
-        self._preview_label.mouseMoveEvent = self._on_pv_move       # type: ignore[method-assign]
-        self._preview_label.mouseReleaseEvent = self._on_pv_release # type: ignore[method-assign]
-        pvl.addWidget(self._preview_label, 1)
+        self._preview_widget = PreviewWidget()
+        self._preview_widget.roi_dragged.connect(self._on_preview_roi)
+        pvl.addWidget(self._preview_widget, 1)
 
         sr = QHBoxLayout()
         self._slider = Slider(Qt.Orientation.Horizontal)
@@ -254,8 +243,8 @@ class RaceVideoToLogApp(QMainWindow):
     def _register_theme_callbacks(self) -> None:
         # 主窗口背景色
         def _update_bg(dark: bool) -> None:
-            bg = "#1f1f1f" if dark else "#f5f5f5"
-            fg = "#f0f0f0" if dark else "#000000"
+            bg = config.CANVAS_BG_DARK if dark else config.CANVAS_BG_LIGHT
+            fg = config.CANVAS_FG_DARK if dark else config.CANVAS_FG_LIGHT
             from PySide6.QtGui import QPalette, QColor
             for w in (self, self.centralWidget(), getattr(self, "_tab_stack", None)):
                 if w is None: continue
@@ -339,48 +328,21 @@ class RaceVideoToLogApp(QMainWindow):
         self._status_label.setText("视频已载入，请输入识别范围并预览。")
         self._slider.setRange(0, fc - 1); self._slider.setValue(0)
         self._frame_label.setText(f"#{0}/{fc}")
+        self._preview_widget.set_video_size(w, h)
+        self._preview_widget.set_roi(self.roi_x1.value(), self.roi_y1.value(),
+                                     self.roi_x2.value(), self.roi_y2.value())
         self._show_frame(0)
         for s, m in [(self.roi_x1, w), (self.roi_y1, h), (self.roi_x2, w), (self.roi_y2, h)]:
             s.setMaximum(m - 1)
 
     # ═══════════════════ 预览 ═══════════════════
 
-    def _on_pv_press(self, event) -> None:
-        if not self.metadata or self.first_frame_qimg is None: return
-        x, y = self._to_video(event.position().x(), event.position().y())
-        self._drag_active = True; self._drag_start = (x, y)
-        for s, v in [(self.roi_x1, x), (self.roi_y1, y), (self.roi_x2, x), (self.roi_y2, y)]:
-            s.blockSignals(True); s.setValue(v); s.blockSignals(False)
+    def _on_preview_roi(self, x1: int, y1: int, x2: int, y2: int) -> None:
+        """预览拖拽 ROI → 同步 spinbox（静默赋值，不触发联动校验）。"""
+        for s, v in [(self.roi_x1, x1), (self.roi_y1, y1),
+                     (self.roi_x2, x2), (self.roi_y2, y2)]:
+            set_value_silent(s, v)
 
-    def _on_pv_move(self, event) -> None:
-        if not self._drag_active or not self.metadata: return
-        x, y = self._to_video(event.position().x(), event.position().y())
-        x1 = min(self._drag_start[0], x); y1 = min(self._drag_start[1], y)
-        x2 = max(self._drag_start[0], x); y2 = max(self._drag_start[1], y)
-        for s, v in [(self.roi_x1, x1), (self.roi_y1, y1), (self.roi_x2, x2), (self.roi_y2, y2)]:
-                s.blockSignals(True); s.setValue(v); s.blockSignals(False)
-        self._schedule_redraw()
-
-    def _on_roi_spin(self, spin) -> None:
-        if spin is self.roi_x1 and self.roi_x1.value() > self.roi_x2.value() - 1:
-            spin.blockSignals(True); spin.setValue(self.roi_x2.value() - 1); spin.blockSignals(False)
-        elif spin is self.roi_x2 and self.roi_x2.value() < self.roi_x1.value() + 1:
-            spin.blockSignals(True); spin.setValue(self.roi_x1.value() + 1); spin.blockSignals(False)
-        elif spin is self.roi_y1 and self.roi_y1.value() > self.roi_y2.value() - 1:
-            spin.blockSignals(True); spin.setValue(self.roi_y2.value() - 1); spin.blockSignals(False)
-        elif spin is self.roi_y2 and self.roi_y2.value() < self.roi_y1.value() + 1:
-            spin.blockSignals(True); spin.setValue(self.roi_y1.value() + 1); spin.blockSignals(False)
-        self._schedule_redraw()
-
-    def _on_pv_release(self, event) -> None:
-        self._drag_active = False
-
-    def _to_video(self, wx: float, wy: float) -> tuple[int, int]:
-        if not self.metadata or self._preview_scale <= 0: return 0, 0
-        x = (wx - self._preview_ox) / self._preview_scale
-        y = (wy - self._preview_oy) / self._preview_scale
-        return (max(0, min(self.metadata.width - 1, int(x))),
-            max(0, min(self.metadata.height - 1, int(y))))
 
     def _show_frame(self, frame_no: int) -> None:
         pm = None
@@ -396,8 +358,7 @@ class RaceVideoToLogApp(QMainWindow):
         if pm is None and self.first_frame_qimg is not None:
             pm = QPixmap.fromImage(self.first_frame_qimg)
         if pm is not None:
-            self._preview_pm = pm
-            self._redraw()
+            self._preview_widget.set_frame(pm)
 
     def _on_slider(self, value: int) -> None:
         if self.metadata:
@@ -409,70 +370,26 @@ class RaceVideoToLogApp(QMainWindow):
         self._throttle_timer.timeout.connect(lambda: self._show_frame(value))
         self._throttle_timer.start(30)
 
+    def _show_throttled_frame(self) -> None:
+        self._show_frame(self._slider.value())
+
     def _step(self, delta: int) -> None:
         if not self.metadata: return
         v = max(0, min(self.metadata.frame_count - 1, self._slider.value() + delta))
         self._slider.setValue(v)
 
-    def _schedule_redraw(self) -> None:
-        """节流重绘：16ms 单次定时器，避免拖拽时过度调用 _redraw。"""
-        if self._redraw_timer is not None:
-            return
-        self._redraw_timer = QTimer(self)
-        self._redraw_timer.setSingleShot(True)
-        self._redraw_timer.timeout.connect(self._do_throttled_redraw)
-        self._redraw_timer.start(16)
-
-    def _do_throttled_redraw(self) -> None:
-        self._redraw_timer = None
-        self._redraw()
-
-    def _redraw(self) -> None:
-        if self._preview_pm is None: return
-        ls = self._preview_label.size()
-        pw, ph = ls.width(), ls.height()
-        if pw <= 0 or ph <= 0: return
-
-        pm = self._preview_pm
-        scale = min(pw / pm.width(), ph / pm.height())
-        dw = max(1, int(pm.width() * scale)); dh = max(1, int(pm.height() * scale))
-        scaled = pm.scaled(dw, dh, Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation)
-        self._preview_scale = scale
-        self._preview_ox = (pw - dw) / 2.0; self._preview_oy = (ph - dh) / 2.0
-
-        # ROI 框
-        roi = self._get_roi()
-        if roi is not None:
-            painter = QPainter(scaled)
-            x1, y1, x2, y2 = roi
-            l = int(x1 * scale); t = int(y1 * scale)
-            r = int(x2 * scale); b = int(y2 * scale)
-            painter.setPen(QPen(QColor("#ff5050"), max(2, int(scale * 2))))
-            painter.drawRect(l, t, r - l, b - t)
-            painter.end()
-
-        result = QPixmap(pw, ph); result.fill(QColor("#151515"))
-        rp = QPainter(result)
-        rp.drawPixmap(int(self._preview_ox), int(self._preview_oy), scaled)
-        rp.end()
-        self._preview_label.setPixmap(result)
-
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        self._redraw()
-
-    def _get_roi(self) -> tuple | None:
-        try:
-            x1 = self.roi_x1.value(); y1 = self.roi_y1.value()
-            x2 = self.roi_x2.value(); y2 = self.roi_y2.value()
-        except ValueError: return None
-        if self.metadata:
-            x1, x2 = sorted((max(0, min(self.metadata.width - 1, x1)),
-                max(0, min(self.metadata.width - 1, x2))))
-            y1, y2 = sorted((max(0, min(self.metadata.height - 1, y1)),
-                max(0, min(self.metadata.height - 1, y2))))
-        return (x1, y1, x2, y2)
+    def _on_roi_spin(self, spin) -> None:
+        if spin is self.roi_x1 and self.roi_x1.value() > self.roi_x2.value() - 1:
+            spin.blockSignals(True); spin.setValue(self.roi_x2.value() - 1); spin.blockSignals(False)
+        elif spin is self.roi_x2 and self.roi_x2.value() < self.roi_x1.value() + 1:
+            spin.blockSignals(True); spin.setValue(self.roi_x1.value() + 1); spin.blockSignals(False)
+        elif spin is self.roi_y1 and self.roi_y1.value() > self.roi_y2.value() - 1:
+            spin.blockSignals(True); spin.setValue(self.roi_y2.value() - 1); spin.blockSignals(False)
+        elif spin is self.roi_y2 and self.roi_y2.value() < self.roi_y1.value() + 1:
+            spin.blockSignals(True); spin.setValue(self.roi_y1.value() + 1); spin.blockSignals(False)
+        self._preview_widget.set_roi(
+            self.roi_x1.value(), self.roi_y1.value(),
+            self.roi_x2.value(), self.roi_y2.value())
 
     # ═══════════════════ OCR 引擎 ═══════════════════
 
@@ -545,7 +462,9 @@ class RaceVideoToLogApp(QMainWindow):
                 self.roi_x1.setValue(parts[0]); self.roi_y1.setValue(parts[1])
                 for spin in [self.roi_x1, self.roi_y1, self.roi_x2, self.roi_y2]:
                     spin.blockSignals(False)
-                self._redraw()
+                self._preview_widget.set_roi(
+                    self.roi_x1.value(), self.roi_y1.value(),
+                    self.roi_x2.value(), self.roi_y2.value())
 
         # ── 数值字段（统一使用共享解析器）──
         _num_fields = {
@@ -595,8 +514,9 @@ class RaceVideoToLogApp(QMainWindow):
     def _export_csv(self) -> None:
         if self.video_path is None or self.metadata is None:
             QMessageBox.warning(self, "未导入视频", "请先导入视频。"); return
-        roi = self._get_roi()
-        if roi is None:
+        roi = (self.roi_x1.value(), self.roi_y1.value(),
+               self.roi_x2.value(), self.roi_y2.value())
+        if roi[2] <= roi[0] or roi[3] <= roi[1]:
             QMessageBox.warning(self, "识别范围不完整", "请先填写或拖拽选择识别范围。"); return
 
         out, _ = QFileDialog.getSaveFileName(self, "保存 CSV",

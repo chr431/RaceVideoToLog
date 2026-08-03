@@ -34,6 +34,15 @@ COLOR_GREEN: str = "#4CAF50"
 COLOR_RED: str = "#F44336"
 COLOR_GRAY: str = "#888888"
 COLOR_LIGHT_GRAY: str = "#666666"
+# GUI 专用调色板（预览/图表/对话框共用）
+PREVIEW_BG: str = "#111"                # 视频预览底色（暗）
+PREVIEW_BG_LIGHT: str = "#e0e0e0"       # 视频预览底色（亮）
+ROI_BOX_COLOR: str = "#ff5050"          # ROI 框颜色
+CANVAS_BG_DARK: str = "#1f1f1f"         # 图表背景（暗）
+CANVAS_BG_LIGHT: str = "#f5f5f5"        # 图表背景（亮）
+CANVAS_FG_DARK: str = "#f0f0f0"         # 图表前景（暗）
+CANVAS_FG_LIGHT: str = "#000000"        # 图表前景（亮）
+CANVAS_FILL: str = "#151515"            # 预览画布填充
 COLOR_LIGHTER_GRAY: str = "#aaaaaa"
 COLOR_BG_DARK: str = "#2a2a2a"
 COLOR_BG_LIGHT: str = "#ffffff"
