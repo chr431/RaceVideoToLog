@@ -701,9 +701,8 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
         # For suspected island interiors (accel <= 15), the nearest
         # neighbors may also be wrong. Try distant interpolation
         # that skips past the island to reach correct anchor frames.
-        # Auto mode only: manual mode keeps local references only —
-        # distant anchors may be contaminated (measured 2750-2758 ramp
-        # from a wrong distant ref at accel=10).
+        # Auto mode only: manual mode measured regressions (893/1708/1709
+        # pulled to wrong distant refs even with anchor validity).
         if mode == "auto" and a <= ACCEL_SCORE_ISLAND_INTERIOR + 5 and raw_v > 0:
             dt_frame = (times[1] - times[0]) if n >= 2 else 1/60
             min_frames = max(1, int(DISTANT_INTERP_MIN_TIME / dt_frame))
