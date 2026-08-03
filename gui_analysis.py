@@ -245,9 +245,9 @@ class AnalysisTab:
     def _setup_chart_interactions(self, ax, canvas, all_x, all_y, is_dtx, is_vt,
                                     delta_label, label):
         """配置图表交互：SpanSelector 范围选择 + 缩放/平移。"""
+        # 无 bbox：blit 增量重绘时文本宽度变化不会造成区域闪烁
         delta_text = ax.text(0.02, 0.97, "", transform=ax.transAxes,
-            va="top", fontsize=9, color=config.COLOR_FG_LIGHT,
-            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
+            va="top", fontsize=9, color=config.COLOR_FG_LIGHT)
 
         def _on_select(xmin: float, xmax: float) -> None:
             if xmin > xmax:
@@ -304,16 +304,34 @@ class AnalysisTab:
         import bisect
         hover_line = ax.axvline(0, color=config.COLOR_GRAY, linewidth=0.8,
                                 linestyle="--", alpha=0.7, visible=False)
+        hover_bg = [None]
         _hover_last = [0.0]
         import time as _time
 
+        def _save_hover_bg(event: object) -> None:
+            if event.canvas is canvas:
+                try:
+                    hover_bg[0] = canvas.copy_from_bbox(ax.bbox)
+                except Exception:
+                    hover_bg[0] = None
+
         def _hover_redraw() -> None:
-            # 完整重绘 + 40ms 节流：blit 增量绘制在 Qt 后端有闪烁，
-            # 全量 draw_idle 在节流下稳定且足够跟手
             now = _time.time()
-            if now - _hover_last[0] < 0.04:
-                return
+            if now - _hover_last[0] < 0.016:
+                return  # 节流 ~60fps
             _hover_last[0] = now
+            # 抑制 stale：防止 matplotlib 空闲循环自动整图重绘（抖动）
+            hover_line.stale = False
+            delta_text.stale = False
+            if hover_bg[0] is not None:
+                try:
+                    canvas.restore_region(hover_bg[0])
+                    ax.draw_artist(hover_line)
+                    ax.draw_artist(delta_text)
+                    canvas.blit(ax.bbox)
+                    return
+                except Exception:
+                    pass
             canvas.draw_idle()
 
         def _on_motion(event: object) -> None:
@@ -348,6 +366,7 @@ class AnalysisTab:
             _hover_redraw()
 
         canvas.mpl_connect("motion_notify_event", _on_motion)
+        canvas.mpl_connect("draw_event", _save_hover_bg)
 
         # 滚轮缩放 + 右键平移
         setup_chart_zoom_pan(ax, canvas, throttle_ms=0)
@@ -420,13 +439,17 @@ class AnalysisTab:
                         times, dists, speeds, flags = parse_csv(csv_path)
                         self._fps[i] = _read_fps(csv_path)
                         name = Path(csv_path).stem
-                        # 循环卷绕偏移（帧 = 索引位移），v-x 时新 t=0 点为 x=0
+                        # 循环卷绕偏移（帧 = 索引位移）；新起点同时归零：
+                        # v-t 的 t=0、v-x 的 x=0 都从卷绕后起点重新计算
                         times, dists, speeds, flags = _shift_csv(
                             times, dists, speeds, flags, self._offsets[i])
-                        x_data = times if is_vt else dists
-                        if not is_vt and self._offsets[i]:
-                            base = dists[0]
-                            x_data = [d - base for d in dists]
+                        if self._offsets[i]:
+                            base_t = times[0]
+                            base_d = dists[0]
+                            x_data = ([x - base_t for x in times]
+                                      if is_vt else [d - base_d for d in dists])
+                        else:
+                            x_data = times if is_vt else dists
                         all_x[i] = x_data; all_y[i] = speeds
                         all_flags[i] = flags
                         all_raw[i] = (x_data, speeds, flags)
