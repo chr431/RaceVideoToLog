@@ -326,11 +326,20 @@ class AnalysisTab:
                                                config.COLOR_BLUE, alpha=40))
         self._region.sigRegionChanged.connect(lambda r: _update_delta_text())
         plot.addItem(self._region)
+
+        def _on_drag_range(x0: float, x1: float) -> None:
+            """右键拖拽选择范围（模拟重构前 SpanSelector）。"""
+            if x0 > x1:
+                x0, x1 = x1, x0
+            self._region.setRegion((x0, x1))
+            self._region.setVisible(True)
+
+        plot.sig_drag_range.connect(_on_drag_range)
+
         # 拖选统计文本放右上（悬停文本在左上，避免重叠）
         delta_text.setAnchor((1, 1))
-        xmax_v = max(xmax0, xmax0)
         delta_text.setPos(xmax0, 0)
-        delta_text.setText("← 拖拽区间边界查看统计")
+        delta_text.setText("← 右键拖拽选择范围")
 
     def _render(self) -> None:
         """高性能渲染：缓存 CSV 解析结果，smooth 变化时仅更新线数据。
@@ -496,15 +505,18 @@ class AnalysisTab:
             self._setup_chart_interactions(plot, all_x, all_y,
                 is_dtx, is_vt, delta_label, label)
 
-            if not is_dtx:
-                saved = self._saved_limits.get(mode)
-                if saved is not None:
-                    xr, yr = saved
-                    vb2 = plot.getPlotItem().vb
-                    vb2.setXRange(xr[0], xr[1], padding=0)
-                    vb2.setYRange(yr[0], yr[1], padding=0)
-                else:
-                    plot.getPlotItem().vb.autoRange()  # 新模式：自适应数据
+            vb2 = plot.getPlotItem().vb
+            if is_dtx:
+                # Δt-x：y=0 线纵向居中（对称范围）
+                dt_vals = all_y[0]
+                max_abs = max(abs(min(dt_vals)), abs(max(dt_vals))) if dt_vals else 1.0
+                vb2.setYRange(-max_abs, max_abs, padding=0)
+            elif saved := self._saved_limits.get(mode):
+                xr, yr = saved
+                vb2.setXRange(xr[0], xr[1], padding=0)
+                vb2.setYRange(yr[0], yr[1], padding=0)
+            else:
+                vb2.autoRange()  # 新模式：自适应数据
 
             self._last_mode = mode
             self._sync_figure_theme()

@@ -19,7 +19,7 @@ def make_static_card(parent=None):
     return w
 
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 import pyqtgraph as pg
@@ -182,12 +182,39 @@ class HoverOverlay(QWidget):
         p.end()
 
 
+class _RegionViewBox(pg.ViewBox):
+    """ViewBox：右键拖拽 = 选择范围（左键平移保留）。"""
+
+    sig_drag_range = Signal(float, float)  # (x0, x1) 数据坐标
+
+    def mouseDragEvent(self, ev, axis=None):
+        if ev.button() == Qt.MouseButton.RightButton:
+            if ev.isStart():
+                self._drag_x0 = self.mapSceneToView(ev.buttonDownScenePos()).x()
+            else:
+                x1 = self.mapSceneToView(ev.scenePos()).x()
+                self.sig_drag_range.emit(self._drag_x0, x1)
+            ev.accept()
+        else:
+            super().mouseDragEvent(ev, axis)
+
+
 class ModPlotWidget(pg.PlotWidget):
-    """PlotWidget：Ctrl+滚轮缩放纵轴，Shift+滚轮缩放横轴，无修饰双轴。
+    """PlotWidget：Ctrl+滚轮缩放纵轴，Shift+滚轮缩放横轴，无修饰双轴；
+    右键拖拽 = 选择范围（sig_drag_range 信号）。
 
     pyqtgraph 0.14 的 ViewBox.wheelEvent 使用 PyQt5 旧 API (ev.delta())，
     PySide6 下抛 AttributeError — 在此自实现缩放。
     """
+
+    sig_drag_range = Signal(float, float)
+
+    def __init__(self, *args, **kwargs):
+        vb = _RegionViewBox()
+        kwargs.setdefault('plotItem', pg.PlotItem(viewBox=vb))
+        super().__init__(*args, **kwargs)
+        self._region_vb = vb
+        vb.sig_drag_range.connect(self.sig_drag_range)
 
     def wheelEvent(self, ev):
         mods = ev.modifiers()
