@@ -153,12 +153,9 @@ class AnalysisTab:
         plot.showGrid(x=True, y=True, alpha=0.2)
         plot.hideButtons()
         plot.setMenuEnabled(False)
-        # 上/右框线（只画线，不显示刻度与数值）
-        for _ax in ('top', 'right'):
-            plot.getPlotItem().showAxis(_ax)
-            _a = plot.getPlotItem().getAxis(_ax)
-            _a.setStyle(showValues=False)
-            _a.setTicks([])
+        # 上/右框线：ViewBox.setBorder（空轴零尺寸会被渲染裁剪不显示）
+        plot.getPlotItem().getViewBox().setBorder(
+            pg.mkPen(chart_colors(isDarkTheme())[1]))
         self._plot = plot
         layout.addWidget(plot, 1)
         self._ready = True
@@ -174,10 +171,11 @@ class AnalysisTab:
         if plot is None:
             return
         plot.setBackground(bg)
-        for ax_name in ('left', 'bottom', 'top', 'right'):
+        for ax_name in ('left', 'bottom'):
             ax_item = plot.getPlotItem().getAxis(ax_name)
             ax_item.setTextPen(fg)
             ax_item.setPen(fg)
+        plot.getPlotItem().getViewBox().setBorder(pg.mkPen(fg))
         # 悬停/统计文字同步主题前景色（初始用 COLOR_FG_LIGHT 的话深色下不可见）
         for t in (getattr(self, '_delta_text', None), getattr(self, '_hover_text', None)):
             if t is not None:
@@ -548,7 +546,7 @@ class AnalysisTab:
             plot.setLabel('bottom', xlabel, color=fg)
             plot.setLabel('left', ylabel, color=fg)
             plot.setTitle(title, color=fg)
-            for ax_name in ('left', 'bottom', 'top', 'right'):
+            for ax_name in ('left', 'bottom'):
                 ax_item = plot.getPlotItem().getAxis(ax_name)
                 ax_item.setTextPen(fg)
                 ax_item.setPen(fg)

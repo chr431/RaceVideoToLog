@@ -188,12 +188,8 @@ class ReviewDialog(QDialog):
         plot.showGrid(x=True, y=True, alpha=0.15 if dark else 0.25)
         plot.hideButtons()
         plot.setMenuEnabled(False)
-        # 上/右框线（只画线，不显示刻度与数值）
-        for _ax in ('top', 'right'):
-            plot.getPlotItem().showAxis(_ax)
-            _a = plot.getPlotItem().getAxis(_ax)
-            _a.setStyle(showValues=False)
-            _a.setTicks([])
+        # 上/右框线：ViewBox.setBorder（空轴零尺寸会被渲染裁剪不显示）
+        plot.getPlotItem().getViewBox().setBorder(pg.mkPen(fg))
         vb = plot.getPlotItem().getViewBox()
         vb.setMouseEnabled(x=True, y=True)  # 滚轮缩放 + 左键拖拽平移（原生）
         self._plot = plot
@@ -348,13 +344,14 @@ class ReviewDialog(QDialog):
             self._chart_artists['cur_highlight'] = cur
             self._update_corr_and_cur(times)
 
-            # 轴样式（含上/右框线）
+            # 轴样式 + 上/右框线（ViewBox 边框）
             plot.setLabel('bottom', '帧', color=fg)
             plot.setLabel('left', '速度 (km/h)', color=fg)
-            for ax_name in ('left', 'bottom', 'top', 'right'):
+            for ax_name in ('left', 'bottom'):
                 ax_item = plot.getPlotItem().getAxis(ax_name)
                 ax_item.setTextPen(fg)
                 ax_item.setPen(fg)
+            plot.getPlotItem().getViewBox().setBorder(pg.mkPen(fg))
         else:
             self._update_corr_and_cur(times)
 
@@ -369,14 +366,23 @@ class ReviewDialog(QDialog):
         cur = self._chart_artists.get('cur_highlight')
         if corr is None or cur is None:
             return
+        pv = getattr(self, '_preview_vals', {})
         cx = [times[fi] for fi in self._corrections if fi < len(times)]
-        cy = [self._corrections[fi] for fi in self._corrections if fi < len(times)]
+        cy = [pv.get(fi, self._corrections[fi])
+              for fi in self._corrections if fi < len(times)]
         corr.setData(x=cx, y=cy)
         cur_fi = self._current_frame
-        target = self._corrections.get(cur_fi, self._rows[cur_fi][2]
-                                       if 0 <= cur_fi < len(self._rows) else -1)
+        if cur_fi in pv:
+            target = pv[cur_fi]
+        elif cur_fi in self._corrections:
+            target = self._corrections[cur_fi]
+        else:
+            target = self._rows[cur_fi][2] if 0 <= cur_fi < len(self._rows) else -1
         if 0 <= cur_fi < len(times) and target >= 0:
             cur.setData(x=[times[cur_fi]], y=[target])
+            # 已确定点选中：蓝点 + 白描边；未确定点：红点 + 白描边
+            cur.setBrush(make_brush(COLOR_BLUE if cur_fi in self._corrections
+                                    else COLOR_RED))
         else:
             cur.setData(x=[], y=[])
 
@@ -485,8 +491,11 @@ class ReviewDialog(QDialog):
     def _navigate_to(self, fi: int) -> None:
         prev = self._current_frame
         backup = getattr(self, '_preview_backup', {})
-        if prev != fi and prev in backup and prev not in self._corrections:
-            self._rows[prev][2] = backup.pop(prev)
+        if prev != fi:
+            # 离开帧：丢弃未提交的预览（已确定点恢复蓝点原值）
+            getattr(self, '_preview_vals', {}).pop(prev, None)
+            if prev in backup and prev not in self._corrections:
+                self._rows[prev][2] = backup.pop(prev)
         self._current_frame = fi
         self._frame_label.setText(f"#{fi}")
         self._show_frame_image(fi)
@@ -504,9 +513,15 @@ class ReviewDialog(QDialog):
             return
         if not hasattr(self, '_preview_backup'):
             self._preview_backup: dict[int, float] = {}
-        if fi not in self._preview_backup and fi not in self._corrections:
-            self._preview_backup[fi] = self._rows[fi][2]
-        self._rows[fi][2] = int(value)
+        if not hasattr(self, '_preview_vals'):
+            self._preview_vals: dict[int, float] = {}
+        if fi in self._corrections:
+            # 已确定点：预览值单独记录（蓝点/选中点跟随），不破坏原数据
+            self._preview_vals[fi] = int(value)
+        else:
+            if fi not in self._preview_backup:
+                self._preview_backup[fi] = self._rows[fi][2]
+            self._rows[fi][2] = int(value)
         self._redraw_chart()
         self._speed_value_label.setText(f"速度: {value:.0f} km/h (预览)")
 
@@ -547,6 +562,7 @@ class ReviewDialog(QDialog):
                 return
         self._corrections[fi] = v
         getattr(self, '_preview_backup', {}).pop(fi, None)
+        getattr(self, '_preview_vals', {}).pop(fi, None)
         self._redraw_chart()
         self._show_frame_image(fi)
         self._btn_delete.setEnabled(True)
@@ -556,6 +572,7 @@ class ReviewDialog(QDialog):
         if fi not in self._corrections:
             return
         self._corrections.pop(fi, None)
+        getattr(self, '_preview_vals', {}).pop(fi, None)
         self._speed_edit.setValue(self._speed_input_value(fi))
         self._redraw_chart()
         self._btn_delete.setEnabled(False)
