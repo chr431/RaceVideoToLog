@@ -20,8 +20,7 @@ def make_static_card(parent=None):
 
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPen
-from PySide6.QtWidgets import QWidget
+from PySide6.QtGui import QColor
 import pyqtgraph as pg
 
 
@@ -54,132 +53,12 @@ def disable_spin_flyout(spin) -> None:
     spin._showFlyout = lambda: None
 
 
-def setup_chart_zoom_pan(ax, canvas, throttle_ms: int = 40):
-    """为 matplotlib 图表配置滚轮缩放 + 右键拖拽平移。
-
-    集中管理缩放/平移逻辑，消除 gui_review.py 和 gui_analysis.py
-    中的 ~40 行重复代码。
-
-    Args:
-        ax: matplotlib Axes 对象
-        canvas: FigureCanvasQTAgg 实例
-        throttle_ms: 平移时的节流间隔 (毫秒)，0 表示不节流
-    Returns:
-        (user_zoomed_flag, saved_limits_dict) — 可变容器，
-        调用方可读取 user_zoomed[0] 和 saved_limits 来恢复状态。
-    """
-    import time as _time
-    user_zoomed = [False]
-    saved_limits: dict[str, tuple | None] = {"xlim": None, "ylim": None}
-    _pan_start = [None, None]
-    _last_draw = [0.0]
-
-    def _throttled_draw() -> None:
-        now = _time.time()
-        if throttle_ms <= 0 or now - _last_draw[0] >= throttle_ms / 1000.0:
-            canvas.draw_idle()
-            _last_draw[0] = now
-
-    def _on_scroll(event: object) -> None:
-        # 修饰键：Ctrl+滚轮缩放纵轴，Shift+滚轮缩放横轴，无修饰双轴缩放
-        from PySide6.QtCore import Qt
-        mods = Qt.KeyboardModifier.NoModifier
-        gui_ev = getattr(event, 'guiEvent', None)
-        if gui_ev is not None:
-            try:
-                mods = gui_ev.modifiers()
-            except Exception:
-                pass
-        s = 0.85 if getattr(event, 'button', '') == 'up' else 1.15
-        if mods & Qt.KeyboardModifier.ControlModifier:
-            yl = ax.get_ylim(); ym = (yl[0] + yl[1]) / 2
-            ax.set_ylim(ym - (ym - yl[0]) * s, ym + (yl[1] - ym) * s)
-        elif mods & Qt.KeyboardModifier.ShiftModifier:
-            xl = ax.get_xlim(); xm = (xl[0] + xl[1]) / 2
-            ax.set_xlim(xm - (xm - xl[0]) * s, xm + (xl[1] - xm) * s)
-        else:
-            xl = ax.get_xlim(); yl = ax.get_ylim()
-            xm = (xl[0] + xl[1]) / 2; ym = (yl[0] + yl[1]) / 2
-            ax.set_xlim(xm - (xm - xl[0]) * s, xm + (xl[1] - xm) * s)
-            ax.set_ylim(ym - (ym - yl[0]) * s, ym + (yl[1] - ym) * s)
-        user_zoomed[0] = True
-        saved_limits["xlim"] = tuple(ax.get_xlim())
-        saved_limits["ylim"] = tuple(ax.get_ylim())
-        canvas.draw_idle()
-
-    def _on_press(event: object) -> None:
-        if getattr(event, 'button', 0) == 3:
-            _pan_start[0] = getattr(event, 'xdata', None)
-            _pan_start[1] = getattr(event, 'ydata', None)
-
-    def _on_motion(event: object) -> None:
-        if getattr(event, 'button', 0) == 3 and _pan_start[0] is not None:
-            xd = getattr(event, 'xdata', None)
-            if xd is not None:
-                dx = _pan_start[0] - xd
-                dy = (_pan_start[1] or 0) - (getattr(event, 'ydata', None) or 0)
-                xl = ax.get_xlim(); yl = ax.get_ylim()
-                ax.set_xlim(xl[0] + dx, xl[1] + dx)
-                ax.set_ylim(yl[0] + dy, yl[1] + dy)
-                user_zoomed[0] = True
-                saved_limits["xlim"] = tuple(ax.get_xlim())
-                saved_limits["ylim"] = tuple(ax.get_ylim())
-                if throttle_ms > 0:
-                    _throttled_draw()
-                else:
-                    canvas.draw_idle()
-
-    canvas.mpl_connect("scroll_event", _on_scroll)
-    canvas.mpl_connect("button_press_event", _on_press)
-    canvas.mpl_connect("motion_notify_event", _on_motion)
-
-    return user_zoomed, saved_limits
-
-
-class HoverOverlay(QWidget):
-    """matplotlib 画布上的 Qt 覆盖层：悬停竖线 + 左上文本。
-
-    完全绕开 matplotlib 重绘（blit/全量重绘都有抖动或卡顿）：
-    竖线和文本由 Qt 直接绘制，鼠标移动只触发本 widget 的局部重绘。
-    """
-
-    def __init__(self, canvas, fg_color: str = "#333333",
-                 line_color: str = "#888888") -> None:
-        super().__init__(canvas)
-        self._canvas = canvas
-        self._x_px: float | None = None
-        self._text: str = ""
-        self._fg = QColor(fg_color)
-        self._line = QColor(line_color)
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setGeometry(canvas.rect())
-        self.hide()
-
-    def set_hover(self, x_px: float, text: str) -> None:
-        """更新竖线像素位置与文本并局部重绘（Qt 层，无 matplotlib 开销）。"""
-        self._x_px = x_px
-        self._text = text
-        self.setGeometry(self._canvas.rect())
-        self.show()
-        self.update()
-
-    def clear(self) -> None:
-        self.hide()
-
-    def paintEvent(self, event) -> None:
-        if self._x_px is None:
-            return
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-        pen = QPen(self._line, 1)
-        pen.setStyle(Qt.PenStyle.DashLine)
-        p.setPen(pen)
-        p.drawLine(int(self._x_px), 0, int(self._x_px), self.height())
-        if self._text:
-            p.setPen(self._fg)
-            p.drawText(8, 14, self._text)
-        p.end()
+def make_brush(color, alpha: int = 255):
+    """pyqtgraph 画笔：mkBrush(color, alpha=...) 会静默丢弃 alpha 关键字，
+    导致选区/散点完全透明化失效。这里显式构造带透明度的 QColor。"""
+    c = QColor(color)
+    c.setAlpha(alpha)
+    return pg.mkBrush(c)
 
 
 class _RegionViewBox(pg.ViewBox):
@@ -187,6 +66,16 @@ class _RegionViewBox(pg.ViewBox):
 
     sig_drag_range = Signal(float, float)  # (x0, x1) 数据坐标（拖拽）
     sig_drag_click = Signal(float)         # 单击位置数据坐标（点击）
+
+    def mouseClickEvent(self, ev):
+        """纯点击（无拖动）→ pyqtgraph 路由到 mouseClickEvent 而非
+        mouseDragEvent：在此补发取消选择信号。"""
+        if ev.button() == Qt.MouseButton.RightButton:
+            x = self.mapSceneToView(ev.scenePos()).x()
+            self.sig_drag_click.emit(x)
+            ev.accept()
+        else:
+            super().mouseClickEvent(ev)
 
     def mouseDragEvent(self, ev, axis=None):
         if ev.button() == Qt.MouseButton.RightButton:

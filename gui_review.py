@@ -13,11 +13,12 @@ from PySide6.QtGui import QPixmap, QImage, QPalette, QColor
 from theme_manager import ThemeManager
 from qfluentwidgets import (BodyLabel, StrongBodyLabel, CaptionLabel,
     PrimaryPushButton, PushButton, isDarkTheme)
-from widget_utils import make_static_card, setup_chart_zoom_pan, disable_spin_flyout, ModPlotWidget
+from widget_utils import (make_static_card, disable_spin_flyout,
+    make_brush, ModPlotWidget)
 from config import (COLOR_RED, COLOR_ORANGE, COLOR_BLUE,
     COLOR_LIGHT_GRAY, COLOR_LIGHTER_GRAY, chart_colors,
     MANUAL_EDIT_ACCEL_WARNING)
-import numpy as np
+import pyqtgraph as pg
 
 
 class ReviewDialog(QDialog):
@@ -212,7 +213,8 @@ class ReviewDialog(QDialog):
         self._hover_line.setVisible(False)
         plot.addItem(self._hover_line)
         fg = chart_colors(isDarkTheme())[1]
-        self._hover_text = pg.TextItem("", color=fg, anchor=(0, 1))
+        # anchor=(0, 0)：文字左上角贴住 pos（(0,1) 会把文字顶到视图外被裁掉）
+        self._hover_text = pg.TextItem("", color=fg, anchor=(0, 0))
         self._hover_text.setVisible(False)
         plot.addItem(self._hover_text, ignoreBounds=True)
         if not hasattr(self, '_hover_connected'):
@@ -293,7 +295,7 @@ class ReviewDialog(QDialog):
                     region = pg.LinearRegionItem(
                         values=(times[s], times[min(e, len(times) - 1)]),
                         orientation='vertical', movable=False,
-                        brush=pg.mkBrush(COLOR_ORANGE, alpha=20))
+                        brush=make_brush(COLOR_ORANGE, 20))
                     plot.addItem(region)
 
             # 灰色/橙色散点（大数据：ScatterPlotItem 原生高性能）
@@ -306,13 +308,13 @@ class ReviewDialog(QDialog):
                     ox.append(times[i]); oy.append(speeds[i]); oi.append(i)
                 else:
                     gx.append(times[i]); gy.append(speeds[i]); gi.append(i)
-            gray = pg.ScatterPlotItem(size=4, brush=pg.mkBrush(gray_c, alpha=100),
+            gray = pg.ScatterPlotItem(size=4, brush=make_brush(gray_c, 100),
                                       pen=None)
             gray.setData(x=gx, y=gy, data=gi)
             gray.sigClicked.connect(self._on_scatter_clicked)
             plot.addItem(gray)
             self._chart_artists['bg_gray'] = gray
-            orange = pg.ScatterPlotItem(size=9, brush=pg.mkBrush(COLOR_ORANGE, alpha=180),
+            orange = pg.ScatterPlotItem(size=9, brush=make_brush(COLOR_ORANGE, 180),
                                         pen=None)
             orange.setData(x=ox, y=oy, data=oi)
             orange.sigClicked.connect(self._on_scatter_clicked)

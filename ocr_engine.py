@@ -199,23 +199,7 @@ _sg_coeff_cache: dict[tuple[int, int], np.ndarray] = {}
 
 
 
-# Common OCR digit confusion map (symmetric). Used by build_speed_candidates
-# and the Phase-2 candidate expansion for low-confidence short-text frames.
-_CONFUSION_MAP: dict[str, list[str]] = {
-    "0": ["8", "6", "9"],
-    "1": ["7", "2", "4", "9"],
-    "2": ["7", "1", "3", "9"],
-    "3": ["8", "9", "2", "5"],
-    "4": ["7", "9", "1"],
-    "5": ["6", "3", "8", "9"],
-    "6": ["8", "5", "0", "2"],
-    "7": ["1", "2", "4"],
-    "8": ["0", "6", "3", "5", "9"],
-    "9": ["8", "3", "5", "0", "4", "1", "2"],
-}
-
-
-
+# 数字混淆映射已移至 constants.py（CONFUSION_MAP）
 
 def _get_model_params(variant: str, engine_type: str = "onnxruntime") -> dict | None:
     """Get RapidOCR params dict for the model variant. Returns None if unsupported.

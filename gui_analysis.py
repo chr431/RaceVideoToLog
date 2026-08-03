@@ -16,7 +16,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 from qfluentwidgets import (PushButton, PrimaryPushButton, CompactSpinBox, isDarkTheme,
     RadioButton, CheckBox, BodyLabel, Slider, CaptionLabel)
-from widget_utils import make_static_card, setup_chart_zoom_pan, make_int_spinbox, ModPlotWidget
+from widget_utils import (make_static_card, make_int_spinbox,
+    make_brush, ModPlotWidget)
 
 from analysis import parse_csv, smooth_data
 import config
@@ -219,8 +220,15 @@ class AnalysisTab:
         plot_item = plot.getPlotItem()
 
         # ── 拖选区间统计（LinearRegionItem，原生高性能）──
-        delta_text = pg.TextItem("", color=config.COLOR_FG_LIGHT, anchor=(0, 1))
+        # anchor=(1, 0)：文字右上角贴住 pos（(1,1) 会把文字顶到视图外被裁掉）
+        delta_text = pg.TextItem("", color=config.COLOR_FG_LIGHT, anchor=(1, 0))
         plot.addItem(delta_text, ignoreBounds=True)
+
+        def _pin_delta_text(*args) -> None:
+            """把统计文本钉在视图右上角（autoRange/缩放/平移后跟随）。"""
+            xmin_v, xmax_v = plot_item.vb.viewRange()[0]
+            ymin_v, ymax_v = plot_item.vb.viewRange()[1]
+            delta_text.setPos(xmax_v, ymax_v)
 
         def _update_delta_text() -> None:
             region = self._region
@@ -260,20 +268,30 @@ class AnalysisTab:
                 elif total > 0:
                     unit = "m" if is_vt else "s"
                     results.append(f"{n}: {total:.2f}{unit}")
-            text = chr(10).join(results) if results else ""
-            delta_text.setText(text)
-            vb = plot_item.vb
-            xmin_v, xmax_v = vb.viewRange()[0]
-            ymin_v, ymax_v = vb.viewRange()[1]
-            delta_text.setPos(xmax_v, ymax_v)  # 右上角
+            delta_text.setText(chr(10).join(results) if results else "")
             delta_text.setVisible(True)  # 常驻右上（提示或统计）
+
+        # 重建时先断开旧连接（否则每次 rebuild 都向 scene/vb/region 累积回调）
+        scene_sig = plot.scene().sigMouseMoved
+        for sig, h in ((scene_sig, getattr(self, '_h_mouse', None)),
+                       (getattr(self, '_h_region_sig', None), getattr(self, '_h_region', None)),
+                       (plot_item.vb.sigRangeChanged, getattr(self, '_pin_delta_text', None))):
+            if h is not None:
+                try:
+                    sig.disconnect(h)
+                except (TypeError, RuntimeError):
+                    pass
+        self._pin_delta_text = _pin_delta_text
+        plot_item.vb.sigRangeChanged.connect(_pin_delta_text)
+        _pin_delta_text()
 
         # ── 悬停竖线 + 最近点速度（仅 v-t / v-x）──
         hover_line = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen(
             config.COLOR_GRAY, width=1, style=Qt.PenStyle.DashLine))
         hover_line.setVisible(False)
         plot.addItem(hover_line)
-        hover_text = pg.TextItem("", color=config.COLOR_FG_LIGHT, anchor=(0, 1))
+        # anchor=(0, 0)：文字左上角贴住 pos（(0,1) 同样会被顶到视图外）
+        hover_text = pg.TextItem("", color=config.COLOR_FG_LIGHT, anchor=(0, 0))
         hover_text.setVisible(False)
         plot.addItem(hover_text, ignoreBounds=True)
         self._hover_text_visible = False
@@ -312,6 +330,7 @@ class AnalysisTab:
             hover_text.setVisible(bool(lines))
             self._hover_text_visible = bool(lines)
 
+        self._h_mouse = _on_mouse_moved
         plot.scene().sigMouseMoved.connect(_on_mouse_moved)
 
         # 拖选 region：初始覆盖全数据范围（拖 handles 调整，统计实时更新）
@@ -321,10 +340,13 @@ class AnalysisTab:
         if xmax0 <= xmin0:
             xmax0 = xmin0 + 1.0
         self._region = None
+        # mkBrush 会丢弃 alpha → 用 make_brush 显式构造半透明填充
         self._region = pg.LinearRegionItem(values=(xmin0, xmax0), orientation='vertical',
-                                           movable=True, brush=pg.mkBrush(
-                                               config.COLOR_BLUE, alpha=20))
-        self._region.sigRegionChanged.connect(lambda r: _update_delta_text())
+                                           movable=True,
+                                           brush=make_brush(config.COLOR_BLUE, 20))
+        self._h_region = lambda r: _update_delta_text()
+        self._h_region_sig = self._region.sigRegionChanged
+        self._region.sigRegionChanged.connect(self._h_region)
         self._region.setVisible(False)  # 重绘后默认不选择，仅右键拖拽才绘制
         plot.addItem(self._region)
 
@@ -336,19 +358,18 @@ class AnalysisTab:
             self._region.setVisible(True)
 
         def _on_drag_click(x: float) -> None:
-            """右键点击（无拖动）：若在选区外则取消选择。"""
+            """右键点击（无拖动）：若在选区外则取消选择，恢复提示文字。"""
             if self._region.isVisible():
                 x0, x1 = self._region.getRegion()
                 if x < x0 or x > x1:
                     self._region.setVisible(False)
-                    delta_text.setVisible(False)
+                    delta_text.setText("← 右键拖拽选择范围，点击选区外取消")
+                    delta_text.setVisible(True)
 
         plot.sig_drag_range.connect(_on_drag_range)
         plot.sig_drag_click.connect(_on_drag_click)
 
         # 拖选统计文本放右上（悬停文本在左上，避免重叠）
-        delta_text.setAnchor((1, 1))
-        delta_text.setPos(xmax0, 0)
         delta_text.setText("← 右键拖拽选择范围，点击选区外取消")
         delta_text.setVisible(True)  # 初始提示可见
 

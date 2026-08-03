@@ -1,9 +1,10 @@
 """OCR 文本提取与候选生成。"""
 from __future__ import annotations
+import math
 import re
 
 from config import SOURCE_TO_KMH
-from constants import OCR_NUMBER_RE
+from constants import OCR_NUMBER_RE, CONFUSION_MAP as _CONFUSION_MAP
 
 
 def normalize_ocr_text(text: str) -> str:
