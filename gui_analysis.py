@@ -18,6 +18,7 @@ from qfluentwidgets import (PushButton, PrimaryPushButton, CompactSpinBox,
 from widget_utils import make_static_card, setup_chart_zoom_pan
 
 from analysis import parse_csv, smooth_data, plot_segmented
+import config
 from config import (COLOR_BLUE, COLOR_ORANGE, COLOR_GREEN, MPS_TO_KMH, chart_colors)
 
 
