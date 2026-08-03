@@ -7,8 +7,14 @@ for backward compatibility.
 from __future__ import annotations
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+import numpy as np
 
 import config
+
+if TYPE_CHECKING:
+    from rapidocr import RapidOCR
 
 _matplotlib_configured = False
 
@@ -159,7 +165,7 @@ def _patch_rapidocr_init() -> None:
     logger.info("RapidOCR patched: det/cls model loading conditional on use_det/use_cls")
 
 
-def _rec_session_max_batch(ocr: "object") -> int | None:
+def _rec_session_max_batch(ocr: "RapidOCR") -> int | None:
     """识别引擎优化 profile 的 batch 上限（仅 TRT 有，ONNX 返回 None）。
 
     rapidocr 自建 TRT 引擎按固定 profile 构建（当前引擎 batch 上限 6），
@@ -173,7 +179,9 @@ def _rec_session_max_batch(ocr: "object") -> int | None:
     if type(session).__name__ != "TRTInferSession":
         return None
     try:
-        engine = session.engine
+        engine = getattr(session, "engine", None)
+        if engine is None:
+            return None
         input_name = engine.get_tensor_name(0)
         profile = engine.get_tensor_profile_shape(input_name, 0)
         return int(profile[2][0])  # max shape 的首维 = batch 上限
@@ -181,7 +189,7 @@ def _rec_session_max_batch(ocr: "object") -> int | None:
         return None
 
 
-def ocr_rec_batch(ocr: "object", img_list: list) -> list:
+def ocr_rec_batch(ocr: "RapidOCR", img_list: list) -> list:
     """批量识别：一次 session.run 处理多帧，按输入顺序返回结果。
 
     通过 RapidOCR 的 text_rec 直接批处理（跳过 __call__ 的
@@ -202,7 +210,7 @@ def ocr_rec_batch(ocr: "object", img_list: list) -> list:
     return _ocr_rec_batch_once(ocr, img_list)
 
 
-def _ocr_rec_batch_once(ocr: "object", img_list: list) -> list:
+def _ocr_rec_batch_once(ocr: "RapidOCR", img_list: list) -> list:
     """单次批量识别（内部实现，batch 已确保在 profile 上限内）。"""
     try:
         from rapidocr.ch_ppocr_rec.typings import TextRecInput

@@ -22,6 +22,10 @@ def make_static_card(parent=None):
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 import pyqtgraph as pg
+# 直接从真实模块导入类（pyqtgraph.__init__ 的动态重导出让 Pylance
+# 把 pg.ViewBox / pg.PlotItem 解析成模块类型）
+from pyqtgraph.graphicsItems.ViewBox.ViewBox import ViewBox
+from pyqtgraph.graphicsItems.PlotItem.PlotItem import PlotItem
 
 
 def make_int_spinbox(min_val: int, max_val: int, default: int, width: int = 70):
@@ -61,7 +65,7 @@ def make_brush(color, alpha: int = 255):
     return pg.mkBrush(c)
 
 
-class _RegionViewBox(pg.ViewBox):
+class _RegionViewBox(ViewBox):
     """ViewBox：右键拖拽 = 选择范围，右键点击（无移动）= 取消选择（左键平移保留）。"""
 
     sig_drag_range = Signal(float, float)  # (x0, x1) 数据坐标（拖拽）
@@ -112,7 +116,7 @@ class ModPlotWidget(pg.PlotWidget):
 
     def __init__(self, *args, **kwargs):
         vb = _RegionViewBox()
-        kwargs.setdefault('plotItem', pg.PlotItem(viewBox=vb))
+        kwargs.setdefault('plotItem', PlotItem(viewBox=vb))
         super().__init__(*args, **kwargs)
         self._region_vb = vb
         vb.sig_drag_range.connect(self.sig_drag_range)
@@ -124,7 +128,7 @@ class ModPlotWidget(pg.PlotWidget):
         if delta == 0:
             return
         s = 0.85 if delta > 0 else 1.15  # 上滚放大
-        vb = self.getPlotItem().getViewBox()
+        vb = self._region_vb  # 构造时已创建并关联
         xr = vb.viewRange()[0]
         yr = vb.viewRange()[1]
         if mods & Qt.KeyboardModifier.ControlModifier:

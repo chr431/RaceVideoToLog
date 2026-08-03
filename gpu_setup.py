@@ -58,7 +58,7 @@ def _has_nvidia_gpu() -> bool:
             ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
             capture_output=True, text=True, timeout=10,
             creationflags=0x08000000 if _os.name == "nt" else 0)
-        return _result.returncode == 0 and _result.stdout.strip()
+        return _result.returncode == 0 and bool(_result.stdout.strip())
     except Exception:
         pass
     return False

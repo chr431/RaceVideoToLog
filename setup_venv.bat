@@ -68,13 +68,6 @@ del /q "%_DECORD_DIR%\avfilter-7.dll" "%_DECORD_DIR%\avdevice-58.dll" "%_DECORD_
 for %%f in (_decord_build\*.dll _decord_build\ffprobe.exe) do copy /Y "%%f" "%_DECORD_DIR%\" >nul
 set _COPIED=1
 goto :decord_done
-if %_COPIED%==1 (
-    echo   Self-built decord installed - GPU decode ready.
-) else (
-    echo [WARNING] Self-built decord not found - using PyPI CPU version.
-)
-set _COPIED=1
-goto :decord_done
 
 :decord_missing
 echo [WARNING] Self-built decord not found.

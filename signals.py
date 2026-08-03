@@ -5,7 +5,7 @@ import math
 import numpy as np
 
 from config import (CONSISTENCY_TIME_WINDOW, CONSISTENCY_DECAY_TAU,
-    CONSISTENCY_PINNED_WEIGHT)
+    CONSISTENCY_PINNED_WEIGHT, MPS_TO_KMH)
 
 # Savitzky-Golay 卷积系数缓存（按 (window, polyorder) 复用）
 _sg_coeff_cache: dict = {}

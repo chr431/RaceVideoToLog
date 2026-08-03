@@ -84,7 +84,7 @@ def extract_speed_value(ocr_result: "object | None") -> tuple[float | None, str 
                     else:
                         continue
                 elif hasattr(item, "text"):
-                    text = str(item.text).strip()
+                    text = str(getattr(item, "text")).strip()
                 else:
                     text = str(item).strip()
                 if text:

@@ -1,5 +1,33 @@
 # Release Notes
 
+## v2.8.0 (2026-08-03)
+
+### GUI 修复与优化（pyqtgraph 迁移收尾）
+
+- 右上角统计/悬停文字：TextItem anchor 裁剪修复（此前被顶出视图不可见），
+  并钉在视图角落跟随缩放/平移，不再拖后腿跳回
+- 右键点击取消选区：pyqtgraph 将纯点击路由到 mouseClickEvent 而非
+  mouseDragEvent → 补发 sig_drag_click；点击选区外取消并恢复提示
+- `pg.mkBrush(color, alpha=…)` 静默丢弃 alpha → `make_brush()` 显式构造
+  透明 QColor，修复选区/散点完全不透明
+- 图表上/右框线（ViewBox.setBorder，随主题变色）；空轴零尺寸渲染被裁剪
+  的坑已规避
+- 审核窗口：sigRangeChangedManually 发射掩码而非 ViewBox 的崩溃修复；
+  已确定点修改实时预览；选中已确定点显示蓝白描边；红/蓝特殊点尺寸 6；
+  移除低置信度背景高亮（橙色散点保留标记）；区域边界改深蓝
+- 图表文字/框线随主题切换变色；rebuild 断开旧回调，消除累积泄漏
+- 清理 matplotlib 时代死代码（setup_chart_zoom_pan、HoverOverlay）
+
+### 修复
+
+- TRT 批处理 OCR 超出引擎优化 profile（batch 上限 6）→ 按 profile 查询
+  并自动分片提交，消除 setInputShape 错误刷屏
+- 模块拆分丢失的 import math / CONFUSION_MAP 归位（5 个单测 NameError）；
+  33/33 单测通过
+- 测试视频统一存放至 D:\Videos\racelog_test
+
+---
+
 ## v2.7.2 (2026-08-03)
 
 ### 算法精度提升（ground truth 验证，CPU 同口径）

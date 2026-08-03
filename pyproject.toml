@@ -1,6 +1,6 @@
 [project]
 name = "RaceVideoToLog"
-version = "2.7.2"
+version = "2.8.0"
 description = "从赛车视频中 OCR 提取速度数据，生成时间-速度-距离 CSV（TensorRT + CPU 双后端）"
 requires-python = ">=3.11"
 dependencies = [
@@ -35,18 +35,24 @@ py-modules = [
     "RaceVideoToLog",
     "analysis",
     "config",
+    "constants",
     "correction",
+    "csv_io",
     "error_detection",
     "gpu_setup",
     "gui",
     "gui_analysis",
     "gui_export",
+    "gui_preview",
     "gui_review",
     "gui_settings",
     "headless",
     "ocr_engine",
+    "ocr_text",
     "pipeline",
+    "signals",
     "theme_manager",
+    "video_utils",
     "viterbi",
     "widget_utils",
 ]

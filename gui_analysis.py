@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import pyqtgraph as pg
@@ -13,7 +14,7 @@ from PySide6.QtWidgets import (
     QWidget, QFileDialog, QMessageBox, QHBoxLayout, QVBoxLayout, QGridLayout,
     QStackedWidget, QSpinBox,
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from qfluentwidgets import (PushButton, PrimaryPushButton, CompactSpinBox, isDarkTheme,
     RadioButton, CheckBox, BodyLabel, Slider, CaptionLabel)
 from widget_utils import (make_static_card, make_int_spinbox,
@@ -153,9 +154,12 @@ class AnalysisTab:
         plot.showGrid(x=True, y=True, alpha=0.2)
         plot.hideButtons()
         plot.setMenuEnabled(False)
+        plot_item = plot.getPlotItem()
+        assert plot_item is not None
+        vb = plot_item.getViewBox()
+        assert vb is not None
         # 上/右框线：ViewBox.setBorder（空轴零尺寸会被渲染裁剪不显示）
-        plot.getPlotItem().getViewBox().setBorder(
-            pg.mkPen(chart_colors(isDarkTheme())[1]))
+        vb.setBorder(pg.mkPen(chart_colors(isDarkTheme())[1]))
         self._plot = plot
         layout.addWidget(plot, 1)
         self._ready = True
@@ -171,11 +175,15 @@ class AnalysisTab:
         if plot is None:
             return
         plot.setBackground(bg)
+        plot_item = plot.getPlotItem()
+        assert plot_item is not None
         for ax_name in ('left', 'bottom'):
-            ax_item = plot.getPlotItem().getAxis(ax_name)
+            ax_item = plot_item.getAxis(ax_name)
             ax_item.setTextPen(fg)
             ax_item.setPen(fg)
-        plot.getPlotItem().getViewBox().setBorder(pg.mkPen(fg))
+        vb = plot_item.getViewBox()
+        assert vb is not None
+        vb.setBorder(pg.mkPen(fg))
         # 悬停/统计文字同步主题前景色（初始用 COLOR_FG_LIGHT 的话深色下不可见）
         for t in (getattr(self, '_delta_text', None), getattr(self, '_hover_text', None)):
             if t is not None:
@@ -208,11 +216,13 @@ class AnalysisTab:
         """偏移 spinbox 变化：节流 150ms 后重建（拖动时不卡顿）。"""
         from PySide6.QtCore import QTimer
         self._offsets[idx] = value
-        if self._offset_timer is None:
-            self._offset_timer = QTimer()  # 无 parent：AnalysisTab 非 QObject
-            self._offset_timer.setSingleShot(True)
-            self._offset_timer.timeout.connect(self._flush_offset_render)
-        self._offset_timer.start(150)
+        timer = self._offset_timer
+        if timer is None:
+            timer = QTimer()  # 无 parent：AnalysisTab 非 QObject
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._flush_offset_render)
+            self._offset_timer = timer
+        timer.start(150)
 
     def _flush_offset_render(self) -> None:
         self._offset_timer = None
@@ -226,6 +236,9 @@ class AnalysisTab:
         """交互：LinearRegionItem 拖选区间统计 + 悬停竖线 + 修饰键缩放。"""
         import pyqtgraph as pg
         plot_item = plot.getPlotItem()
+        assert plot_item is not None
+        vb = plot_item.vb
+        assert vb is not None
 
         # ── 拖选区间统计（LinearRegionItem，原生高性能）──
         # anchor=(1, 0)：文字右上角贴住 pos（(1,1) 会把文字顶到视图外被裁掉）
@@ -236,15 +249,16 @@ class AnalysisTab:
 
         def _pin_delta_text(*args) -> None:
             """把统计文本钉在视图右上角（autoRange/缩放/平移后跟随）。"""
-            xmin_v, xmax_v = plot_item.vb.viewRange()[0]
-            ymin_v, ymax_v = plot_item.vb.viewRange()[1]
+            xmin_v, xmax_v = vb.viewRange()[0]
+            ymin_v, ymax_v = vb.viewRange()[1]
             delta_text.setPos(xmax_v, ymax_v)
 
         def _update_delta_text() -> None:
             region = self._region
             if region is None:
                 return
-            xmin, xmax = region.getRegion()
+            # pyqtgraph 的 getRegion 类型标注过宽（含 list）→ 显式 cast
+            xmin, xmax = cast("tuple[float, float]", region.getRegion())
             results = []
             for i in range(3):
                 xd = all_x[i]
@@ -285,14 +299,14 @@ class AnalysisTab:
         scene_sig = plot.scene().sigMouseMoved
         for sig, h in ((scene_sig, getattr(self, '_h_mouse', None)),
                        (getattr(self, '_h_region_sig', None), getattr(self, '_h_region', None)),
-                       (plot_item.vb.sigRangeChanged, getattr(self, '_pin_delta_text', None))):
-            if h is not None:
+                       (vb.sigRangeChanged, getattr(self, '_pin_delta_text', None))):
+            if sig is not None and h is not None:
                 try:
                     sig.disconnect(h)
                 except (TypeError, RuntimeError):
                     pass
         self._pin_delta_text = _pin_delta_text
-        plot_item.vb.sigRangeChanged.connect(_pin_delta_text)
+        vb.sigRangeChanged.connect(_pin_delta_text)
         _pin_delta_text()
 
         # ── 悬停竖线 + 最近点速度（仅 v-t / v-x）──
@@ -309,23 +323,22 @@ class AnalysisTab:
         # 钉在视图左上角：缩放/平移时跟随，不出现拖后腿跳回
         if getattr(self, '_pin_hover_text', None) is not None:
             try:
-                plot_item.vb.sigRangeChanged.disconnect(self._pin_hover_text)
+                vb.sigRangeChanged.disconnect(self._pin_hover_text)
             except (TypeError, RuntimeError):
                 pass
 
         def _pin_hover_text(*args) -> None:
-            xmin_v, xmax_v = plot_item.vb.viewRange()[0]
-            ymin_v, ymax_v = plot_item.vb.viewRange()[1]
+            xmin_v, xmax_v = vb.viewRange()[0]
+            ymin_v, ymax_v = vb.viewRange()[1]
             hover_text.setPos(xmin_v, ymax_v)
 
         self._pin_hover_text = _pin_hover_text
-        plot_item.vb.sigRangeChanged.connect(_pin_hover_text)
+        vb.sigRangeChanged.connect(_pin_hover_text)
         import bisect
 
         def _on_mouse_moved(pos) -> None:
             if is_dtx:
                 return
-            vb = plot_item.vb
             if not plot.sceneBoundingRect().contains(pos):
                 hover_line.setVisible(False)
                 hover_text.setVisible(False)
@@ -361,34 +374,35 @@ class AnalysisTab:
         xmax0 = max(xs_all) if xs_all else 1.0
         if xmax0 <= xmin0:
             xmax0 = xmin0 + 1.0
-        self._region = None
         # mkBrush 会丢弃 alpha → 用 make_brush 显式构造半透明填充；
         # 边界线用深蓝（默认黄色与主题不搭）
-        self._region = pg.LinearRegionItem(values=(xmin0, xmax0), orientation='vertical',
-                                           movable=True,
-                                           brush=make_brush(config.COLOR_BLUE, 20),
-                                           pen=pg.mkPen("#1565C0"))
+        region = pg.LinearRegionItem(values=(xmin0, xmax0), orientation='vertical',
+                                     movable=True,
+                                     brush=make_brush(config.COLOR_BLUE, 20),
+                                     pen=pg.mkPen("#1565C0"))
+        self._region = region
         self._h_region = lambda r: _update_delta_text()
-        self._h_region_sig = self._region.sigRegionChanged
-        self._region.sigRegionChanged.connect(self._h_region)
-        self._region.setVisible(False)  # 重绘后默认不选择，仅右键拖拽才绘制
-        plot.addItem(self._region)
+        self._h_region_sig = region.sigRegionChanged
+        region.sigRegionChanged.connect(self._h_region)
+        region.setVisible(False)  # 重绘后默认不选择，仅右键拖拽才绘制
+        plot.addItem(region)
 
         def _on_drag_range(x0: float, x1: float) -> None:
             """右键拖拽选择范围（模拟重构前 SpanSelector）。"""
             if x0 > x1:
                 x0, x1 = x1, x0
-            self._region.setRegion((x0, x1))
-            self._region.setVisible(True)
+            region.setRegion((x0, x1))
+            region.setVisible(True)
 
         def _on_drag_click(x: float) -> None:
             """右键点击（无拖动）：若在选区外则取消选择，恢复提示文字。"""
-            if self._region.isVisible():
-                x0, x1 = self._region.getRegion()
-                if x < x0 or x > x1:
-                    self._region.setVisible(False)
-                    delta_text.setText("← 右键拖拽选择范围，点击选区外取消")
-                    delta_text.setVisible(True)
+            if not region.isVisible():
+                return
+            x0, x1 = cast("tuple[float, float]", region.getRegion())
+            if x < x0 or x > x1:
+                region.setVisible(False)
+                delta_text.setText("← 右键拖拽选择范围，点击选区外取消")
+                delta_text.setVisible(True)
 
         plot.sig_drag_range.connect(_on_drag_range)
         plot.sig_drag_click.connect(_on_drag_click)
@@ -507,8 +521,11 @@ class AnalysisTab:
 
             # ── 保存当前视图 ──
             if self._last_mode and self._last_mode != "dt-x":
-                self._saved_limits[self._last_mode] = (
-                    plot.getPlotItem().vb.viewRange())
+                plot_item0 = plot.getPlotItem()
+                assert plot_item0 is not None
+                vb_cur = plot_item0.vb
+                assert vb_cur is not None
+                self._saved_limits[self._last_mode] = tuple(vb_cur.viewRange())
 
             # ── 完全重建（pyqtgraph）──
             plot.clear()
@@ -548,8 +565,10 @@ class AnalysisTab:
             plot.setLabel('bottom', xlabel, color=fg)
             plot.setLabel('left', ylabel, color=fg)
             plot.setTitle(title, color=fg)
+            plot_item = plot.getPlotItem()
+            assert plot_item is not None
             for ax_name in ('left', 'bottom'):
-                ax_item = plot.getPlotItem().getAxis(ax_name)
+                ax_item = plot_item.getAxis(ax_name)
                 ax_item.setTextPen(fg)
                 ax_item.setPen(fg)
             if is_dtx:
@@ -561,7 +580,8 @@ class AnalysisTab:
             self._setup_chart_interactions(plot, all_x, all_y,
                 is_dtx, is_vt, delta_label, label)
 
-            vb2 = plot.getPlotItem().vb
+            vb2 = plot_item.vb
+            assert vb2 is not None
             if is_dtx:
                 # Δt-x：y=0 线纵向居中（对称范围）
                 dt_vals = all_y[0]
@@ -612,7 +632,11 @@ class AnalysisTab:
         if plot is None:
             return
         self._saved_limits.pop(self._chart_mode, None)
-        plot.getPlotItem().vb.autoRange()
+        plot_item = plot.getPlotItem()
+        assert plot_item is not None
+        vb = plot_item.vb
+        assert vb is not None
+        vb.autoRange()
 
     def _export_png(self) -> None:
         """导出当前图表为 PNG（pyqtgraph ImageExporter）。"""
@@ -623,7 +647,12 @@ class AnalysisTab:
             return
         try:
             import pyqtgraph.exporters as _exp
-            exp = _exp.ImageExporter(self._plot.plotItem)
+            plot = self._plot
+            if plot is None:
+                return
+            plot_item = plot.plotItem
+            assert plot_item is not None
+            exp = _exp.ImageExporter(plot_item)
             exp.export(path)
         except Exception as e:
             QMessageBox.critical(self._stack, "导出失败", str(e))

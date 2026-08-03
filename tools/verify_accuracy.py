@@ -3,6 +3,7 @@
 Usage: python tools/verify_accuracy.py [--headless]
 """
 from __future__ import annotations
+from typing import cast
 import sys
 from pathlib import Path
 
@@ -92,7 +93,7 @@ def run_pipeline(video_path: str, truth_csv: str, output_path: str) -> None:
     roi_str = settings.get("roi", "")
     if not roi_str:
         raise ValueError("Truth CSV missing roi parameter")
-    roi = tuple(int(x) for x in roi_str.split(","))
+    roi = cast("tuple[int, int, int, int]", tuple(int(x) for x in roi_str.split(",")))
     max_speed = float(settings.get("max_speed", "400"))
     max_accel = float(settings.get("max_accel", "70"))
     div = int(settings.get("div", "1"))

@@ -173,7 +173,7 @@ def expand_partial(pattern: str, max_speed: float) -> list[int]:
     x_count = pattern.count('x') + pattern.count('X')
     if x_count == 0:
         val = float(pattern)
-        return [val] if val <= max_speed else []
+        return [int(val)] if val <= max_speed else []
     if x_count == len(pattern) or x_count > MAX_PARTIAL_WILDCARDS:
         return []
     results = []
@@ -248,6 +248,8 @@ def _generate_candidates(fi: int, rows: list, observations: list, raw_frames: li
                          max_accel_mps2: float | None = None,
                          max_width: int = 0) -> list[float]:
     raw_val = rows[fi][2]
+    if max_accel_mps2 is None:
+        max_accel_mps2 = 0.0  # 未指定 = 不施加加速度约束
     protected: list[float] = []
     protected_set: set[float] = set()
 

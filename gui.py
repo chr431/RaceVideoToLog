@@ -5,8 +5,13 @@ Import 自 gui_export、gui_settings 等子模块，保持 gui.py 作为对外�
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from decord import VideoReader
+    from rapidocr import RapidOCR
 
 import config
 
@@ -52,7 +57,7 @@ class RaceVideoToLogApp(QMainWindow):
         self.metadata: VideoMetadata | None = None
         self.first_frame_rgb: np.ndarray | None = None
         self.first_frame_qimg: QImage | None = None
-        self._preview_vr: object | None = None  # decord VideoReader
+        self._preview_vr: "VideoReader | None" = None  # decord VideoReader
         self._preview_frame_no: int = 0
         self._throttle_timer = QTimer(self)
         self._throttle_timer.setSingleShot(True)
@@ -455,7 +460,7 @@ class RaceVideoToLogApp(QMainWindow):
         # ── ROI（特殊：4 个 spinbox）──
         if "roi" in settings:
             parts = parse_csv_setting("roi", settings["roi"])
-            if parts is not None and len(parts) == 4:
+            if isinstance(parts, (list, tuple)) and len(parts) == 4:
                 for spin in [self.roi_x1, self.roi_y1, self.roi_x2, self.roi_y2]:
                     spin.blockSignals(True)
                 self.roi_x2.setValue(parts[2]); self.roi_y2.setValue(parts[3])

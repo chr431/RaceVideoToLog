@@ -1,7 +1,10 @@
 """CSV 头部字段解析（CLI/GUI 共用）。"""
 from __future__ import annotations
+import logging
 import re
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 

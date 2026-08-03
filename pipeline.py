@@ -10,6 +10,10 @@ import logging
 import time as _time
 from pathlib import Path
 from collections.abc import Callable
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from rapidocr import RapidOCR
 
 import cv2
 import numpy as np
@@ -309,8 +313,10 @@ class ProcessingPipeline:
         def _prog(done, total):
             if done % max(1, total // 5) != 0 and done != total: return
             self._emit(f"corr: {done}/{total}", progress_base + 2.0 + (done/max(total,1))*progress_span)
+        _reocr = self._reocr
+        assert _reocr is not None
         self._rows, self._detection_confidence = correct_errors(
-            self._rows, self._observations, self._raw_frames, self._reocr,
+            self._rows, self._observations, self._raw_frames, _reocr,
             self._detection_confidence, times,
             self._max_speed, self._max_accel, mode=mode,
             pinned=self._pinned if self._pinned else None,
@@ -356,6 +362,7 @@ class ProcessingPipeline:
         from queue import Queue
 
         ocr = self._ocr
+        assert ocr is not None
         speed_format = self._speed_format
         target_h = self._target_h
         pad = self._pad

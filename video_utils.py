@@ -5,6 +5,8 @@ from pathlib import Path
 
 import hashlib
 
+import numpy as np
+
 
 @dataclass
 class VideoMetadata:

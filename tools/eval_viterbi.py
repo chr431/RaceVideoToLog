@@ -3,6 +3,7 @@
 Usage: python tools/eval_viterbi.py [--baseline] [--video NAME] [--manual]
 """
 from __future__ import annotations
+from typing import cast
 import sys, time, os, shutil
 from pathlib import Path
 from datetime import datetime
@@ -67,7 +68,7 @@ def evaluate(truth: dict[int, float], result: dict[int, tuple[float, int]]) -> d
 def run_pipeline(video: str, truth_csv: str, max_speed: float, max_accel: float,
                  reocr_only: bool = True, mode: str = "auto") -> tuple[list, str]:
 	settings = parse_csv_header(truth_csv)
-	roi = tuple(int(x) for x in settings["roi"].split(","))
+	roi = cast("tuple[int, int, int, int]", tuple(int(x) for x in settings["roi"].split(",")))
 	div = int(settings.get("div", "1"))
 	target_h = int(float(settings.get("target_h", "48")))
 	pad = int(float(settings.get("pad", "0")))

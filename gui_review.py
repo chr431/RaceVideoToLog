@@ -188,9 +188,12 @@ class ReviewDialog(QDialog):
         plot.showGrid(x=True, y=True, alpha=0.15 if dark else 0.25)
         plot.hideButtons()
         plot.setMenuEnabled(False)
+        plot_item = plot.getPlotItem()
+        assert plot_item is not None
+        vb = plot_item.getViewBox()
+        assert vb is not None
         # 上/右框线：ViewBox.setBorder（空轴零尺寸会被渲染裁剪不显示）
-        plot.getPlotItem().getViewBox().setBorder(pg.mkPen(fg))
-        vb = plot.getPlotItem().getViewBox()
+        vb.setBorder(pg.mkPen(fg))
         vb.setMouseEnabled(x=True, y=True)  # 滚轮缩放 + 左键拖拽平移（原生）
         self._plot = plot
         self._chart_params = {'dark': dark, 'bg': bg, 'fg': fg}
@@ -206,7 +209,11 @@ class ReviewDialog(QDialog):
         """用户手动缩放/平移后记录视图范围。
         sigRangeChangedManually 发射的是轴启用掩码（list），取范围用 self._plot。"""
         self._user_zoomed = True
-        self._saved_range = self._plot.plotItem.vb.viewRange()
+        plot_item = self._plot.plotItem
+        assert plot_item is not None
+        vb = plot_item.vb
+        assert vb is not None
+        self._saved_range = vb.viewRange()
 
     def _setup_hover(self, plot) -> None:
         """悬停竖线 + 左上角最近点速度（pyqtgraph 原生 InfiniteLine + TextItem）。"""
@@ -228,14 +235,20 @@ class ReviewDialog(QDialog):
 
     def _pin_hover_text(self, *args) -> None:
         """悬停文字钉在视图左上角：缩放/平移时跟随，不拖后腿跳回。"""
-        vb = self._plot.plotItem.vb
+        plot_item = self._plot.plotItem
+        assert plot_item is not None
+        vb = plot_item.vb
+        assert vb is not None
         xmin, xmax = vb.viewRange()[0]
         ymin, ymax = vb.viewRange()[1]
         self._hover_text.setPos(xmin, ymax)
 
     def _on_hover_moved(self, pos) -> None:
         plot = self._plot
-        vb = plot.plotItem.vb
+        plot_item = plot.plotItem
+        assert plot_item is not None
+        vb = plot_item.vb
+        assert vb is not None
         if not plot.sceneBoundingRect().contains(pos):
             self._hover_line.setVisible(False)
             self._hover_text.setVisible(False)
@@ -264,7 +277,10 @@ class ReviewDialog(QDialog):
     def _redraw_chart(self, plot=None) -> None:
         if plot is None:
             plot = self._plot
-        vb = plot.plotItem.vb
+        plot_item = plot.plotItem
+        assert plot_item is not None
+        vb = plot_item.vb
+        assert vb is not None
         saved_range = self._saved_range if getattr(self, '_user_zoomed', False) else None
 
         dark = isDarkTheme()
@@ -312,7 +328,7 @@ class ReviewDialog(QDialog):
             gray.sigClicked.connect(self._on_scatter_clicked)
             plot.addItem(gray)
             self._chart_artists['bg_gray'] = gray
-            orange = pg.ScatterPlotItem(size=9, brush=make_brush(COLOR_ORANGE, 180),
+            orange = pg.ScatterPlotItem(size=5, brush=make_brush(COLOR_ORANGE, 180),
                                         pen=None)
             orange.setData(x=ox, y=oy, data=oi)
             orange.sigClicked.connect(self._on_scatter_clicked)
@@ -333,11 +349,13 @@ class ReviewDialog(QDialog):
             # 轴样式 + 上/右框线（ViewBox 边框）
             plot.setLabel('bottom', '帧', color=fg)
             plot.setLabel('left', '速度 (km/h)', color=fg)
+            plot_item = plot.getPlotItem()
+            assert plot_item is not None
             for ax_name in ('left', 'bottom'):
-                ax_item = plot.getPlotItem().getAxis(ax_name)
+                ax_item = plot_item.getAxis(ax_name)
                 ax_item.setTextPen(fg)
                 ax_item.setPen(fg)
-            plot.getPlotItem().getViewBox().setBorder(pg.mkPen(fg))
+            vb.setBorder(pg.mkPen(fg))
         else:
             self._update_corr_and_cur(times)
 
