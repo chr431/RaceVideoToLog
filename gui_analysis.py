@@ -278,7 +278,7 @@ class AnalysisTab:
             all_y: list[list[float]] = [[], [], []]
             all_flags: list[list[int]] = [[], [], []]
             all_raw: list = [None, None, None]
-            label = ""
+            name1 = name2 = label = ""
             has_data = False
 
             if is_dtx:

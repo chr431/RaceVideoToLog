@@ -639,7 +639,16 @@ class RaceVideoToLogApp(QMainWindow):
 
     def _teardown_export_thread(self) -> None:
         """拆除导出线程：断开全部信号并释放引用（幂等）。"""
-        self._teardown_export_thread()
+        if self._export_thread is not None:
+            try:
+                self._export_thread.progress_updated.disconnect()
+                self._export_thread.finished.disconnect()
+                self._export_thread.error_occurred.disconnect()
+                self._export_thread.cancelled.disconnect()
+                self._export_thread.pipeline_ready.disconnect()
+            except (TypeError, RuntimeError):
+                pass
+            self._export_thread = None
 
     def _finish_export(self) -> None:
         self._export_btn.setEnabled(True); self._cancel_btn.setEnabled(False)
