@@ -208,7 +208,7 @@ def _auto_expand_digits(raw_text: str, max_speed_kmh: float) -> list[int]:
 
 
 def _multi_height_ocr(crop_bgr: "np.ndarray", ocr: "RapidOCR", max_speed_kmh: float,
-                  cache: dict | None = None) -> set:
+                  cache: dict | None = None, max_width: int = 0) -> set:
     cache = cache if cache is not None else {}
     if crop_bgr is not None and crop_bgr.size > 0:
         raw = crop_bgr.data.tobytes() if hasattr(crop_bgr, 'data') else crop_bgr.tobytes()
@@ -224,8 +224,10 @@ def _multi_height_ocr(crop_bgr: "np.ndarray", ocr: "RapidOCR", max_speed_kmh: fl
     if h <= 0 or w <= 0: return candidates
     # Single-height re-OCR: multi-height (24,32,48) tested, no improvement
     # over using the main pipeline target_h=48 alone.  Removes ~0.5s latency.
-    scale = 48 / h if h > 0 else 1.0
-    proc = cv2.resize(crop_bgr, (max(1, int(w * scale)), 48))
+    # 与主识别共用 _preprocess_standard：max_width 压缩（扁字体）必须一致，
+    # 否则 re-OCR 对扁数字读不出正确值（实测 bug）。
+    from video_utils import _preprocess_standard
+    proc = _preprocess_standard(crop_bgr, 48, 0, max_width=max_width)
     res = ocr(proc)
     sv, rt, _conf = extract_speed_value(res)
     if sv is not None and sv <= max_speed_kmh:
@@ -243,7 +245,8 @@ def _generate_candidates(fi: int, rows: list, observations: list, raw_frames: li
                          split_results: dict[int, str] | None,
                          reocr_only: bool, fps: float,
                          confidence_score: float,
-                         max_accel_mps2: float | None = None) -> list[float]:
+                         max_accel_mps2: float | None = None,
+                         max_width: int = 0) -> list[float]:
     raw_val = rows[fi][2]
     protected: list[float] = []
     protected_set: set[float] = set()
@@ -255,7 +258,7 @@ def _generate_candidates(fi: int, rows: list, observations: list, raw_frames: li
     obs = observations[min(fi, len(observations) - 1)]
 
     if fi < len(raw_frames):
-        reocr_set = _multi_height_ocr(raw_frames[fi][1], ocr, max_speed_kmh, cache=reocr_cache)
+        reocr_set = _multi_height_ocr(raw_frames[fi][1], ocr, max_speed_kmh, cache=reocr_cache, max_width=max_width)
         for cv in sorted(reocr_set):
             if 0 <= cv <= max_speed_kmh and cv not in protected_set:
                 protected.append(cv); protected_set.add(cv)
@@ -618,6 +621,7 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
                    fps: float = 1.0, log_fn: "Callable | None" = None,
                    progress_fn: "Callable | None" = None,
                    notes: dict[int, str] | None = None,
+                   max_width: int = 0,
                    ) -> tuple[list, list[dict]]:
     pinned = pinned or set()
     n = len(rows)
@@ -647,7 +651,7 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
         cands = _generate_candidates(fi, rows, observations, raw_frames, ocr, pinned_set,
             times, max_speed_kmh, cache, split_results, reocr_only=reocr_only,
             fps=fps, confidence_score=conf_by_idx.get(fi, 50),
-            max_accel_mps2=max_accel_mps2)
+            max_accel_mps2=max_accel_mps2, max_width=max_width)
         if cands: candidates_by_frame[fi] = cands
         if progress_fn and total_correct > 0: progress_fn(idx + 1, total_correct)
 

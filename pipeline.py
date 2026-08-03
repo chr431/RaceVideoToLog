@@ -118,25 +118,7 @@ def _sum_nbytes(seq) -> int:
 logger = logging.getLogger("RaceVideoToLog.pipeline")
 
 
-def _preprocess_standard(crop: np.ndarray, target_h: int, pad: int,
-                         max_width: int = 0) -> np.ndarray:
-    """标准预处理：resize (cv2) + 可选宽度限制 + 填充。
-
-    max_width > 0 时限制宽度上限（px），用于纠正扁宽字体
-    （如数字高度≈宽度时设为 96 可恢复 ~2:1 高宽比）。
-    """
-    h, w = crop.shape[:2]
-    if target_h < 8:
-        raise ValueError(f"target_h 必须 >= 8，当前为 {target_h}")
-    new_w = max(1, int(w * target_h / h)) if h > 0 else w
-    if max_width > 0:
-        new_w = min(new_w, max_width)
-    resized = cv2.resize(crop, (new_w, target_h)) if abs(target_h / h - 1.0) > 0.02 else crop
-    if pad > 0:
-        resized = cv2.copyMakeBorder(resized, pad, pad, pad, pad,
-                                     cv2.BORDER_REPLICATE)
-    return resized
-
+from video_utils import _preprocess_standard
 
 ProgressFn = Callable[[str, float], None]
 
@@ -335,7 +317,8 @@ class ProcessingPipeline:
             reocr_cache=self._reocr_cache, reocr_only=reocr_only,
             split_results=self._split_results if self._split_results else None,
             fps=self._fps, progress_fn=_prog,
-            notes=self._diag_notes if self._diag else None)
+            notes=self._diag_notes if self._diag else None,
+            max_width=self._max_width)
         self._confidences = self._detection_confidence
         self._populate_diag_final()
         self._timing["correction"] = _time.perf_counter() - t0

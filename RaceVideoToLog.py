@@ -37,7 +37,7 @@ def main() -> None:
     parser.add_argument("--max-accel", type=float, default=config.DEFAULT_MAX_ACCEL)
     parser.add_argument("--target-h", type=int, default=config.DEFAULT_TARGET_H)
     parser.add_argument("--pad", type=int, default=config.DEFAULT_PAD)
-    parser.add_argument("--max-width", type=int, default=config.DEFAULT_MAX_WIDTH,
+    parser.add_argument("--max-width", type=int, default=None,
         help="预处理最大宽度 px（0=不限）。扁宽字体设为 96 可改善识别")
     parser.add_argument("--buffer", type=int, default=config.DEFAULT_BUFFER_SIZE)
     parser.add_argument("--backend", choices=config.BACKEND_KEYS, default=config.DEFAULT_BACKEND)
@@ -76,6 +76,10 @@ def main() -> None:
             parsed = parse_csv_setting(key, val)
             if parsed is not None:
                 setattr(args, dest, parsed)
+
+    # None = 未指定：归一化为配置默认值（显式传 0 必须保留，不能被 CSV 覆盖）
+    if args.max_width is None:
+        args.max_width = config.DEFAULT_MAX_WIDTH
 
     if args.video:
         from headless import run_headless

@@ -83,3 +83,28 @@ def compute_video_hash(video_path: str | Path, chunk_size: int = 1_048_576) -> s
             f.seek(-chunk_size, 2)
             h.update(f.read(chunk_size))
     return h.hexdigest()[:16]  # 前 16 字符足够区分
+
+
+def _preprocess_standard(crop: "np.ndarray", target_h: int, pad: int,
+                         max_width: int = 0) -> "np.ndarray":
+    """标准预处理：resize (cv2) + 可选宽度限制 + 填充。
+
+    max_width > 0 时限制宽度上限（px），用于纠正扁宽字体
+    （如数字高度≈宽度时设为 96 可恢复 ~2:1 高宽比）。
+    主识别（pipeline）与 re-OCR（correction）共用，保证一致。
+    """
+    import cv2
+    h, w = crop.shape[:2]
+    if target_h < 8:
+        raise ValueError(f"target_h 必须 >= 8，当前为 {target_h}")
+    new_w = max(1, int(w * target_h / h)) if h > 0 else w
+    if max_width > 0:
+        new_w = min(new_w, max_width)
+    if abs(target_h / h - 1.0) > 0.02:
+        resized = cv2.resize(crop, (new_w, target_h))
+    else:
+        resized = crop
+    if pad > 0:
+        resized = cv2.copyMakeBorder(resized, pad, pad, pad, pad,
+                                     cv2.BORDER_REPLICATE)
+    return resized
