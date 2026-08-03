@@ -12,8 +12,14 @@ class ThemeManager:
     _callbacks: list[Callable[[bool], None]] = []
 
     @classmethod
-    def register(cls, fn: Callable[[bool], None]) -> None:
+    def register(cls, fn: Callable[[bool], None]) -> Callable[[bool], None]:
         cls._callbacks.append(fn)
+        return fn
+
+    @classmethod
+    def unregister(cls, fn: Callable[[bool], None]) -> None:
+        if fn in cls._callbacks:
+            cls._callbacks.remove(fn)
 
     @classmethod
     def refresh(cls) -> None:

@@ -380,7 +380,7 @@ class AnalysisTab:
 
             # ── 交互 ──
             self._setup_chart_interactions(ax, canvas, all_x, all_y,
-                is_dtx, is_vt, delta_label, label, name1, name2)
+                is_dtx, is_vt, delta_label, label)
 
             fig.tight_layout()
             if not is_dtx:

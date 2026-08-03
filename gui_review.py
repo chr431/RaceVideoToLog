@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QShortcut, QKeySequence
 from PySide6.QtGui import QPixmap, QImage, QPalette, QColor
+from theme_manager import ThemeManager
 from qfluentwidgets import (BodyLabel, StrongBodyLabel, CaptionLabel,
     PrimaryPushButton, PushButton, isDarkTheme)
 from widget_utils import make_static_card, setup_chart_zoom_pan, disable_spin_flyout
@@ -64,10 +65,10 @@ class ReviewDialog(QDialog):
             self.setPalette(p)
             self._img_label.setStyleSheet(f"background-color: {img_bg}; border-radius: 4px;")
             if hasattr(self, '_figure'): self._redraw_chart()
-        # 用 qconfig 信号 + receiver=self：对话框销毁时 Qt 自动断开，
-        # 不再泄漏（ThemeManager 静态回调列表只增不减）。
-        from qfluentwidgets import qconfig
-        qconfig.themeChanged.connect(_update, receiver=self)
+        # ThemeManager 回调 + closeEvent 显式注销：
+        # PySide SignalInstance.connect 不支持 receiver 关键字，
+        # 手动管理生命周期避免静态回调列表泄漏。
+        self._theme_cb = ThemeManager.register(_update)
         _update(isDarkTheme())
 
     def _build_ui(self) -> None:
@@ -486,6 +487,11 @@ class ReviewDialog(QDialog):
         self._rows[fi][2] = int(value)
         self._redraw_chart()
         self._speed_value_label.setText(f"速度: {value:.0f} km/h (预览)")
+
+    def closeEvent(self, event) -> None:
+        """注销主题回调，防止对话框销毁后泄漏。"""
+        ThemeManager.unregister(getattr(self, '_theme_cb', lambda dark: None))
+        super().closeEvent(event)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
