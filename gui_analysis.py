@@ -147,13 +147,11 @@ class AnalysisTab:
         # ── Matplotlib 画布 ──
         import pyqtgraph as pg
         pg.setConfigOptions(antialias=False)
-        plot = pg.PlotWidget()
+        plot = _ModPlotWidget()
         plot.setBackground(chart_colors(isDarkTheme())[0])
         plot.showGrid(x=True, y=True, alpha=0.2)
         plot.hideButtons()
         plot.setMenuEnabled(False)
-        vb = _ModViewBox()  # Ctrl/Shift 修饰键缩放
-        plot.setCentralItem(pg.PlotItem(viewBox=vb))
         self._plot = plot
         layout.addWidget(plot, 1)
         self._ready = True
@@ -553,10 +551,13 @@ class AnalysisTab:
 
 # ═══════════════════ pyqtgraph 绘制辅助 ═══════════════════
 
-class _ModViewBox(pg.ViewBox):
-    """ViewBox：Ctrl+滚轮缩放纵轴，Shift+滚轮缩放横轴，无修饰双轴。"""
+class _ModPlotWidget(pg.PlotWidget):
+    """PlotWidget：Ctrl+滚轮缩放纵轴，Shift+滚轮缩放横轴，无修饰双轴。
 
-    def wheelEvent(self, ev, axis=None):
+    继承原生 PlotWidget（plotItem/scene 关联完整），仅重写 wheelEvent。
+    """
+
+    def wheelEvent(self, ev):
         mods = ev.modifiers()
         if mods & Qt.KeyboardModifier.ControlModifier:
             axis = 1  # y
@@ -564,7 +565,7 @@ class _ModViewBox(pg.ViewBox):
             axis = 0  # x
         else:
             axis = None  # both
-        super().wheelEvent(ev, axis)
+        self.getPlotItem().getViewBox().wheelEvent(ev, axis)
 
 
 def _plot_wrapped_pg(plot, x, y, color, width=1.0):
