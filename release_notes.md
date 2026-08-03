@@ -1,9 +1,28 @@
 # Release Notes
 
-## v2.8.0 (2026-08-03)
+## v2.8.0 (2026-08-03) — 相对 v2.7.1 的完整变更（v2.7.2 未发布，合并记录）
 
-### GUI 修复与优化（pyqtgraph 迁移收尾）
+### 算法精度提升（ground truth 验证，CPU 同口径）
 
+手动模式 d=0 全面达到/超过自动模式（test2 手动 +6.0pp）；test2 自动 >5 误差 20→0。
+关键修复：信任传播验证空洞、插值锚点物理验证、自洽帧锚定、fill 候选优先。
+
+| 组合 | v2.7.1 d=0 | v2.8.0 d=0 | v2.7.1 >5 | v2.8.0 >5 |
+| --- | --- | --- | --- | --- |
+| test 自动 | 98.1% | 97.6% | 2 | 6 |
+| test 手动 | 96.2% | **97.6%** | 32 | **4** |
+| test2 自动 | 96.2% | **98.7%** | 20 | **3** |
+| test2 手动 | 92.9% | **99.1%** | 19 | **5** |
+
+### 性能
+
+- 批处理 OCR 推理（-40% 推理时间；total 22.8s → 17.5s）
+- 新 decord 构建（GPU NDArrayPool）：管线 decode 15.9s → 10.9s
+
+### GUI：迁移 pyqtgraph 并全面收尾
+
+- Matplotlib 图表全部迁移至 pyqtgraph（数据分析 Tab + 最终检查窗口）：
+  高频缩放/拖动流畅，支持数千散点；Ctrl/Shift+滚轮分轴缩放、右键拖拽选范围
 - 右上角统计/悬停文字：TextItem anchor 裁剪修复（此前被顶出视图不可见），
   并钉在视图角落跟随缩放/平移，不再拖后腿跳回
 - 右键点击取消选区：pyqtgraph 将纯点击路由到 mouseClickEvent 而非
@@ -16,48 +35,28 @@
   已确定点修改实时预览；选中已确定点显示蓝白描边；红/蓝特殊点尺寸 6；
   移除低置信度背景高亮（橙色散点保留标记）；区域边界改深蓝
 - 图表文字/框线随主题切换变色；rebuild 断开旧回调，消除累积泄漏
+- PreviewWidget 提取、主题回调泄漏修复、ReviewDialog 深副本（修复预览值泄漏）
 - 清理 matplotlib 时代死代码（setup_chart_zoom_pan、HoverOverlay）
-
-### 修复
-
-- TRT 批处理 OCR 超出引擎优化 profile（batch 上限 6）→ 按 profile 查询
-  并自动分片提交，消除 setInputShape 错误刷屏
-- 模块拆分丢失的 import math / CONFUSION_MAP 归位（5 个单测 NameError）；
-  33/33 单测通过
-- 测试视频统一存放至 D:\Videos\racelog_test
-
----
-
-## v2.7.2 (2026-08-03)
-
-### 算法精度提升（ground truth 验证，CPU 同口径）
-
-手动模式 d=0 全面达到/超过自动模式（test2 手动 +6.0pp）；test2 自动 >5 误差 20→0。
-关键修复：信任传播验证空洞、插值锚点物理验证、自洽帧锚定、fill 候选优先。
-
-| 组合 | v2.7.1 d=0 | v2.7.2 d=0 | v2.7.1 >5 | v2.7.2 >5 |
-|------|-----------|-----------|-----------|-----------|
-| test 自动 | 98.1% | 97.6% | 2 | 6 |
-| test 手动 | 96.2% | **97.6%** | 32 | **4** |
-| test2 自动 | 96.2% | **98.7%** | 20 | **3** |
-| test2 手动 | 92.9% | **99.1%** | 19 | **5** |
-
-### 性能
-
-- 批处理 OCR 推理（-40% 推理时间；total 22.8s → 17.5s）
-- 新 decord 构建（GPU NDArrayPool）：管线 decode 15.9s → 10.9s
 
 ### 结构重构
 
 - ocr_engine.py 拆分 6 模块（constants/csv_io/ocr_text/signals/video_utils）
 - correction.py：ModeProfile 收敛模式差异；锚点验证/自洽锚定提升为固有机制
-- GUI：PreviewWidget 提取、主题回调泄漏修复、ReviewDialog 深副本（修复预览值泄漏）
 - 死代码清理、工具修复、文档/CI 同步
+
+### 修复
+
+- TRT 批处理 OCR 超出引擎优化 profile（batch 上限 6）→ 按 profile 查询
+  并自动分片提交，消除 setInputShape 错误刷屏
+- 模块拆分丢失的 import math / CONFUSION_MAP 归位；33/33 单测通过
+- 修复 82 处 Pylance 类型错误（pyright 全项目 0 errors）；spec/pyproject
+  模块清单补全，EXE 构建验证通过（headless 分析 + 完整 OCR 流程）
 
 ### 其他
 
 - ground_truth 升级 v2.7 标准格式（实测 fps + codec + 整数行 + max_width）
 - test5_ref 置信度更新
+- 测试视频统一存放至 D:\Videos\racelog_test
 
 ---
 
