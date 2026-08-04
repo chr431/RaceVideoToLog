@@ -42,6 +42,19 @@ from qfluentwidgets import (setTheme, Theme, isDarkTheme,
     BodyLabel, StrongBodyLabel, CaptionLabel, Slider, ProgressBar, CompactSpinBox, Pivot)
 
 
+def _t(mark: str) -> None:
+    """GUI 计时打点：写 %LOCALAPPDATA%/RaceVideoToLog/gui_timing.log（排查 EXE 卡顿）。"""
+    import os as _os
+    import time as _time
+    try:
+        _d = _os.path.join(_os.environ.get("LOCALAPPDATA", "."), "RaceVideoToLog")
+        _os.makedirs(_d, exist_ok=True)
+        with open(_os.path.join(_d, "gui_timing.log"), "a", encoding="utf-8") as _f:
+            _f.write(f"{_time.perf_counter():.3f} {mark}\n")
+    except Exception:
+        pass
+
+
 class RaceVideoToLogApp(QMainWindow):
     """RaceVideoToLog PySide6 主窗口。"""
 
@@ -299,12 +312,16 @@ class RaceVideoToLogApp(QMainWindow):
     def _load_video(self, path: Path) -> None:
         from pipeline import open_decord_vr, get_video_codec
 
+        _t("load_video: start")
         vr, label = open_decord_vr(str(path))
+        _t("load_video: decord open")
         codec = get_video_codec(str(path)) or "?"
+        _t("load_video: ffprobe")
         try:
             fc = len(vr)
             fps = vr.get_avg_fps()
             first = vr[0].asnumpy()  # decord returns RGB
+            _t("load_video: first frame")
             h, w = first.shape[:2]
             dur = fc / fps if fps > 0 else 0.0
         except Exception:
@@ -620,13 +637,17 @@ class RaceVideoToLogApp(QMainWindow):
             pipeline.raw_frames, confidences,
             pipeline._max_speed, pipeline._max_accel,
             review_scope=review_scope)
+        _t("final_check: before exec")
         if dlg.exec() == QDialog.DialogCode.Accepted:
             for fi, v in dlg.get_corrections().items():
                 if 0 <= fi < len(rows):
                     rows[fi][2] = v
                     rows[fi][3] = Flag.PINNED
+        _t("final_check: dialog closed")
         pipeline.finalize(out)
+        _t("final_check: finalize done")
         self._finish_export()
+        _t("final_check: finish_export done")
         self._status_label.setText("最终检查完成 — 结果已保存。")
 
     def _on_error(self, err: str) -> None:
@@ -677,7 +698,9 @@ class RaceVideoToLogApp(QMainWindow):
             except Exception:
                 pass
             self._pipeline = None
+        _t("finish_export: pipeline cleared")
         self._release_engines()
+        _t("finish_export: engines released")
 
     def _on_pivot(self, key: str) -> None:
         if key == "analysis":

@@ -44,8 +44,11 @@ class OcrEngine:
     """
 
     def __init__(self, variant: str = "v6_tiny",
-                 engine_type: str = "onnxruntime") -> None:
+                 engine_type: str = "onnxruntime",
+                 progress_cb: "object | None" = None) -> None:
+        """progress_cb: 构建引擎等耗时阶段的进度消息回调 (str)。"""
         self._variant = variant
+        self._progress_cb = progress_cb
         size = variant.replace("v6_", "")
         models = _models_dir()
 
@@ -104,9 +107,13 @@ class OcrEngine:
         try:
             if engine_path is None:
                 engine_path = self._engine_candidates(size)[-1]  # 缓存目录
+                if self._progress_cb:
+                    self._progress_cb("TensorRT 引擎不存在，开始本地构建（首次运行，约 2 分钟）...")
                 log.info("TensorRT 引擎不存在，开始本地构建（首次运行，约几分钟）...")
                 self._build_engine(models, size, engine_path)
                 log.info("TensorRT 引擎已构建: %s", engine_path)
+                if self._progress_cb:
+                    self._progress_cb("TensorRT 引擎构建完成")
             import tensorrt as trt
             logger = trt.Logger(trt.Logger.WARNING)  # type: ignore[attr-defined]
             with open(engine_path, "rb") as f, trt.Runtime(logger) as rt:  # type: ignore[attr-defined]

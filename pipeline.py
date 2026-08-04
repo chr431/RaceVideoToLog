@@ -269,11 +269,13 @@ class ProcessingPipeline:
             _et = get_engine_type()
             if _et == "tensorrt":
                 self._emit("加载 TensorRT 引擎...", 1.5)
-            self._ocr = OcrEngine(self._ocr_model, _et)
+            self._ocr = OcrEngine(self._ocr_model, _et,
+                                  progress_cb=lambda m: self._emit(m, 2.0))
             # 若指定了不同的重 OCR 模型，创建独立引擎
             _reocr_model = self._reocr_model or self._ocr_model
             if _reocr_model != self._ocr_model:
-                self._reocr = OcrEngine(_reocr_model, _et)
+                self._reocr = OcrEngine(_reocr_model, _et,
+                                        progress_cb=lambda m: self._emit(m, 3.0))
             else:
                 self._reocr = self._ocr
         return self._ocr
