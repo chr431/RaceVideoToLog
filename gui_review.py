@@ -222,7 +222,8 @@ class ReviewDialog(QDialog):
         self._hover_line = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen(
             config.COLOR_GRAY, width=1, style=_Qt.PenStyle.DashLine))
         self._hover_line.setVisible(False)
-        plot.addItem(self._hover_line)
+        # ignoreBounds：悬停辅助线不参与 ViewBox 自动范围计算
+        plot.addItem(self._hover_line, ignoreBounds=True)
         fg = chart_colors(isDarkTheme())[1]
         # anchor=(0, 0)：文字左上角贴住 pos（(0,1) 会把文字顶到视图外被裁掉）
         self._hover_text = pg.TextItem("", color=fg, anchor=(0, 0))
@@ -364,6 +365,8 @@ class ReviewDialog(QDialog):
             xr, yr = saved_range
             vb.setXRange(xr[0], xr[1], padding=0)
             vb.setYRange(yr[0], yr[1], padding=0)
+        # 渲染后禁用自动范围检测：悬停/交互 item 的变化不再扩展视图
+        vb.enableAutoRange(False)
 
     def _update_corr_and_cur(self, times: list) -> None:
         """增量更新修正蓝点与当前帧红点（pyqtgraph setData 高效）。"""

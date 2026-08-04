@@ -313,7 +313,8 @@ class AnalysisTab:
         hover_line = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen(
             config.COLOR_GRAY, width=1, style=Qt.PenStyle.DashLine))
         hover_line.setVisible(False)
-        plot.addItem(hover_line)
+        # ignoreBounds：悬停辅助线不参与 ViewBox 自动范围计算
+        plot.addItem(hover_line, ignoreBounds=True)
         # anchor=(0, 0)：文字左上角贴住 pos（(0,1) 同样会被顶到视图外）
         hover_text = pg.TextItem("", color=fg, anchor=(0, 0))
         hover_text.setVisible(False)
@@ -594,6 +595,8 @@ class AnalysisTab:
                 vb2.setYRange(yr[0], yr[1], padding=0)
             else:
                 vb2.autoRange()  # 新模式：自适应数据
+            # 渲染后禁用自动范围检测：悬停/交互 item 的变化不再扩展视图
+            vb2.enableAutoRange(False)
 
             self._last_mode = mode
             self._sync_figure_theme()
