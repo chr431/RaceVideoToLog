@@ -71,7 +71,7 @@ def run_headless(args: argparse.Namespace) -> None:
     t_total = time.perf_counter() - t0
     print(f"总耗时: {t_total:.1f}s")
     # 输出详细的阶段计时
-    if pipeline._timing:
-        for stage, elapsed in pipeline._timing.items():
+    if pipeline.timing:
+        for stage, elapsed in pipeline.timing.items():
             print(f"  {stage}: {elapsed:.1f}s")
     print(f"导出: {output_path}")

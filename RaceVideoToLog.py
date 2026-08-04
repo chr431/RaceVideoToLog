@@ -1,4 +1,4 @@
-"""RaceVideoToLog v2.6.0 — 赛车视频速度 OCR 提取工具。
+"""RaceVideoToLog v2.9.0 — 赛车视频速度 OCR 提取工具。
 
 从车载视频中实时 OCR 识别速度数字，支持 TensorRT / CPU 两种后端（自动选择），
 输出时间-速度-距离 CSV 文件。
@@ -37,19 +37,15 @@ def main() -> None:
     parser.add_argument("--max-accel", type=float, default=config.DEFAULT_MAX_ACCEL)
     parser.add_argument("--target-h", type=int, default=config.DEFAULT_TARGET_H)
     parser.add_argument("--pad", type=int, default=config.DEFAULT_PAD)
-    parser.add_argument("--max-width", type=int, default=config.DEFAULT_MAX_WIDTH,
+    parser.add_argument("--max-width", type=int, default=None,
         help="预处理最大宽度 px（0=不限）。扁宽字体设为 96 可改善识别")
     parser.add_argument("--buffer", type=int, default=config.DEFAULT_BUFFER_SIZE)
-    parser.add_argument("--backend", choices=["auto","tensorrt","cpu"], default=config.DEFAULT_BACKEND)
-    parser.add_argument("--video-backend", choices=["cv2","decord"], default="decord",
-        help=argparse.SUPPRESS)  # deprecated; only decord is supported
+    parser.add_argument("--backend", choices=config.BACKEND_KEYS, default=config.DEFAULT_BACKEND)
     parser.add_argument("--ocr-model", choices=["v6_tiny", "v6_small"], default=config.DEFAULT_OCR_MODEL,
         help="主 OCR 模型 (默认 tiny)")
     parser.add_argument("--reocr-model", choices=["v6_tiny", "v6_small"], default=config.DEFAULT_REOCR_MODEL,
         help="重 OCR 模型 (默认 small，推荐 tiny+small 组合)")
     parser.add_argument("-o", "--output", type=str)
-    parser.add_argument("--analysis", nargs=2, metavar=("CSV1","CSV2"))
-    parser.add_argument("--analysis-out", type=str)
     parser.add_argument("--frame-start", type=int, metavar="N")
     parser.add_argument("--frame-end", type=int, metavar="N")
     parser.add_argument("--log-level", choices=["normal","detailed","debug"],
@@ -63,13 +59,22 @@ def main() -> None:
     # ── 从 CSV 导入设置 ──
     if args.from_csv:
         from ocr_engine import parse_csv_header, parse_csv_setting, csv_field_dest
+        # 命令行显式写出的参数（即使等于默认值）优先于 CSV。
+        # 例：--ocr-model v6_tiny 等于默认值，旧逻辑误判"未指定"被 CSV 的
+        # model=v6_small 覆盖，导致引擎静默换成 small。
+        _explicit = {
+            a[2:].split("=", 1)[0].replace("-", "_")
+            for a in sys.argv[1:] if a.startswith("--")
+        }
         csv_settings = parse_csv_header(args.from_csv)
         _defaults = {a.dest: a.default
                         for a in parser._actions if a.dest != "help"}
         for key, val in csv_settings.items():
             dest = csv_field_dest(key)
-            if dest is None:
-                continue
+            if dest is None or not hasattr(args, dest):
+                continue  # read-only fields (fps/codec) or unknown — skip
+            if dest in _explicit:
+                continue  # 命令行显式指定 — 不被 CSV 覆盖
             cur = getattr(args, dest)
             if cur != _defaults.get(dest):
                 continue  # user explicitly overrode — skip
@@ -77,12 +82,13 @@ def main() -> None:
             if parsed is not None:
                 setattr(args, dest, parsed)
 
+    # None = 未指定：归一化为配置默认值（显式传 0 必须保留，不能被 CSV 覆盖）
+    if args.max_width is None:
+        args.max_width = config.DEFAULT_MAX_WIDTH
+
     if args.video:
         from headless import run_headless
         run_headless(args)
-    elif args.analysis:
-        from analysis import run_analysis_headless
-        run_analysis_headless(args)
     else:
         from PySide6.QtWidgets import QApplication
         import io, sys as _sys

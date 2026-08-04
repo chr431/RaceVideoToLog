@@ -13,10 +13,8 @@ Key design:
 """
 from __future__ import annotations
 import math
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    import numpy as np
+import numpy as np
 
 from config import (
     MPS_TO_KMH,
@@ -57,15 +55,14 @@ def viterbi_correct(
     corrected: dict[int, float] = {}
     error_set: set[int] = set()
     dp_cost: list[float] = [-1.0] * n
-    path_values: list[float | None] = [None] * n
 
     for seg_start, seg_end in segments:
         _viterbi_segment(seg_start, seg_end, rows, candidates_by_frame, conf_by_idx,
             times, max_speed_kmh, max_accel_mps2, obs_weight, accel_weight,
-            trusted_boundary_threshold, corrected, error_set, dp_cost, path_values,
+            trusted_boundary_threshold, corrected, error_set, dp_cost,
             reference_values=reference_values)
 
-    confidence = _compute_confidence_scores(n, dp_cost, path_values, rows, conf_by_idx, max_speed_kmh)
+    confidence = _compute_confidence_scores(n, dp_cost, rows, conf_by_idx, max_speed_kmh)
 
     return {'corrected': corrected, 'confidence': confidence,
             'error_set': error_set, 'dp_cost': dp_cost}
@@ -103,7 +100,7 @@ def _viterbi_segment(
     times: list[float], max_speed_kmh: float, max_accel_mps2: float,
     obs_weight: float, accel_weight: float, trusted_boundary_threshold: int,
     corrected: dict[int, float], error_set: set[int],
-    dp_cost: list[float], path_values: list[float | None],
+    dp_cost: list[float],
     reference_values: dict[int, float] | None = None,
 ) -> None:
     n_seg = seg_end - seg_start + 1
@@ -145,8 +142,13 @@ def _viterbi_segment(
                 options.append((0.0, "fallback"))
             seg_cands.append(options)
 
-    dp: list[list[tuple[float, int]]] = []
-    dp0: list[tuple[float, int]] = []
+    # DP 表：dp_vals[k] = 每候选累计代价 (C_k, float64)，dp_back[k] = 回溯指针。
+    # 向量化仅做元素级运算（无归约）→ 与标量实现逐位一致；np.argmin 返回
+    # 首遇最小索引 = 原 `total < best_cost` 首胜语义。C_prev×C_cur ≤ 4 时
+    # 走标量分支（避免每帧 numpy 固定开销，C=1 主路径更快）。
+    dp_vals: list[np.ndarray] = []
+    dp_back: list[np.ndarray] = []
+    dp0_vals = np.empty(len(seg_cands[0]), dtype=np.float64)
     for idx, (v, tag) in enumerate(seg_cands[0]):
         fi = seg_start
         conf = conf_by_idx.get(fi, 50)
@@ -155,46 +157,68 @@ def _viterbi_segment(
         else:
             ref = reference_values.get(fi) if reference_values else None
             cost = _obs_cost(fi, v, rows, obs_weight, ref_val=ref)
-        dp0.append((cost, -1))
-    dp.append(dp0)
+        dp0_vals[idx] = cost
+    dp_vals.append(dp0_vals)
+    dp_back.append(np.full(len(seg_cands[0]), -1, dtype=np.int64))
 
     for k in range(1, n_seg):
         fi = seg_start + k
         dt = times[fi] - times[fi - 1] if fi > 0 and fi - 1 >= 0 else 1.0
         if dt <= 0: dt = VITERBI_FALLBACK_DT
-        dpk: list[tuple[float, int]] = []
+        prev_vals = np.fromiter((c[0] for c in seg_cands[k - 1]),
+                                dtype=np.float64, count=len(seg_cands[k - 1]))
+        cur_vals = np.fromiter((c[0] for c in seg_cands[k]),
+                               dtype=np.float64, count=len(seg_cands[k]))
+        c_prev, c_cur = len(prev_vals), len(cur_vals)
+        max_dv = max_accel_mps2 * dt * MPS_TO_KMH
+        if c_prev * c_cur > 4:
+            # 向量化转移代价：与 _trans_cost 同公式（左结合乘法 + 元素级加法）
+            dv_mat = np.abs(cur_vals[None, :] - prev_vals[:, None])
+            excess = dv_mat - max_dv
+            np.maximum(excess, 0.0, out=excess)
+            trans = accel_weight * excess * excess
+            cost_mat = dp_vals[k - 1][:, None] + trans
+            best_idx = np.argmin(cost_mat, axis=0)
+            best_cost = cost_mat[best_idx, np.arange(c_cur)]
+        else:
+            best_cost = np.empty(c_cur, dtype=np.float64)
+            best_idx = np.empty(c_cur, dtype=np.int64)
+            for idx_w, (w, tag_w) in enumerate(seg_cands[k]):
+                best_cost_w = float('inf')
+                best_prev_w = -1
+                for idx_v, (v, tag_v) in enumerate(seg_cands[k - 1]):
+                    trans = _trans_cost(v, w, dt, max_accel_mps2, accel_weight)
+                    total = dp_vals[k - 1][idx_v] + trans
+                    if total < best_cost_w:
+                        best_cost_w = total
+                        best_prev_w = idx_v
+                best_cost[idx_w] = best_cost_w
+                best_idx[idx_w] = best_prev_w
+        # 观测代价：逐候选标量（C≤40 开销可忽略，保持原语义）
+        obs = np.empty(c_cur, dtype=np.float64)
         for idx_w, (w, tag_w) in enumerate(seg_cands[k]):
-            best_cost = float('inf')
-            best_prev = -1
-            for idx_v, (v, tag_v) in enumerate(seg_cands[k - 1]):
-                trans = _trans_cost(v, w, dt, max_accel_mps2, accel_weight)
-                total = dp[k - 1][idx_v][0] + trans
-                if total < best_cost:
-                    best_cost = total
-                    best_prev = idx_v
             conf = conf_by_idx.get(fi, 50)
             if conf >= trusted_boundary_threshold:
-                obs = VITERBI_ANCHOR_COST
+                obs[idx_w] = VITERBI_ANCHOR_COST
             else:
                 ref = reference_values.get(fi) if reference_values else None
-                obs = _obs_cost(fi, w, rows, obs_weight, ref_val=ref)
-            dpk.append((best_cost + obs, best_prev))
-        dp.append(dpk)
+                obs[idx_w] = _obs_cost(fi, w, rows, obs_weight, ref_val=ref)
+        dp_vals.append(best_cost + obs)
+        dp_back.append(best_idx)
 
     last_k = n_seg - 1
-    best_final_idx = min(range(len(dp[last_k])), key=lambda idx: dp[last_k][idx][0])
+    best_final_idx = int(np.argmin(dp_vals[last_k]))
     path: list[float] = [0.0] * n_seg
     cur_idx = best_final_idx
     for k in range(n_seg - 1, -1, -1):
         path[k] = seg_cands[k][cur_idx][0]
-        cur_idx = dp[k][cur_idx][1]
+        cur_idx = int(dp_back[k][cur_idx])
 
     for k in range(n_seg):
         fi = seg_start + k
         optimal_val = path[k]
         raw_val = rows[fi][2]
-        path_values[fi] = optimal_val
-        raw_cost = dp[k][min(range(len(dp[k])), key=lambda idx: dp[k][idx][0])][0]
+        raw_cost = float(np.min(dp_vals[k]))
         dp_cost[fi] = raw_cost if isinstance(raw_cost, (int, float)) and raw_cost >= 0 else 0.0
         if abs(optimal_val - raw_val) > VITERBI_CHANGE_THRESHOLD_KMH:
             corrected[fi] = optimal_val
@@ -228,8 +252,7 @@ def _trans_cost(v: float, w: float, dt: float, max_accel_mps2: float,
     return accel_weight * excess * excess
 
 
-def _compute_confidence_scores(n: int, dp_cost: list[float],
-                               path_values: list[float | None], rows: list,
+def _compute_confidence_scores(n: int, dp_cost: list[float], rows: list,
                                conf_by_idx: dict[int, float],
                                max_speed_kmh: float) -> list[dict]:
     max_cost = VITERBI_MIN_MAX_COST

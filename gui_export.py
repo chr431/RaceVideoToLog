@@ -11,7 +11,12 @@ from pathlib import Path
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import QWidget
 
-from ocr_engine import _CancelExport
+
+
+class _CancelExport(Exception):
+    """内部异常：用户取消了导出任务。"""
+    pass
+
 
 
 class ExportThread(QThread):

@@ -1,11 +1,10 @@
 """RaceVideoToLog 集中配置 — 常量、颜色、公共 API。"""
 from __future__ import annotations
 
-__version__ = "2.7.0"
+__version__ = "2.9.0"
 
 # ═══════════════════ 物理常量 ═══════════════════
 MPS_TO_KMH: float = 3.6          # m/s → km/h 转换因子
-KMH_TO_MPS: float = 1.0 / 3.6    # km/h → m/s 转换因子
 
 # ═══════════════════ 用户可配置默认值 ═══════════════════
 DEFAULT_BACKEND: str = "auto"           # GPU 后端 (auto / tensorrt / cpu)
@@ -21,7 +20,11 @@ DEFAULT_MAX_WIDTH: int = 0              # 预处理最大宽度 px（0=不限）
 DEFAULT_BUFFER_SIZE: int = 16          # 生产者-消费者队列缓冲大小
 DEFAULT_LOG_LEVEL: str = "normal"      # 日志级别 (normal / detailed / debug)
 DEFAULT_CORRECTION_MODE: str = "auto"  # 纠错模式 (auto / manual)
-OCR_REC_BATCH_NUM: int = 12            # OCR 识别批处理大小
+
+# ═══════════════════ 枚举值（CLI/GUI 单点定义） ═══════════════════
+BACKEND_KEYS: list[str] = ["auto", "tensorrt", "cpu"]
+BACKEND_LABELS: dict[str, str] = {"auto": "自动", "tensorrt": "TensorRT", "cpu": "CPU"}
+OCR_FRAME_BATCH: int = 6               # 帧批处理大小（≤6 兼容 TRT profile 上限）
 
 # ═══════════════════ 图表颜色 ═══════════════════
 COLOR_BLUE: str = "#2196F3"
@@ -30,6 +33,15 @@ COLOR_GREEN: str = "#4CAF50"
 COLOR_RED: str = "#F44336"
 COLOR_GRAY: str = "#888888"
 COLOR_LIGHT_GRAY: str = "#666666"
+# GUI 专用调色板（预览/图表/对话框共用）
+PREVIEW_BG: str = "#111"                # 视频预览底色（暗）
+PREVIEW_BG_LIGHT: str = "#e0e0e0"       # 视频预览底色（亮）
+ROI_BOX_COLOR: str = "#ff5050"          # ROI 框颜色
+CANVAS_BG_DARK: str = "#1f1f1f"         # 图表背景（暗）
+CANVAS_BG_LIGHT: str = "#f5f5f5"        # 图表背景（亮）
+CANVAS_FG_DARK: str = "#f0f0f0"         # 图表前景（暗）
+CANVAS_FG_LIGHT: str = "#000000"        # 图表前景（亮）
+CANVAS_FILL: str = "#151515"            # 预览画布填充
 COLOR_LIGHTER_GRAY: str = "#aaaaaa"
 COLOR_BG_DARK: str = "#2a2a2a"
 COLOR_BG_LIGHT: str = "#ffffff"
@@ -70,7 +82,6 @@ ERROR_DETECT_OCR_CONF_WEIGHT: float = 0.01   # OCR 模型内部置信度
 ERROR_DETECT_PHYSICS_WEIGHT: float = 0.15     # 物理可达性
 ERROR_DETECT_LINEARITY_WEIGHT: float = 0.15   # 局部线性度（中位数鲁棒插值）
 ERROR_DETECT_ACCEL_SPIKE_WEIGHT: float = 0.50 # 加速度尖峰对检测
-ERROR_DETECT_CANDIDATE_THRESHOLD: int = 65
 # 最差信号地板：任一信号低于阈值时，组合分数上限
 ERROR_DETECT_FLOOR_CAP: dict[float, float] = {30.0: 25.0, 50.0: 50.0, 70.0: 69.0}
 
@@ -86,6 +97,7 @@ AUTO_CORRECT_THRESHOLD: int = 70
 CORRECTION_MAX_ROUNDS: int = 10        # Viterbi 多轮迭代
 FILL_MAX_PASSES: int = 50
 CORRECTION_MIN_DIFF: float = 0.5
+MANUAL_CORRECTION_MIN_DIFF: float = 2.0  # 手动模式 Viterbi 最小提交差值（±1 微调视为噪声保留 raw）
 AUTO_SMOOTH_CLUSTER_MAX: int = 5
 AUTO_SMOOTH_DEVIATION_MULT: float = 5.0
 
@@ -95,12 +107,11 @@ AUTO_ALIGN_DIFF_MIN_KMH: int = 5         # auto-align 最小修正量 (km/h)
 AUTO_ALIGN_DIFF_MAX_KMH: int = 25        # auto-align 最大修正量 (km/h)
 AUTO_ALIGN_NUDGE_FACTOR: float = 0.8     # auto-align 向插值修正的比例
 AUTO_ALIGN_MIN_CHANGE_KMH: int = 3       # auto-align 最小提交变化量 (km/h)
-AUTO_ALIGN_FALLBACK_MAX_DV: float = 4.0  # 无法获取 fps 时的 fallback max_dv (km/h)
 
 # ═══════════════════ Force-Median 平滑参数 ═══════════════════
 FORCE_MEDIAN_MAX_ITERATIONS: int = 15     # _force_median_smooth 最大迭代轮数
 FORCE_MEDIAN_NUDGE_FACTOR: float = 0.7    # 向中值修正的比例
-FORCE_MEDIAN_THRESHOLD_MULT: float = 1.2  # max_dv 阈值倍率
+FORCE_MEDIAN_THRESHOLD_MULT: float = 3.0  # max_dv 阈值倍率（3×：只改明显偏离的帧，避免 ±1-3 噪声被拉）
 FORCE_MEDIAN_MIN_CHANGE_KMH: int = 1      # 最小变化量 (km/h)
 
 # ═══════════════════ 候选值后过滤 ═══════════════════
@@ -116,13 +127,13 @@ FORCE_MEDIAN_WINDOW_TIME: float = 0.1      # force-median 中值窗口时间 (�
 TRUST_WINDOW_TIME: float = 0.15            # 信任传播验证时间窗 (秒)
 DISTANT_INTERP_ISLAND_THRESHOLD: int = 30  # 孤岛检测距离阈值 (km/h)
 REF_INTERP_MAX_KMH_DIFF: int = 50    # 插值参考值最大允许偏差 (km/h)
-MANUAL_REF_CONFIDENCE_MAX: int = 40  # 手动模式构建参考值的置信度上限
+REF_MIN_DIFF: float = 3.0            # 参考值最小偏差：raw 与插值差 < 此值时不设参考（raw 自洽）
 
 # ═══════════════════ Viterbi 后处理 ═══════════════════
 VITERBI_POST_TRUST_THRESHOLD: int = 70     # Viterbi 后信任判定最低分数
 TRUST_WINDOW_FALLBACK_MAX_DV: float = 8.0  # 信任窗口 fallback max_dv (km/h)
-TRUST_NEIGHBOR_SEARCH_WINDOW: int = 3      # 信任传播邻居搜索窗口（每侧3帧）
 FILL_CONFIDENCE_THRESHOLD: int = 30        # Fill 阶段的置信度阈值
+FILL_CANDIDATE_MAX_DIFF: int = 12          # fill 候选优先的最大差值（与插值的距离保护）
 FINAL_CONF_BLEND_PHASE1: float = 0.7       # 最终置信度中 Phase 1 权重
 FINAL_CONF_BLEND_VITERBI: float = 0.3      # 最终置信度中 Viterbi 权重
 
@@ -152,10 +163,6 @@ ACCEL_SCORE_NEAR_ONE: float = 50.0           # 近一个尖峰的得分
 ACCEL_SCORE_SAME_DIR: float = 60.0           # 同向尖峰得分
 ACCEL_SCORE_VIOLATION: float = 20.0          # 违反帧得分
 ACCEL_SCORE_ISLAND_INTERIOR: float = 10.0    # 孤岛内部帧得分
-
-# ═══════════════════ 向后兼容置信度权重 ═══════════════════
-COMPAT_CONF_PHYSICS_WEIGHT: float = 0.60
-COMPAT_CONF_OCR_WEIGHT: float = 0.40
 
 # ═══════════════════ 部分数字扩展参数 ═══════════════════
 MAX_PARTIAL_WILDCARDS: int = 2         # expand_partial 最大通配符数

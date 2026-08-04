@@ -53,3 +53,4 @@ _patch_*.py
 *_summary.json
 *_diagnostics.csv
 RaceVideoToLog.egg-info/
+assets/ocr_models/models/

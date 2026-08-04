@@ -18,29 +18,22 @@ os.environ["PATH"] = ";".join([
 datas = []
 binaries = []
 hiddenimports = [
-    'queue', 'PIL._tkinter_finder',
+    'queue',
     'threading', 'concurrent.futures',
     # numpy 2.x PyInstaller 兼容性修复
     'numpy._core._multiarray_umath', 'numpy._core.multiarray',
     'numpy._core.umath', 'numpy._core._methods',
-    # rapidocr 内部依赖
-    'yaml',
     # decord
     'decord',
     # Project modules (force inclusion; auto-discovered but explicit is safer)
-    'pipeline', 'correction', 'config', 'gpu_setup', 'ocr_engine',
+    'pipeline', 'correction', 'config', 'constants', 'gpu_setup', 'ocr_engine',
     'headless', 'analysis', 'gui_analysis', 'gui_review',
-    'gui_export', 'gui_settings', 'viterbi', 'error_detection',
-    'widget_utils', 'theme_manager',
-    # rapidocr transitive deps (may not be auto-discovered)
-    'shapely', 'pyclipper', 'colorlog', 'omegaconf',
+    'gui_export', 'gui_settings', 'gui_preview', 'viterbi', 'error_detection',
+    'widget_utils', 'theme_manager', 'csv_io', 'ocr_text', 'signals',
+    'video_utils', 'tensorrt', 'ocr_native',
 ]
 
-# rapidocr（OCR 引擎，含 ONNX 后端）
-tmp_ret = collect_all('rapidocr')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-
-# onnxruntime（CPU provider；TensorRT 由 rapidocr 直接调用）
+# onnxruntime（CPU provider；TensorRT 由 tensorrt_bindings 直接调用）
 tmp_ret = collect_all('onnxruntime')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
@@ -68,12 +61,15 @@ except Exception:
     pass  # tensorrt not installed
 
 # decord（NVDEC 硬件加速视频解码）
+# GPU API（CUDA 驱动 / NVCUVID / NVML）已改为运行时动态加载（nv_gpu_dyn），
+# decord.dll 导入表无 NVIDIA 依赖 → 无驱动设备自动回退 CPU 解码。
 tmp_ret = collect_all('decord')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 # PySide6 (Qt 6 GUI) — 只收集核心模块 + qfluentwidgets 依赖
+# QtOpenGL 为 pyqtgraph 0.14 必需（OpenGLHelpers），显式收集
 for _qt_mod in ['PySide6.QtWidgets', 'PySide6.QtCore', 'PySide6.QtGui',
-                 'PySide6.QtXml', 'PySide6.QtSvg']:
+                 'PySide6.QtXml', 'PySide6.QtSvg', 'PySide6.QtOpenGL']:
     _qt_ret = collect_all(_qt_mod)
     datas += _qt_ret[0]; binaries += _qt_ret[1]; hiddenimports += _qt_ret[2]
 
@@ -81,31 +77,10 @@ for _qt_mod in ['PySide6.QtWidgets', 'PySide6.QtCore', 'PySide6.QtGui',
 # v5_server 模型 (已从 UI 移除，省 165MB)
 # DirectML provider (未使用)
 _EXCLUDE_FILES = {
-    # v5 models (replaced by v6_small)
-    'ch_PP-OCRv5_mobile_det_infer.onnx', 'ch_PP-OCRv5_mobile_rec_infer.onnx',
-    'ch_PP-OCRv5_det_server_infer.onnx', 'ch_PP-OCRv5_rec_server_infer.onnx',
-    # v3 legacy
-    'ch_PP-OCRv3_det_infer.onnx', 'ch_PP-OCRv3_rec_infer.onnx',
-    'ch_ppocr_mobile_v2.0_cls_infer.onnx',
-    # v6 detection models (skipped — ROI is already tightly cropped)
-    'PP-OCRv6_det_tiny.onnx', 'PP-OCRv6_det_small.onnx',
-    # v6 extras (medium unused)
-    'PP-OCRv6_det_medium.onnx', 'PP-OCRv6_rec_medium.onnx',
-    # TRT engine cache (GPU-specific, rebuilt by user if needed)
-    # Use prefix match below for all .engine files
     # Unused ONNX providers (TRT replaces CUDA; CPU uses onnxruntime.dll)
     'DirectML.dll', 'onnxruntime_providers_tensorrt.dll',
     'onnxruntime_providers_cuda.dll',
 }
-datas = [(s, d) for s, d in datas if os.path.basename(s) not in _EXCLUDE_FILES
-         and not os.path.basename(s).endswith('.engine')]
-binaries = [(s, d) for s, d in binaries if os.path.basename(s) not in _EXCLUDE_FILES
-            and not os.path.basename(s).endswith('.engine')]
-
-# matplotlib（数据分析 tab）
-tmp_ret = collect_all('matplotlib')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-# 二次过滤：matplotlib 可能带回部分之前排除的文件
 datas = [(s, d) for s, d in datas if os.path.basename(s) not in _EXCLUDE_FILES
          and not os.path.basename(s).endswith('.engine')]
 binaries = [(s, d) for s, d in binaries if os.path.basename(s) not in _EXCLUDE_FILES
@@ -120,6 +95,16 @@ _EXCLUDE_DATAS_SUBDIRS = {
 }
 datas = [(s, d) for s, d in datas
          if not any(e in d.replace('/', '\\') for e in _EXCLUDE_DATAS_SUBDIRS)]
+
+# ── OCR 模型资产（onnx + 字符表）──
+# TRT .engine 不随 EXE 分发（GPU 架构绑定）：首次运行时本地自动构建，
+# 缓存到 %LOCALAPPDATA%/RaceVideoToLog/ocr_engines/
+for _root, _dirs, _files in os.walk('assets/ocr_models'):
+    for _f in _files:
+        if _f.endswith('.engine'):
+            continue
+        datas.append((os.path.join(_root, _f),
+                      os.path.join('ocr_models', os.path.relpath(_root, 'assets/ocr_models'))))
 
 # ── 精简二进制：移除不需要的 DLL ──
 _NVIDIA_DLL_PREFIXES = {
@@ -152,7 +137,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[os.path.join(_PROJECT_ROOT, 'runtime_hook.py')],
-    # 排除 onnxruntime 中的非推理模块 + scipy/matplotlib 测试和未用子模块
+    # 排除 onnxruntime 中的非推理模块 + scipy 测试和未用子模块
     # 这些模块的 hidden imports 会产生大量 ERROR 日志（不影响功能）
     excludes=[
         'onnxruntime.transformers', 'onnxruntime.transformers.*',
@@ -160,22 +145,9 @@ a = Analysis(
         'onnxruntime.quantization', 'onnxruntime.quantization.*',
         'onnxruntime.datasets', 'onnxruntime.datasets.*',
         'onnxruntime.backend',
-        # matplotlib: 排除测试和未用后端
-        'matplotlib.tests', 'matplotlib.testing',
-        'matplotlib.backends.backend_gtk3', 'matplotlib.backends.backend_gtk3agg',
-        'matplotlib.backends.backend_gtk3cairo', 'matplotlib.backends.backend_gtk4',
-        'matplotlib.backends.backend_gtk4agg', 'matplotlib.backends.backend_gtk4cairo',
-        'matplotlib.backends.backend_cairo', 'matplotlib.backends.backend_macosx',
-        'matplotlib.backends.backend_nbagg', 'matplotlib.backends.backend_pgf',
-        'matplotlib.backends.backend_ps', 'matplotlib.backends.backend_qt5',
-        'matplotlib.backends.backend_qt5agg', 'matplotlib.backends.backend_qt5cairo',
-        'matplotlib.backends.backend_svg', 'matplotlib.backends.backend_template',
-        'matplotlib.backends.backend_tkcairo', 'matplotlib.backends.backend_wx',
-        'matplotlib.backends.backend_wxagg', 'matplotlib.backends.backend_wxcairo',
-        'matplotlib.sphinxext',
         # scipy: 已用纯 numpy 替代 savgol_filter，完全排除
         'scipy', 'tkinter', '_tkinter',
-        # PaddlePaddle (only for paddlepaddle_migrate branch; ~1.1GB)
+        # PaddlePaddle (rapidocr 时代遗留；~1.1GB)
         'paddle', 'paddlepaddle', 'paddlepaddle_gpu',
         # Unused paddle deps
         'safetensors', 'opt_einsum', 'networkx',
@@ -208,12 +180,12 @@ _EXCLUDE_BINARIES = {
     'onnxruntime_providers_cuda.dll',
     'tcl86t.dll', 'tk86t.dll', '_tkinter.pyd',
     # Qt6 未使用模块（仅用 Widgets/Core/Gui）
+    # Qt6OpenGL* 必须保留：pyqtgraph 0.14 OpenGLHelpers import PySide6.QtOpenGL
     'opengl32sw.dll', 'avcodec-61.dll',
     'Qt6Quick.dll', 'Qt6Qml.dll', 'Qt6Pdf.dll',
     'Qt6Network.dll', 'Qt6Multimedia.dll',
     'Qt6Sql.dll', 'Qt6Test.dll',
     'Qt6QuickWidgets.dll', 'Qt6QmlModels.dll', 'Qt6QmlWorkerScript.dll',
-    'Qt6OpenGL.dll', 'Qt6OpenGLWidgets.dll',
     'Qt6PrintSupport.dll', 'Qt6WebChannel.dll',
     'Qt6WebEngine.dll', 'Qt6WebEngineCore.dll', 'Qt6WebEngineQuick.dll',
     'Qt6Designer.dll', 'Qt6Help.dll', 'Qt6UiTools.dll',
@@ -223,15 +195,13 @@ _EXCLUDE_BINARIES = {
     'postproc-58.dll',
     'avformat-60.dll', 'avutil-58.dll', 'avcodec-60.dll',
     'avdevice-60.dll', 'avfilter-9.dll', 'postproc-57.dll',
-    # opencv (removed from project, exclude if caught transitively)
-    'opencv_world480.dll', 'opencv_world490.dll',
-    # FFmpeg 4.x DLLs (PyPI decord; self-built decord uses 5.x)
+    # Stale FFmpeg DLLs (PyPI decord 4.x + previous self-build 5.x)
     'avcodec-58.dll', 'avformat-58.dll', 'avutil-56.dll',
     'avfilter-7.dll', 'avdevice-58.dll', 'swresample-3.dll',
     'swscale-5.dll', 'postproc-55.dll',
-    # opencv bundled FFmpeg (decord handles all video I/O)
-    'opencv_videoio_ffmpeg500_64.dll', 'opencv_videoio_ffmpeg490_64.dll',
-    'opencv_videoio_ffmpeg480_64.dll',
+    'avcodec-59.dll', 'avformat-59.dll', 'avutil-57.dll',
+    'avfilter-8.dll', 'avdevice-59.dll', 'swresample-4.dll',
+    'swscale-6.dll', 'postproc-56.dll',
 }
 a.binaries = [(n, p, t) for n, p, t in a.binaries
               if os.path.basename(p) not in _EXCLUDE_BINARIES]
@@ -248,9 +218,9 @@ coll = COLLECT(
     upx_exclude=[
         'onnxruntime.dll',
         'onnxruntime_providers_shared.dll',
-        # decord FFmpeg 5.x DLLs (UPX may corrupt)
-        'avcodec-59.dll', 'avformat-59.dll', 'avutil-57.dll',
-        'swresample-4.dll', 'swscale-6.dll',
+        # decord FFmpeg 8.x DLLs (UPX may corrupt)
+        'avcodec-62.dll', 'avformat-62.dll', 'avutil-60.dll',
+        'swresample-6.dll', 'swscale-9.dll',
     ],
     name='RaceVideoToLog',
 )

@@ -3,6 +3,7 @@
 Usage: python tools/verify_accuracy.py [--headless]
 """
 from __future__ import annotations
+from typing import cast
 import sys
 from pathlib import Path
 
@@ -92,7 +93,7 @@ def run_pipeline(video_path: str, truth_csv: str, output_path: str) -> None:
     roi_str = settings.get("roi", "")
     if not roi_str:
         raise ValueError("Truth CSV missing roi parameter")
-    roi = tuple(int(x) for x in roi_str.split(","))
+    roi = cast("tuple[int, int, int, int]", tuple(int(x) for x in roi_str.split(",")))
     max_speed = float(settings.get("max_speed", "400"))
     max_accel = float(settings.get("max_accel", "70"))
     div = int(settings.get("div", "1"))
@@ -138,24 +139,44 @@ def run_pipeline(video_path: str, truth_csv: str, output_path: str) -> None:
 
 
 def main() -> None:
-    headless = "--headless" in sys.argv
 
-    truth_csv = "ground_truth_csv/test4_truth.csv"
-    video = "test4.mp4"  # adjust path as needed
+    # --video NAME resolves to D:\Videos\racelog_test\{NAME}.mp4 with truth
+    # from ground_truth_csv\{NAME}_truth.csv (fallback {NAME}_ref.csv);
+    # a bare positional path is still accepted for custom videos.
+    video_name = ""
+    video = ""
+    for arg in sys.argv[1:]:
+        if arg.startswith("--video="):
+            video_name = arg.split("=", 1)[1]
+        elif arg == "--video" and sys.argv.index(arg) + 1 < len(sys.argv):
+            video_name = sys.argv[sys.argv.index(arg) + 1]
+        elif not arg.startswith("--"):
+            video = arg
 
-    if not Path(video).exists():
-        # Try common locations
-        for p in [Path("d:/Video/test4.mp4"), Path.home() / "Videos/test4.mp4"]:
-            if p.exists():
-                video = str(p)
-                break
-        else:
-            print(f"ERROR: Cannot find {video}. Please specify path.")
-            print(f"Usage: python tools/verify_accuracy.py [video_path]")
-            return
-
-    if len(sys.argv) > 1 and not sys.argv[-1].startswith("--"):
-        video = sys.argv[-1]
+    if video_name:
+        # verify_accuracy runs as a script: sys.path[0] is tools/, so the
+        # project root must be added explicitly for the tools package import.
+        project = Path(__file__).parent.parent
+        if str(project) not in sys.path:
+            sys.path.insert(0, str(project))
+        from tools.bench_decoder import resolve
+        video, truth_csv = resolve(video_name)
+    else:
+        truth_csv = "ground_truth_csv/test4_truth.csv"
+        if not video:
+            video = "test4.mp4"
+        if not Path(video).exists():
+            # Try common locations
+            for p in [Path("d:/Video/test4.mp4"),
+                      Path.home() / "Videos/test4.mp4",
+                      Path("D:/Videos/racelog_test/test4.mp4")]:
+                if p.exists():
+                    video = str(p)
+                    break
+            else:
+                print(f"ERROR: Cannot find {video}. Please specify path.")
+                print(f"Usage: python tools/verify_accuracy.py [--video NAME | video_path]")
+                return
 
     import tempfile, os
     with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as f:

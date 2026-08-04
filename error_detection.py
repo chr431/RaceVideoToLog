@@ -4,7 +4,7 @@ Computes continuous confidence scores [0, 100] for every frame using 4
 independent signals. READ-ONLY: does not modify any values or flags.
 
 Signals:
-  1. OCR model confidence — from RapidOCR output
+  1. OCR model confidence — from OcrEngine output
   2. Physics reachability  — both-neighbor check
   3. Local linearity       — median-of-pairs robust interpolation
   4. Acceleration spikes   — opposing spike pairs = consistency island
@@ -17,13 +17,13 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+
 from config import (
     MPS_TO_KMH,
     ERROR_DETECT_OCR_CONF_WEIGHT,
     ERROR_DETECT_PHYSICS_WEIGHT,
     ERROR_DETECT_LINEARITY_WEIGHT,
     ERROR_DETECT_ACCEL_SPIKE_WEIGHT,
-    ERROR_DETECT_CANDIDATE_THRESHOLD,
     ERROR_DETECT_FLOOR_CAP,
     PHYSICS_TIME_WINDOW, PHYSICS_DECAY_FACTOR,
     LINEARITY_DECAY_FACTOR, LINEARITY_TIME_WINDOW, LINEARITY_MAX_NEIGHBORS,
@@ -34,7 +34,7 @@ from config import (
 )
 
 if TYPE_CHECKING:
-    from rapidocr import RapidOCR
+    from ocr_native import OcrEngine
 
 logger = logging.getLogger("RaceVideoToLog.error_detection")
 
@@ -42,12 +42,6 @@ logger = logging.getLogger("RaceVideoToLog.error_detection")
 @dataclass
 class ErrorReport:
     confidence: list[dict] = field(default_factory=list)
-    candidates: dict[int, list[float]] = field(default_factory=dict)
-    n_total: int = 0
-    n_low_conf: int = 0
-    n_medium_conf: int = 0
-    n_high_conf: int = 0
-    n_candidate_frames: int = 0
 
 
 # ═══════════════════ Signal 1: OCR model confidence ═══════════════════
@@ -177,27 +171,30 @@ def _signal_linearity(rows: list, times: list[float],
             continue
 
         # Expected values from all left-right pairs, median for robustness
-        expected_vals: list[float] = []
-        for li in left_frames:
-            lv = rows[li][2]
-            lt = times[li]
-            for ri in right_frames:
-                rv = rows[ri][2]
-                rt = times[ri]
-                span = rt - lt
-                if span < 1e-6:
-                    continue
-                frac = (t_i - lt) / span
-                expected = lv + (rv - lv) * frac
-                if expected > 0:
-                    expected_vals.append(expected)
+        # （配对部分向量化：集合语义与原双层循环相同 —— span 过滤 +
+        # expected>0 过滤 → 排序后中位数一致）
+        lv = np.fromiter((rows[li][2] for li in left_frames),
+                         dtype=np.float64, count=len(left_frames))
+        lt = np.fromiter((times[li] for li in left_frames),
+                         dtype=np.float64, count=len(left_frames))
+        rv = np.fromiter((rows[ri][2] for ri in right_frames),
+                         dtype=np.float64, count=len(right_frames))
+        rt = np.fromiter((times[ri] for ri in right_frames),
+                         dtype=np.float64, count=len(right_frames))
+        span = rt[None, :] - lt[:, None]
+        mask = span >= 1e-6
+        with np.errstate(divide='ignore', invalid='ignore'):
+            frac = (t_i - lt[:, None]) / span  # span==0 → nan，被 mask 排除
+        expected = lv[:, None] + (rv[None, :] - lv[:, None]) * frac
+        exp_flat = expected[mask]
+        exp_flat = exp_flat[exp_flat > 0]
 
-        if not expected_vals:
+        if exp_flat.size == 0:
             scores.append(50.0)
             continue
 
-        expected_vals.sort()
-        expected = expected_vals[len(expected_vals) // 2]  # median
+        exp_flat.sort()
+        expected = float(exp_flat[exp_flat.size // 2])  # median
 
         deviation = abs(v - expected) / expected
         score = 100.0 * math.exp(-deviation * LINEARITY_DECAY_FACTOR)
@@ -265,7 +262,6 @@ def _signal_accel_spikes(rows: list, times: list[float], fps: float,
 
 def detect_errors(rows: list, observations: list, times: list[float],
                   max_accel_mps2: float, max_speed_kmh: float,
-                  split_results: dict[int, str] | None = None,
                   fps: float = 60.0) -> ErrorReport:
     n = len(rows)
     if n == 0:
@@ -283,8 +279,6 @@ def detect_errors(rows: list, observations: list, times: list[float],
     w_acc = ERROR_DETECT_ACCEL_SPIKE_WEIGHT / total_w
 
     confidence = []
-    n_low, n_medium, n_high = 0, 0, 0
-    candidate_frames: dict[int, list[float]] = {}
 
     for i in range(n):
         score = (w_ocr * ocr_conf_scores[i] + w_phy * physics_scores[i] +
@@ -299,9 +293,9 @@ def detect_errors(rows: list, observations: list, times: list[float],
                 score = min(score, cap)
                 break
 
-        if score < CONF_TIER_LOW_MAX: tier = "low"; n_low += 1
-        elif score < CONF_TIER_MEDIUM_MAX: tier = "medium"; n_medium += 1
-        else: tier = "high"; n_high += 1
+        if score < CONF_TIER_LOW_MAX: tier = "low"
+        elif score < CONF_TIER_MEDIUM_MAX: tier = "medium"
+        else: tier = "high"
 
         signals_sorted = sorted(
             [("ocr_conf", ocr_conf_scores[i]), ("physics", physics_scores[i]),
@@ -325,19 +319,4 @@ def detect_errors(rows: list, observations: list, times: list[float],
             "is_corrected": False,
         })
 
-        if score < ERROR_DETECT_CANDIDATE_THRESHOLD:
-            raw_v = rows[i][2]
-            cands = []
-            if 0 <= raw_v <= max_speed_kmh:
-                cands.append(raw_v)
-            if split_results and i in split_results:
-                try:
-                    sv = int(split_results[i])
-                    if 0 <= sv <= max_speed_kmh and sv not in cands:
-                        cands.append(sv)
-                except (ValueError, TypeError): pass
-            candidate_frames[i] = cands
-
-    return ErrorReport(confidence=confidence, candidates=candidate_frames,
-                       n_total=n, n_low_conf=n_low, n_medium_conf=n_medium,
-                       n_high_conf=n_high, n_candidate_frames=len(candidate_frames))
+    return ErrorReport(confidence=confidence)

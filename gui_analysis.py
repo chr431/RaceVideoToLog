@@ -5,44 +5,69 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 import numpy as np
+import pyqtgraph as pg
 
 from PySide6.QtWidgets import (
     QWidget, QFileDialog, QMessageBox, QHBoxLayout, QVBoxLayout, QGridLayout,
-    QStackedWidget, QLineEdit,
+    QStackedWidget,
 )
-from PySide6.QtCore import Qt
-from qfluentwidgets import (PushButton, PrimaryPushButton, CompactSpinBox,
-    RadioButton, CheckBox, BodyLabel, Slider)
-from widget_utils import make_static_card, setup_chart_zoom_pan
+from PySide6.QtCore import Qt, QTimer
+from qfluentwidgets import (PushButton, PrimaryPushButton, CompactSpinBox, isDarkTheme,
+    RadioButton, CheckBox, BodyLabel, Slider, CaptionLabel)
+from widget_utils import (make_static_card, make_int_spinbox,
+    make_brush, ModPlotWidget)
 
-from analysis import parse_csv, smooth_data, plot_segmented
+from analysis import parse_csv, smooth_data
+import config
 from config import (COLOR_BLUE, COLOR_ORANGE, COLOR_GREEN, MPS_TO_KMH, chart_colors)
+
+
+def _shift_csv(times, dists, speeds, flags, offset: int):
+    """按帧偏移做循环卷绕（一整圈语义）：负偏移 = 前 |offset| 帧移到末尾。
+
+    offset 单位为帧（CSV 行索引位移），越界部分卷绕到另一端。
+    返回新顺序的 (times, dists, speeds, flags)，不修改原数据。
+    """
+    if not offset or not times:
+        return times, dists, speeds, flags
+    k = (-offset) % len(times)
+    return (times[k:] + times[:k], dists[k:] + dists[:k],
+            speeds[k:] + speeds[:k], flags[k:] + flags[:k])
+
+
+def _read_fps(path: str) -> float:
+    """读取 CSV 头的 fps（偏移秒数换算用）。"""
+    from csv_io import parse_csv_header
+    try:
+        return float(parse_csv_header(path).get("fps", "0"))
+    except (ValueError, TypeError):
+        return 0.0
 
 
 class AnalysisTab:
     """数据分析 Tab — 嵌入 QStackedWidget，修改自动刷新。"""
 
     def __init__(self, stack: QStackedWidget) -> None:
-        from matplotlib.figure import Figure
-        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
-        self._Figure = Figure
-        self._FigureCanvas = FigureCanvasQTAgg
+        # pyqtgraph：无 Figure 类缓存
 
         self._stack = stack
 
         # 状态
         self._csvs: list[str | None] = [None, None, None]
         self._labels: list = []
-        self._figure: Figure | None = None
-        self._canvas: FigureCanvasQTAgg | None = None
+        self._plot: "pg.PlotWidget | None" = None
         self._chart_mode: str = "v-x"
         self._show_corrected: bool = False
         self._saved_limits: dict[str, tuple | None] = {}
         self._last_mode: str | None = None
         self._smooth_str: int = 0
         self._span_selector = None
+        self._offsets: list[int] = [0, 0, 0]  # 每行 CSV 的帧偏移（仅 GUI）
+        self._fps: list[float] = [0.0, 0.0, 0.0]  # 每行 CSV 的 fps（偏移换算用）
+        self._offset_timer: QTimer | None = None
 
         self._build_tab()
 
@@ -69,6 +94,13 @@ class AnalysisTab:
             lbl = BodyLabel("未导入")
             self._labels.append(lbl)
             sl.addWidget(lbl)
+            off_label = CaptionLabel("偏移")
+            off_spin = make_int_spinbox(-99999, 99999, 0, 84)
+            off_spin.setToolTip("帧偏移（循环）：正数右移、负数左移，越界部分卷绕到另一端。 不修改 CSV 内容。")
+            off_spin.valueChanged.connect(
+                lambda v, idx=i: self._schedule_offset_render(idx, v))
+            sl.addWidget(off_label)
+            sl.addWidget(off_spin)
             cl.addWidget(slot, 0, i)
 
 
@@ -115,44 +147,47 @@ class AnalysisTab:
         layout.addWidget(ctrl)
 
         # ── Matplotlib 画布 ──
-        self._figure = self._Figure(figsize=(8, 5), dpi=100)
-        self._canvas = self._FigureCanvas(self._figure)
-        self._canvas.setParent(tab)
-        layout.addWidget(self._canvas, 1)
-        self._sync_figure_theme()
+        import pyqtgraph as pg
+        pg.setConfigOptions(antialias=False)
+        plot = ModPlotWidget()
+        plot.setBackground(chart_colors(isDarkTheme())[0])
+        plot.showGrid(x=True, y=True, alpha=0.2)
+        plot.hideButtons()
+        plot.setMenuEnabled(False)
+        plot_item = plot.getPlotItem()
+        assert plot_item is not None
+        vb = plot_item.getViewBox()
+        assert vb is not None
+        # 上/右框线：ViewBox.setBorder（空轴零尺寸会被渲染裁剪不显示）
+        vb.setBorder(pg.mkPen(chart_colors(isDarkTheme())[1]))
+        self._plot = plot
+        layout.addWidget(plot, 1)
         self._ready = True
 
     # ═══════════════════ 事件 ═══════════════════
 
     def _sync_figure_theme(self) -> None:
-        """根据应用当前主题同步 matplotlib 画布背景色和文字颜色。"""
-        from PySide6.QtGui import QPalette, QColor
+        """同步图表背景/文字颜色到当前主题（pyqtgraph）。"""
         from qfluentwidgets import isDarkTheme
         dark = isDarkTheme()
         bg, fg = chart_colors(dark)
-        if self._figure:
-            self._figure.set_facecolor(bg)
-            if self._figure.axes:
-                for ax in self._figure.axes:
-                    ax.set_facecolor(bg)
-                    ax.tick_params(colors=fg)
-                    ax.xaxis.label.set_color(fg)
-                    ax.yaxis.label.set_color(fg)
-                    ax.title.set_color(fg)
-                    ax.spines["bottom"].set_color(fg if dark else "#888")
-                    ax.spines["left"].set_color(fg if dark else "#888")
-                    ax.spines["top"].set_color(fg if dark else "#888")
-                    ax.spines["right"].set_color(fg if dark else "#888")
-                    ax.grid(True, alpha=0.2 if dark else 0.3)
-        if self._canvas:
-            # 直接设置 canvas widget 的背景色（覆盖 QSS）
-            c = QColor(bg)
-            p = self._canvas.palette()
-            p.setColor(QPalette.ColorRole.Window, c)
-            p.setColor(QPalette.ColorRole.Base, c)
-            self._canvas.setPalette(p)
-            self._canvas.setAutoFillBackground(True)
-            self._canvas.draw_idle()
+        plot = self._plot
+        if plot is None:
+            return
+        plot.setBackground(bg)
+        plot_item = plot.getPlotItem()
+        assert plot_item is not None
+        for ax_name in ('left', 'bottom'):
+            ax_item = plot_item.getAxis(ax_name)
+            ax_item.setTextPen(fg)
+            ax_item.setPen(fg)
+        vb = plot_item.getViewBox()
+        assert vb is not None
+        vb.setBorder(pg.mkPen(fg))
+        # 悬停/统计文字同步主题前景色（初始用 COLOR_FG_LIGHT 的话深色下不可见）
+        for t in (getattr(self, '_delta_text', None), getattr(self, '_hover_text', None)):
+            if t is not None:
+                t.setColor(fg)
 
     def _on_mode(self, mode: str) -> None:
         self._chart_mode = mode
@@ -164,30 +199,66 @@ class AnalysisTab:
         if path:
             self._csvs[index] = path
             self._labels[index].setText(Path(path).name)
-            self._saved_limits.clear()
-            self._last_mode = None
-            self._render()
+            self._invalidate_and_render()
 
     def _clear(self, index: int) -> None:
         self._csvs[index] = None
         self._labels[index].setText("未导入")
+        self._invalidate_and_render()
+
+    def _invalidate_and_render(self) -> None:
+        """清除缓存状态并重新渲染。"""
         self._saved_limits.clear()
         self._last_mode = None
         self._render()
 
+    def _schedule_offset_render(self, idx: int, value: int) -> None:
+        """偏移 spinbox 变化：节流 150ms 后重建（拖动时不卡顿）。"""
+        from PySide6.QtCore import QTimer
+        self._offsets[idx] = value
+        timer = self._offset_timer
+        if timer is None:
+            timer = QTimer()  # 无 parent：AnalysisTab 非 QObject
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._flush_offset_render)
+            self._offset_timer = timer
+        timer.start(150)
+
+    def _flush_offset_render(self) -> None:
+        self._offset_timer = None
+        self._invalidate_and_render()
+
     # ═══════════════════ 渲染 ═══════════════════
 
 
-    def _setup_chart_interactions(self, ax, canvas, all_x, all_y, is_dtx, is_vt,
-                                    delta_label, label, name1, name2):
-        """配置图表交互：SpanSelector 范围选择 + 缩放/平移。"""
-        delta_text = ax.text(0.02, 0.97, "", transform=ax.transAxes,
-            va="top", fontsize=9, color="#333333",
-            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
+    def _setup_chart_interactions(self, plot, all_x, all_y, is_dtx, is_vt,
+                                 label):
+        """交互：LinearRegionItem 拖选区间统计 + 悬停竖线 + 修饰键缩放。"""
+        import pyqtgraph as pg
+        plot_item = plot.getPlotItem()
+        assert plot_item is not None
+        vb = plot_item.vb
+        assert vb is not None
 
-        def _on_select(xmin: float, xmax: float) -> None:
-            if xmin > xmax:
-                xmin, xmax = xmax, xmin
+        # ── 拖选区间统计（LinearRegionItem，原生高性能）──
+        # anchor=(1, 0)：文字右上角贴住 pos（(1,1) 会把文字顶到视图外被裁掉）
+        fg = chart_colors(isDarkTheme())[1]
+        delta_text = pg.TextItem("", color=fg, anchor=(1, 0))
+        plot.addItem(delta_text, ignoreBounds=True)
+        self._delta_text = delta_text
+
+        def _pin_delta_text(*args) -> None:
+            """把统计文本钉在视图右上角（autoRange/缩放/平移后跟随）。"""
+            xmin_v, xmax_v = vb.viewRange()[0]
+            ymin_v, ymax_v = vb.viewRange()[1]
+            delta_text.setPos(xmax_v, ymax_v)
+
+        def _update_delta_text() -> None:
+            region = self._region
+            if region is None:
+                return
+            # pyqtgraph 的 getRegion 类型标注过宽（含 list）→ 显式 cast
+            xmin, xmax = cast("tuple[float, float]", region.getRegion())
             results = []
             for i in range(3):
                 xd = all_x[i]
@@ -221,22 +292,126 @@ class AnalysisTab:
                 elif total > 0:
                     unit = "m" if is_vt else "s"
                     results.append(f"{n}: {total:.2f}{unit}")
-            delta_text.set_text("\n".join(results) if results else "")
+            delta_text.setText(chr(10).join(results) if results else "")
+            delta_text.setVisible(True)  # 常驻右上（提示或统计）
 
-        if self._span_selector is not None:
+        # 重建时先断开旧连接（否则每次 rebuild 都向 scene/vb/region 累积回调）
+        scene_sig = plot.scene().sigMouseMoved
+        for sig, h in ((scene_sig, getattr(self, '_h_mouse', None)),
+                       (getattr(self, '_h_region_sig', None), getattr(self, '_h_region', None)),
+                       (vb.sigRangeChanged, getattr(self, '_pin_delta_text', None))):
+            if sig is not None and h is not None:
+                try:
+                    sig.disconnect(h)
+                except (TypeError, RuntimeError):
+                    pass
+        self._pin_delta_text = _pin_delta_text
+        vb.sigRangeChanged.connect(_pin_delta_text)
+        _pin_delta_text()
+
+        # ── 悬停竖线 + 最近点速度（仅 v-t / v-x）──
+        hover_line = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen(
+            config.COLOR_GRAY, width=1, style=Qt.PenStyle.DashLine))
+        hover_line.setVisible(False)
+        # ignoreBounds：悬停辅助线不参与 ViewBox 自动范围计算
+        plot.addItem(hover_line, ignoreBounds=True)
+        # anchor=(0, 0)：文字左上角贴住 pos（(0,1) 同样会被顶到视图外）
+        hover_text = pg.TextItem("", color=fg, anchor=(0, 0))
+        hover_text.setVisible(False)
+        plot.addItem(hover_text, ignoreBounds=True)
+        self._hover_text = hover_text
+        self._hover_text_visible = False
+        # 钉在视图左上角：缩放/平移时跟随，不出现拖后腿跳回
+        if getattr(self, '_pin_hover_text', None) is not None:
             try:
-                self._span_selector.disconnect_events()
-            except Exception:
+                vb.sigRangeChanged.disconnect(self._pin_hover_text)
+            except (TypeError, RuntimeError):
                 pass
-        from matplotlib.widgets import SpanSelector
-        self._span_selector = SpanSelector(ax, _on_select, "horizontal",
-            props=dict(facecolor=COLOR_BLUE, alpha=0.15),
-            interactive=True, drag_from_anywhere=True,
-            button=1)
-        delta_text.set_text(f"← 拖拽选择范围查看{delta_label}")
 
-        # 滚轮缩放 + 右键平移
-        setup_chart_zoom_pan(ax, canvas, throttle_ms=0)
+        def _pin_hover_text(*args) -> None:
+            xmin_v, xmax_v = vb.viewRange()[0]
+            ymin_v, ymax_v = vb.viewRange()[1]
+            hover_text.setPos(xmin_v, ymax_v)
+
+        self._pin_hover_text = _pin_hover_text
+        vb.sigRangeChanged.connect(_pin_hover_text)
+        _pin_hover_text()  # 初始定位：重建后视图未变化时不触发 sigRangeChanged
+        import bisect
+
+        def _on_mouse_moved(pos) -> None:
+            if is_dtx:
+                return
+            if not plot.sceneBoundingRect().contains(pos):
+                hover_line.setVisible(False)
+                hover_text.setVisible(False)
+                self._hover_text_visible = False
+                return
+            pt = vb.mapSceneToView(pos)
+            x = pt.x()
+            lines = []
+            for i in range(3):
+                xd = all_x[i]
+                if not xd:
+                    continue
+                idx = bisect.bisect_left(xd, x)
+                if idx >= len(xd):
+                    idx = len(xd) - 1
+                elif idx > 0 and abs(xd[idx - 1] - x) < abs(xd[idx] - x):
+                    idx -= 1
+                n = Path(self._csvs[i] or "").stem
+                v = all_y[i][idx]
+                lines.append(f"{n}: {v:.0f} km/h" if v >= 0 else f"{n}: 无效")
+            hover_line.setPos(x)
+            hover_line.setVisible(True)
+            hover_text.setText(chr(10).join(lines) if lines else "")
+            hover_text.setVisible(bool(lines))
+            self._hover_text_visible = bool(lines)
+
+        self._h_mouse = _on_mouse_moved
+        plot.scene().sigMouseMoved.connect(_on_mouse_moved)
+
+        # 拖选 region：初始覆盖全数据范围（拖 handles 调整，统计实时更新）
+        xs_all = [x for xd in all_x for x in xd]
+        xmin0 = min(xs_all) if xs_all else 0.0
+        xmax0 = max(xs_all) if xs_all else 1.0
+        if xmax0 <= xmin0:
+            xmax0 = xmin0 + 1.0
+        # mkBrush 会丢弃 alpha → 用 make_brush 显式构造半透明填充；
+        # 边界线用深蓝（默认黄色与主题不搭）
+        region = pg.LinearRegionItem(values=(xmin0, xmax0), orientation='vertical',
+                                     movable=True,
+                                     brush=make_brush(config.COLOR_BLUE, 20),
+                                     pen=pg.mkPen("#1565C0"))
+        self._region = region
+        self._h_region = lambda r: _update_delta_text()
+        self._h_region_sig = region.sigRegionChanged
+        region.sigRegionChanged.connect(self._h_region)
+        region.setVisible(False)  # 重绘后默认不选择，仅右键拖拽才绘制
+        plot.addItem(region)
+
+        def _on_drag_range(x0: float, x1: float) -> None:
+            """右键拖拽选择范围（模拟重构前 SpanSelector）。"""
+            if x0 > x1:
+                x0, x1 = x1, x0
+            region.setRegion((x0, x1))
+            region.setVisible(True)
+
+        def _on_drag_click(x: float) -> None:
+            """右键点击（无拖动）：若在选区外则取消选择，恢复提示文字。"""
+            if not region.isVisible():
+                return
+            x0, x1 = cast("tuple[float, float]", region.getRegion())
+            if x < x0 or x > x1:
+                region.setVisible(False)
+                delta_text.setText("← 右键拖拽选择范围，点击选区外取消")
+                delta_text.setVisible(True)
+
+        plot.sig_drag_range.connect(_on_drag_range)
+        plot.sig_drag_click.connect(_on_drag_click)
+
+        # 拖选统计文本放右上（悬停文本在左上，避免重叠）
+        delta_text.setText("← 右键拖拽选择范围，点击选区外取消")
+        delta_text.setVisible(True)  # 初始提示可见
 
     def _render(self) -> None:
         """高性能渲染：缓存 CSV 解析结果，smooth 变化时仅更新线数据。
@@ -246,9 +421,8 @@ class AnalysisTab:
         if not self._ready:
             return
 
-        fig = self._figure
-        canvas = self._canvas
-        if fig is None or canvas is None:
+        plot = self._plot
+        if plot is None:
             return
 
         if not any(self._csvs):
@@ -262,7 +436,7 @@ class AnalysisTab:
         colors = [COLOR_BLUE, COLOR_ORANGE, COLOR_GREEN]
 
         # ── 检测是否需要完全重建 ──
-        csv_key = tuple(self._csvs)
+        csv_key = (tuple(self._csvs), tuple(self._offsets))
         last_key = getattr(self, '_render_cache_key', None)
         needs_rebuild = (csv_key != last_key or mode != getattr(self, '_render_last_mode', '') or show_cd != getattr(self, '_render_last_cd', None))
         smooth_changed = (smooth_str != getattr(self, '_render_last_smooth', -1))
@@ -286,6 +460,10 @@ class AnalysisTab:
                     return
                 t1, d1, s1, _ = parse_csv(self._csvs[0])
                 t2, d2, s2, _ = parse_csv(self._csvs[1])
+                # 帧偏移（GUI only，循环卷绕）：时间轴循环平移对齐起跑线，
+                # 越界部分卷绕到另一端（一整圈语义）；不修改 CSV 内容。
+                t1, d1, s1, f1 = _shift_csv(t1, d1, s1, [0]*len(s1), self._offsets[0])
+                t2, d2, s2, f2 = _shift_csv(t2, d2, s2, [0]*len(s2), self._offsets[1])
                 t2_interp = np.interp(d1, d2, t2)
                 dt = np.array(t1) - t2_interp
                 all_x[0] = d1; all_y[0] = dt.tolist()
@@ -300,8 +478,26 @@ class AnalysisTab:
                         continue
                     try:
                         times, dists, speeds, flags = parse_csv(csv_path)
+                        self._fps[i] = _read_fps(csv_path)
                         name = Path(csv_path).stem
-                        x_data = times if is_vt else dists
+                        # 循环卷绕偏移（帧 = 索引位移）；周期取模重标起点：
+                        # 新 t=0 / x=0 起点，之后按圈周期卷绕（x/t 始终 >= 0，
+                        # 起点前的圈尾路段出现在末端 — 周期拓展语义）
+                        _lap_t = times[-1] - times[0] if len(times) > 1 else 0.0
+                        _lap_d = dists[-1] - dists[0] if len(dists) > 1 else 0.0
+                        times, dists, speeds, flags = _shift_csv(
+                            times, dists, speeds, flags, self._offsets[i])
+                        if self._offsets[i]:
+                            base_t = times[0]
+                            base_d = dists[0]
+                            if is_vt:
+                                x_data = [((x - base_t) % _lap_t) if _lap_t > 0 else (x - base_t)
+                                          for x in times]
+                            else:
+                                x_data = [((d - base_d) % _lap_d) if _lap_d > 0 else (d - base_d)
+                                          for d in dists]
+                        else:
+                            x_data = times if is_vt else dists
                         all_x[i] = x_data; all_y[i] = speeds
                         all_flags[i] = flags
                         all_raw[i] = (x_data, speeds, flags)
@@ -326,67 +522,82 @@ class AnalysisTab:
             self._render_last_cd = show_cd
 
             # ── 保存当前视图 ──
-            if fig.axes and self._last_mode and self._last_mode != "dt-x":
-                self._saved_limits[self._last_mode] = (
-                    fig.axes[0].get_xlim(), fig.axes[0].get_ylim())
+            if self._last_mode and self._last_mode != "dt-x":
+                plot_item0 = plot.getPlotItem()
+                assert plot_item0 is not None
+                vb_cur = plot_item0.vb
+                assert vb_cur is not None
+                self._saved_limits[self._last_mode] = tuple(vb_cur.viewRange())
 
-            # ── 完全重建 ──
-            fig.clear()
+            # ── 完全重建（pyqtgraph）──
+            plot.clear()
             from qfluentwidgets import isDarkTheme
             dark = isDarkTheme()
-            fig.set_facecolor(chart_colors(dark)[0])
-            ax = fig.add_subplot(111)
+            bg, fg = chart_colors(dark)
+            plot.setBackground(bg)
 
             # ── 绘制主曲线 ──
-            self._chart_lines = []  # 缓存线条引用用于增量更新
+            self._chart_items = []  # 缓存曲线引用用于增量更新
             if is_dtx:
                 d1 = all_x[0]; dt_list = all_y[0]
                 x_vals, y_vals = smooth_data(d1, dt_list, smooth_str) if smooth_str > 0 else (d1, dt_list)
-                line, = ax.plot(x_vals, y_vals, color=colors[0], linewidth=0.8)
-                self._chart_lines.append((line, 0, d1, dt_list, None))
-                ax.plot([], [], color=colors[0], linewidth=0.8, label=label)
+                item = _plot_wrapped_pg(plot, x_vals, y_vals, colors[0])
+                self._chart_items.append((item, 0, d1, dt_list, None))
             else:
                 for i, raw in enumerate(all_raw):
                     if raw is None:
                         continue
                     x_data, speeds, flags = raw
-                    ln_refs = plot_segmented(ax, x_data, speeds, flags,
-                                                colors[i], show_cd, smooth_str)
-                    # Cache for smooth updates
-                    self._chart_lines.append((ax.lines[-2] if len(ax.lines) >= 2 else ax.lines[-1],
-                                                i, x_data, speeds, flags))
-                    ax.plot([], [], color=colors[i], linewidth=0.8,
-                            label=Path(self._csvs[i] or "").stem)
+                    item, segs = _plot_segmented_pg(plot, x_data, speeds, flags,
+                                                    colors[i], show_cd, smooth_str)
+                    self._chart_items.append((item, i, x_data, speeds, flags))
 
             # ── 标签 ──
             if is_dtx:
                 xlabel, ylabel = "距离 (m)", "Δt (s)"
                 title = f"时间差-距离 ({name1} vs {name2})"
-                delta_label = "Δ(Δt)"
             elif is_vt:
                 xlabel, ylabel = "时间 (s)", "速度 (km/h)"
-                title = "速度-时间曲线"; delta_label = "行驶距离"
+                title = "速度-时间曲线"
             else:
                 xlabel, ylabel = "距离 (m)", "速度 (km/h)"
-                title = "速度-距离曲线"; delta_label = "用时"
+                title = "速度-距离曲线"
 
-            ax.set_xlabel(xlabel); ax.set_ylabel(ylabel)
-            ax.set_title(title)
-            ax.legend(loc="upper right"); ax.grid(True, alpha=0.3)
+            plot.setLabel('bottom', xlabel, color=fg)
+            plot.setLabel('left', ylabel, color=fg)
+            plot.setTitle(title, color=fg)
+            plot_item = plot.getPlotItem()
+            assert plot_item is not None
+            for ax_name in ('left', 'bottom'):
+                ax_item = plot_item.getAxis(ax_name)
+                ax_item.setTextPen(fg)
+                ax_item.setPen(fg)
             if is_dtx:
-                ax.axhline(y=0, color="#888888", linewidth=1.2, linestyle="--", alpha=0.7)
+                zero = pg.InfiniteLine(angle=0, movable=False, pen=pg.mkPen(
+                    config.COLOR_GRAY, width=1, style=Qt.PenStyle.DashLine))
+                plot.addItem(zero)
 
             # ── 交互 ──
-            self._setup_chart_interactions(ax, canvas, all_x, all_y,
-                is_dtx, is_vt, delta_label, label, name1, name2)
+            self._setup_chart_interactions(plot, all_x, all_y,
+                is_dtx, is_vt, label)
 
-            fig.tight_layout()
-            if not is_dtx:
-                saved = self._saved_limits.get(mode)
-                if saved is not None:
-                    ax.set_xlim(saved[0]); ax.set_ylim(saved[1])
+            vb2 = plot_item.vb
+            assert vb2 is not None
+            if is_dtx:
+                # Δt-x：y=0 线纵向居中（对称范围）
+                dt_vals = all_y[0]
+                max_abs = max(abs(min(dt_vals)), abs(max(dt_vals))) if dt_vals else 1.0
+                vb2.setYRange(-max_abs, max_abs, padding=0)
+            elif saved := self._saved_limits.get(mode):
+                xr, yr = saved
+                vb2.setXRange(xr[0], xr[1], padding=0)
+                vb2.setYRange(yr[0], yr[1], padding=0)
+            else:
+                vb2.autoRange()  # 新模式：自适应数据
+            # 渲染后禁用自动范围检测：悬停/交互 item 的变化不再扩展视图
+            # enableAutoRange(axis, enable)：False 作 axis 是 no-op，必须传 enable 关键字
+            vb2.enableAutoRange(None, False)
 
-            canvas.draw()
             self._last_mode = mode
             self._sync_figure_theme()
 
@@ -394,62 +605,141 @@ class AnalysisTab:
             # ── 增量更新或诊断切换：重建线条 ──
             self._render_last_smooth = smooth_str
             self._render_last_cd = show_cd
-            ax = fig.axes[0]
             cache = self._render_cache
             is_dtx = cache['is_dtx']; is_vt = cache['is_vt']
             all_raw = cache['all_raw']
 
-            if ax.lines and not is_dtx:
-                # 清除旧诊断段（红色/绿色）— 重建非平滑基线
-                pass  # plot_segmented handles this internally
-
-            # 重建：清除所有 lines，保留非-line artists
-            for line in ax.lines[:]:
-                line.remove()
-            # 重建图例占位
-            self._chart_lines = []
+            # 增量：清除旧曲线（保留 region/hover 等交互 item）
+            for it in list(plot.listDataItems()):
+                plot.removeItem(it)
+            self._chart_items = []
 
             if is_dtx:
                 d1 = cache['all_x'][0]; dt_list = cache['all_y'][0]
                 x_vals, y_vals = smooth_data(d1, dt_list, smooth_str) if smooth_str > 0 else (d1, dt_list)
-                line, = ax.plot(x_vals, y_vals, color=colors[0], linewidth=0.8)
-                self._chart_lines.append((line, 0, d1, dt_list, None))
+                item = _plot_wrapped_pg(plot, x_vals, y_vals, colors[0])
+                self._chart_items.append((item, 0, d1, dt_list, None))
             else:
                 for i, raw in enumerate(all_raw):
                     if raw is None:
                         continue
                     x_data, speeds, flags = raw
-                    _ = plot_segmented(ax, x_data, speeds, flags,
-                                        colors[i], show_cd, smooth_str)
-                    self._chart_lines.append((ax.lines[-2] if len(ax.lines) >= 2 else ax.lines[-1],
-                                                i, x_data, speeds, flags))
-                # 恢复图例
-                for i, raw in enumerate(all_raw):
-                    if raw is not None:
-                        ax.plot([], [], color=colors[i], linewidth=0.8,
-                                label=Path(self._csvs[i] or "").stem)
-
-            canvas.draw_idle()
+                    item, segs = _plot_segmented_pg(plot, x_data, speeds, flags,
+                                                    colors[i], show_cd, smooth_str)
+                    self._chart_items.append((item, i, x_data, speeds, flags))
 
     # ═══════════════════ 其他 ═══════════════════
 
     def _auto_fit(self) -> None:
-        fig = self._figure; canvas = self._canvas
-        if fig is None or canvas is None or not fig.axes:
+        """自动缩放视图（pyqtgraph ViewBox.autoRange）。"""
+        plot = self._plot
+        if plot is None:
             return
         self._saved_limits.pop(self._chart_mode, None)
-        ax = fig.axes[0]
-        ax.autoscale(enable=True, axis="both")
-        ax.relim(); ax.autoscale_view()
-        canvas.draw_idle()
+        plot_item = plot.getPlotItem()
+        assert plot_item is not None
+        vb = plot_item.vb
+        assert vb is not None
+        vb.autoRange()
 
     def _export_png(self) -> None:
-        fig = self._figure
-        if fig is None or not fig.axes:
-            QMessageBox.warning(self._stack, "无数据", "请先渲染曲线。")
-            return
+        """导出当前图表为 PNG（pyqtgraph ImageExporter）。"""
+        from PySide6.QtWidgets import QFileDialog
         path, _ = QFileDialog.getSaveFileName(
             self._stack, "导出 PNG", "", "PNG 图片 (*.png)")
-        if path:
-            fig.savefig(path, dpi=150, bbox_inches="tight")
-            QMessageBox.information(self._stack, "导出完成", f"已保存: {path}")
+        if not path:
+            return
+        try:
+            import pyqtgraph.exporters as _exp
+            plot = self._plot
+            if plot is None:
+                return
+            plot_item = plot.plotItem
+            assert plot_item is not None
+            exp = _exp.ImageExporter(plot_item)
+            exp.export(path)
+        except Exception as e:
+            QMessageBox.critical(self._stack, "导出失败", str(e))
+
+
+# ═══════════════════ pyqtgraph 绘制辅助 ═══════════════════
+
+def _plot_wrapped_pg(plot, x, y, color, width=1.0):
+    """绘制可能循环卷绕的数据：x 下降跳变处断线（分段绘制）。"""
+    import pyqtgraph as pg
+    x = list(x); y = list(y)
+    item = pg.PlotDataItem(pen=pg.mkPen(color, width=width))
+    plot.addItem(item)
+    brk = None
+    for i in range(1, len(x)):
+        if x[i] < x[i - 1]:
+            brk = i
+            break
+    if brk is None:
+        item.setData(x, y)
+    else:
+        # 两段拼接（中间 NaN 断线）
+        xs = x[:brk] + [x[brk - 1], x[brk]] + x[brk:]
+        ys = y[:brk] + [float('nan'), float('nan')] + y[brk:]
+        item.setData(xs, ys)
+    return item
+
+
+def _plot_segmented_pg(plot, x, y, flags, color, show_red, smooth_strength):
+    """平滑 + 纠错段着色（pyqtgraph）：主曲线 + 红/绿段覆盖。"""
+    import pyqtgraph as pg
+    red = "#F44336"
+    green = "#81C784"
+    x = list(x); y = list(y); flags = list(flags)
+    if smooth_strength > 0:
+        x, y = smooth_data(x, y, smooth_strength)
+    item = pg.PlotDataItem(pen=pg.mkPen(color, width=1.0))
+    item.setData(x, y)
+    plot.addItem(item)
+    segs = []
+    if show_red and any(f >= 1 for f in flags):
+        n_orig = len(flags)
+        n_smooth = len(x)
+        rx, ry = [], []
+        i = 0
+        while i < n_orig:
+            if 10 <= flags[i] <= 19:
+                j = i
+                while j < n_orig and 10 <= flags[j] <= 19:
+                    j += 1
+                si = int(max(0, i - 0.5) * n_smooth / n_orig)
+                ei = int(min(n_orig, j + 0.5) * n_smooth / n_orig)
+                si = max(0, min(si, n_smooth - 2))
+                ei = min(n_smooth, max(ei, si + 1))
+                rx.extend(x[si:ei] + [float('nan')])
+                ry.extend(y[si:ei] + [float('nan')])
+                i = j + 1
+            else:
+                i += 1
+        if rx:
+            seg = pg.PlotDataItem(pen=pg.mkPen(red, width=2.0))
+            seg.setData(rx, ry)
+            plot.addItem(seg)
+            segs.append(seg)
+        gx, gy = [], []
+        i = 0
+        while i < n_orig:
+            if flags[i] >= 20:
+                j = i
+                while j < n_orig and flags[j] >= 20:
+                    j += 1
+                si = int(max(0, i - 0.5) * n_smooth / n_orig)
+                ei = int(min(n_orig, j + 0.5) * n_smooth / n_orig)
+                si = max(0, min(si, n_smooth - 2))
+                ei = min(n_smooth, max(ei, si + 1))
+                gx.extend(x[si:ei] + [float('nan')])
+                gy.extend(y[si:ei] + [float('nan')])
+                i = j + 1
+            else:
+                i += 1
+        if gx:
+            seg = pg.PlotDataItem(pen=pg.mkPen(green, width=1.5))
+            seg.setData(gx, gy)
+            plot.addItem(seg)
+            segs.append(seg)
+    return item, segs

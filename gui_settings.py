@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from qfluentwidgets import (
     CardWidget, ComboBox, LineEdit, RadioButton,
-    BodyLabel, StrongBodyLabel, CaptionLabel,
+    BodyLabel, StrongBodyLabel, CaptionLabel, PushButton,
 )
 
 from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QGridLayout
@@ -82,7 +82,7 @@ def build_settings_panel(parent) -> dict:
     pl.addWidget(widgets["max_width_spin"], 2, 3)
     pl.addWidget(BodyLabel("OCR 后端"), 3, 0)
     widgets["backend_combo"] = ComboBox()
-    widgets["backend_combo"].addItems(["自动", "TensorRT", "CPU"])
+    widgets["backend_combo"].addItems([config.BACKEND_LABELS[k] for k in config.BACKEND_KEYS])
     widgets["backend_combo"].setCurrentIndex(0)
     pl.addWidget(widgets["backend_combo"], 3, 1)
     pl.addWidget(BodyLabel("边缘填充 (px)"), 3, 2)
@@ -149,7 +149,3 @@ def build_settings_panel(parent) -> dict:
     ll.addStretch()
 
     return widgets
-
-
-# Re-export for convenience
-from qfluentwidgets import PushButton

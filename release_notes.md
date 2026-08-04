@@ -1,8 +1,206 @@
 # Release Notes
 
-## v2.7.1 (2026-08-01)
+## v2.9.0（2026-08-04）— v2.7.1 → v2.9.0 发布（2.7.2 / 2.8.0 未发布，合并记录）
 
-预处理回退 cv2：Pillow 替代实验因性能不如 cv2（~12% decode 变慢）且 cv2 已随 rapidocr 打包，故回退。EXE 体积不变。
+> 本节面向使用者：只讲你能直接感知到的变化。技术细节见下方各节。
+
+### ⚡ 性能
+
+- **GPU 加速（TensorRT）**：单次处理时间几乎减半 —— test4 17.1s → **9.6s**，test5 18.9s → **14.3s**
+- **无 NVIDIA GPU（CPU 解码 + CPU 推理）**：test5 从 23.4s（v2.7.0）→ **14.7s**，早期因 ROI 裁切缺陷的 246s 慢速问题彻底修复（约 16 倍）
+- **内存**：修复 CPU 解码时内存无限上升的问题（此前长视频会一路涨到 20GB+ 拖垮系统，现在全程稳定在 1GB 以内）
+- 首次导入视频后处理不再出现长时间假死（ffprobe 探测已后台化）
+
+### 🎨 界面
+
+- 数据分析页图表全面升级（pyqtgraph）：缩放平移流畅不卡顿、悬停显示数值、支持框选统计区域、修饰键缩放；暗色/亮色主题下显示正确
+- 最终检查（Review）窗口：更清晰的修正标记（蓝色选中、点尺寸优化）、hover 信息跟随视图、右键取消选择
+- TensorRT 引擎首次构建时显示进度（不再"卡住"）
+- 界面启动更快（依赖精简：移除 matplotlib / cv2 / rapidocr）
+
+### 🎯 识别精度
+
+- 手动纠错模式精度大幅提升（test2 d=0 92.9% → 99.1%），自动/手动模式统一纠错链
+- 修复多种误纠场景：错误帧被错误标为高可信、孤岛区域被斜坡拉偏、部分数字误判
+- 全量验证（test5 7223 帧）：GPU 路径 99.94%、CPU 路径 99.93% 准确率
+
+### 🖥 命令行
+
+- `--from-csv` 导入设置：显式指定的参数不再被 CSV 头静默覆盖（曾导致指定 tiny 模型实际跑 small 模型、速度慢 4 倍）
+- `--max-width` 参数修复（此前未生效于重 OCR）
+- `--roi` / `--frame-start` / `--frame-end` 等按 CSV 头导入更可靠
+
+### 📦 安装与运行
+
+- `setup_venv.bat` 一键重建环境（自动安装自建 decord 及 GPU 绑定）
+- 依赖显著精简：移除 rapidocr / opencv / matplotlib / scipy / pyclipper / shapely（安装体积与启动时间明显下降）
+- OCR 引擎（tiny / small）与 TensorRT 引擎自动缓存，重复使用不重复构建
+- 主 OCR 模型建议 tiny + 重 OCR small 组合（速度/精度最佳平衡）
+
+### 其它
+
+- 版本号统一为 2.9.0；旧版遗留（rapidocr 时代代码、死工具、过时文档）已清理
+- 更新了 `DEPENDENCIES.md`（依赖清单与已知问题）
+
+---
+
+## v2.9.0 (2026-08-04) — 全流程性能深度优化（本仓库 + 自建 decord）
+
+### 性能（GPU TRT 口径，test4 6203 帧 / test5 7223 帧）
+
+| 阶段 | test4 total | test5 total |
+| --- | --- | --- |
+| v2.8.0 基线 | 17.1s | 18.9s |
+| 最终 | **9.6s**（-44%） | **14.3s**（-24%） |
+
+精度全程无回退（test4 err 2.14% / test5 err 0.06%，与基线逐位一致）。
+
+**decord 侧（自建仓库，feat/perf-deep 已推送）**：
+- `next_roi()` 新 API：GPU 上只拷 ROI 矩形到主机（cudaMemcpy2D），替代
+  全帧 6MB D2H + Python 裁切 —— decode 13.5→5.9s（test4）/ 17.0→6.4s（test5）
+- CacheFrame 零拷贝：容错缓存改为持有池缓冲引用（refcount），消除每帧
+  一次整帧同步 D2D 深拷贝；输出池 20→22
+- 解码背压忙等（1ns sleep 空转核）→ condition_variable 阻塞等待
+- 冒烟验证：next_roi 与 next()+crop 逐字节一致；200 帧哈希与旧 DLL 相同
+
+**本仓库侧**：
+- `_resize_norm` 等尺寸短路（省每帧一次 astype 拷贝 + zeros 双写）
+- `_np_resize` 坐标映射 lru_cache（映射只依赖尺寸，主路径每帧省 ~60% 计算）
+- viterbi DP 内层 C×C 循环向量化（元素级运算无归约 → 决策逐位一致，
+  小候选集保留标量快路径）
+- `_signal_linearity` 配对插值向量化（邻居扫描保留，中位数语义不变）
+- 删除 `_auto_align_pass` 循环内 O(n) pinned_set 重建（死代码参数一并移除）
+- `_ctc_decode` 批向量化（argmax/max/keep 一次归约）
+- TRT `set_input_shape` 按 shape 缓存（实测每批省 ~0.5ms）
+- CSV 批量写（writerows）、`parse_csv` 单趟解析
+
+**测量基座**：`tools/bench_decoder.py` 重构为统一基准（参数化视频、
+timing + 精度一并输出、JSON 记录）；新增 `tools/decord_smoke.py`
+（decord 每次重建后的内容正确性冒烟）、`tools/bench_trt_fp16.py`
+（FP16 vs FP32 引擎对比 —— 实测 0.97x，无收益，确认维持 FP32 默认）。
+
+**剩余瓶颈**（记录在案）：test5 长视频墙钟 14.3s 中 GPU 利用率仅
+~45%，大头为 producer/consumer 线程的 CPU 侧同步与 GIL 争抢（架构性，
+无低成本解法）；decord GPU 路径 decode 硬底 ~1000fps（NVDEC 转换
+流水线每帧同步受 NVDEC surface 生命周期约束，无法移除）。
+
+### CPU 组合（decord/CPU 解码 + ONNX CPU 推理，无 NVIDIA GPU 用户）
+
+**核心修复（性能 -95%，test5 33.1s → 13.0s）**：
+- `next_frame_roi` 对 CPU reader 返回了全帧（decord 的 next_roi 对非
+  CUDA 上下文回退全帧），封装未裁剪 → CPU 路径把 1080p 全帧缩略图喂给
+  OCR → ~95% 帧识别失败 → 置信度崩溃 → 每帧都进 correction → test4
+  全量 246s → 修复后 63s（精度 97.98%）
+- **from-csv 覆盖循环误判显式参数**：`值==argparse 默认值` 被判定为
+  "用户未指定" → 显式 `--ocr-model v6_tiny` 被 CSV 头的 `model=v6_small`
+  静默覆盖，引擎实际是 small（CPU 3.1ms/帧 vs tiny 0.7ms/帧）→ 解释
+  了"进程级 ONNX 推理慢 4 倍"谜团（非性能问题，是引擎被换）。修复后
+  33.1s → 13.0s（比 v2.7.0 的 23.4s 快 43%），精度 99.93%（0.07% 误差，
+  0 false_trusted）
+
+**内存峰值优化（correction 阶段 7.3GB → ~1GB）**：批量 re-OCR 预热
+一次喂 ~1000 帧 → `__call__` 内产生 (B, seq, 6906) 级中间数组
+（整批 argmax int64 ~2.2GB/千帧；Windows 堆不归还 → RSS 保持高位）：
+- ONNX 分片 64 → 16（实测更快 + ORT arena 峰值 920 → 300MB）
+- `_ctc_decode_batch` 分块归约（每块 64 帧，峰值 ~150MB，数值一致）
+- correction 批量预热分批 ≤64 帧/次调用
+
+**配套修复**：
+- ONNX 推理显式 `intra_op=cpu//2`（默认占满全部核会饿死解码器；
+  与 rapidocr 时代配置一致）
+- re-OCR 失败帧也写 cache 空集（避免每帧 ~8.7ms 重试推理）；
+  `_multi_height_ocr` 重命名为 `_reocr_crop`（多高度早已弃用）
+- 内存泄漏修复：`next_frame_roi` 视图引用全帧（3000 帧 → 18GB）
+  改为 `.copy()`
+
+**decord 侧（CPU 解码）**：
+- 强制 BT.601 色彩转换（setparams）：CUDA 路径固定 BT.601 矩阵，
+  FFmpeg 按流的 bt709 标志转换 → 同帧 RGB 系统性偏差（G 通道
+  +7.5）→ CPU 识别失败。对齐后 CPU/GPU 像素一致（差 ≤2）
+- SkipFramesImpl 改纯计数跳过（PTS 丢帧在 best_effort 时间戳不匹配
+  时失效 → 帧漂移）
+- SeekAccurate 恢复 seek(0) 回退（直接 keyframe seek 在 CPU 解码器
+  下落点偏 2 帧）
+- **NextFrameRoi CPU 分支 ROI-only 输出**（新）：原 CPU 路径返回全帧、
+  asnumpy 每帧拷贝 6.2MB 再 Python 裁剪；改为 C++ 内 row-stride memcpy
+  只输出 ROI 矩形（106×33 = 10KB）—— 消除每帧 ~0.6ms 全帧拷贝
+  （decode 计时的 ~37%）。GPU 路径 cudaMemcpy2D 不变。
+- **FFmpeg 解码线程默认 2 → 4**（16 核实测矩阵：2 线程 decode 18.1s /
+  总 23.6s；4 线程 decode 11.6s / 总 16.9s；6 线程无增益且推理更慢）
+
+**无 GPU 用户全量验证**（DECORD_FORCE_CPU=1，test5 7223 帧全范围）：
+**23.6s → 14.7s（-38%）**，精度 99.93% 不变。构成：decode 9.7s
+（745fps，原 18.1s）+ inference 7.4s（并行）+ correction 4.3s；
+peak RSS 843MB（decode 段 ~400MB 稳定）。与 GPU 硬解路径（12.5s）
+差距缩小到 ~15%（NVDEC 硬底 ~1000fps vs CPU 745fps）。
+
+**bench_decoder.py 修复**：
+- 子进程 stdout/stderr 由 PIPE 改为文件重定向 —— 原 PIPE 不读管道，
+  CLI 每帧 progress flush 超 64KB 缓冲后子进程阻塞挂死（bench 超时
+  10 分钟的根因）
+- 显式传 --ocr-model/--reocr-model（默认 v6_tiny/v6_small）——
+  原命令不传，from-csv 用 truth CSV 头的 model=v6_small 覆盖默认值，
+  主 OCR 静默变 small（实测 infer 26.5s vs tiny 6.4s，同款坑第二次）
+- RSS 采样覆盖 launcher 后代进程（Windows venv python.exe 是 launcher，
+  原采样恒 5MB，现实测 843MB）
+
+## v2.8.0 (2026-08-03) — 相对 v2.7.1 的完整变更（v2.7.2 未发布，合并记录）
+
+### 算法精度提升（ground truth 验证，CPU 同口径）
+
+手动模式 d=0 全面达到/超过自动模式（test2 手动 +6.0pp）；test2 自动 >5 误差 20→0。
+关键修复：信任传播验证空洞、插值锚点物理验证、自洽帧锚定、fill 候选优先。
+
+| 组合 | v2.7.1 d=0 | v2.8.0 d=0 | v2.7.1 >5 | v2.8.0 >5 |
+| --- | --- | --- | --- | --- |
+| test 自动 | 98.1% | 97.6% | 2 | 6 |
+| test 手动 | 96.2% | **97.6%** | 32 | **4** |
+| test2 自动 | 96.2% | **98.7%** | 20 | **3** |
+| test2 手动 | 92.9% | **99.1%** | 19 | **5** |
+
+### 性能
+
+- 批处理 OCR 推理（-40% 推理时间；total 22.8s → 17.5s）
+- 新 decord 构建（GPU NDArrayPool）：管线 decode 15.9s → 10.9s
+
+### GUI：迁移 pyqtgraph 并全面收尾
+
+- Matplotlib 图表全部迁移至 pyqtgraph（数据分析 Tab + 最终检查窗口）：
+  高频缩放/拖动流畅，支持数千散点；Ctrl/Shift+滚轮分轴缩放、右键拖拽选范围
+- 右上角统计/悬停文字：TextItem anchor 裁剪修复（此前被顶出视图不可见），
+  并钉在视图角落跟随缩放/平移，不再拖后腿跳回
+- 右键点击取消选区：pyqtgraph 将纯点击路由到 mouseClickEvent 而非
+  mouseDragEvent → 补发 sig_drag_click；点击选区外取消并恢复提示
+- `pg.mkBrush(color, alpha=…)` 静默丢弃 alpha → `make_brush()` 显式构造
+  透明 QColor，修复选区/散点完全不透明
+- 图表上/右框线（ViewBox.setBorder，随主题变色）；空轴零尺寸渲染被裁剪
+  的坑已规避
+- 审核窗口：sigRangeChangedManually 发射掩码而非 ViewBox 的崩溃修复；
+  已确定点修改实时预览；选中已确定点显示蓝白描边；红/蓝特殊点尺寸 6；
+  移除低置信度背景高亮（橙色散点保留标记）；区域边界改深蓝
+- 图表文字/框线随主题切换变色；rebuild 断开旧回调，消除累积泄漏
+- PreviewWidget 提取、主题回调泄漏修复、ReviewDialog 深副本（修复预览值泄漏）
+- 清理 matplotlib 时代死代码（setup_chart_zoom_pan、HoverOverlay）
+
+### 结构重构
+
+- ocr_engine.py 拆分 6 模块（constants/csv_io/ocr_text/signals/video_utils）
+- correction.py：ModeProfile 收敛模式差异；锚点验证/自洽锚定提升为固有机制
+- 死代码清理、工具修复、文档/CI 同步
+
+### 修复
+
+- TRT 批处理 OCR 超出引擎优化 profile（batch 上限 6）→ 按 profile 查询
+  并自动分片提交，消除 setInputShape 错误刷屏
+- 模块拆分丢失的 import math / CONFUSION_MAP 归位；33/33 单测通过
+- 修复 82 处 Pylance 类型错误（pyright 全项目 0 errors）；spec/pyproject
+  模块清单补全，EXE 构建验证通过（headless 分析 + 完整 OCR 流程）
+
+### 其他
+
+- ground_truth 升级 v2.7 标准格式（实测 fps + codec + 整数行 + max_width）
+- test5_ref 置信度更新
+- 测试视频统一存放至 D:\Videos\racelog_test
 
 ---
 

@@ -5,82 +5,17 @@ from __future__ import annotations
 import csv
 import gc
 import os as _os
-import sys
 import logging
 import time as _time
 from pathlib import Path
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
-import cv2
+if TYPE_CHECKING:
+    from ocr_native import OcrEngine
+
 import numpy as np
 
-
-def _register_cuda_dll_dirs() -> None:
-    """Register CUDA Toolkit bin directories so decord can find cudart etc.
-
-    Scans the CUDA_PATH env var and system PATH for CUDA installations
-    and calls os.add_dll_directory() for each one found."""
-    if sys.platform != "win32":
-        return
-    _found: set[str] = set()
-    # 1) CUDA_PATH / CUDA_PATH_V* env vars
-    for _k, _v in _os.environ.items():
-        if _k.startswith("CUDA_PATH") and _v:
-            _bin = Path(_v) / "bin"
-            if _bin.is_dir():
-                _found.add(str(_bin))
-    # 2) Scan PATH for entries containing "CUDA" or "cuda" with cudart dll
-    for _entry in _os.environ.get("PATH", "").split(";"):
-        _p = _entry.strip()
-        if not _p:
-            continue
-        _lp = _p.lower().replace("\\", "/")
-        if ("cuda" in _lp and "bin" in _lp) or "nvidia" in _lp:
-            try:
-                if any(f.startswith("cudart64_") for f in _os.listdir(_p)
-                       if f.lower().endswith(".dll")):
-                    _found.add(_p)
-            except OSError:
-                pass
-    for _d in sorted(_found):
-        try:
-            _os.add_dll_directory(_d)
-        except OSError:
-            pass
-
-
-_register_cuda_dll_dirs()
-
-
-def _find_ffprobe() -> str | None:
-    """Locate ffprobe.exe bundled alongside the decord package."""
-    import importlib.util as _iu
-    try:
-        _spec = _iu.find_spec("decord")
-        if _spec and _spec.origin:
-            _d = Path(_spec.origin).parent / "ffprobe.exe"
-            if _d.is_file():
-                return str(_d)
-    except Exception:
-        pass
-    return None
-
-
-def get_video_codec(video_path) -> str:
-    """Return the video codec name (e.g. h264, hevc) using bundled ffprobe."""
-    _ffprobe = _find_ffprobe()
-    if not _ffprobe:
-        return ""
-    import subprocess
-    try:
-        _r = subprocess.run(
-            [_ffprobe, "-v", "error", "-select_streams", "v:0",
-             "-show_entries", "stream=codec_name",
-             "-of", "default=noprint_wrappers=1:nokey=1", str(video_path)],
-            capture_output=True, text=True, timeout=15)
-        return _r.stdout.strip() if _r.returncode == 0 else ""
-    except Exception:
-        return ""
 
 
 def open_decord_vr(video_path, force_cpu: bool = False):
@@ -118,22 +53,14 @@ def open_decord_vr(video_path, force_cpu: bool = False):
 
 from ocr_engine import (
     clamp_region, compute_video_hash,
-    extract_speed_value, SpeedObservation, Flag,
+    extract_speed_value, ocr_rec_batch, SpeedObservation, Flag,
     SOURCE_TO_KMH, _parse_int_or_none,
-    _reset_backend, _select_backend, _get_model_params,
+    _reset_backend, _select_backend,
 )
 import config
 from error_detection import detect_errors
 from correction import correct_errors
-from gpu_setup import get_gpu_backend, get_engine_params, get_engine_type
-
-# ── Memory diagnostics (feat/memory-diag) ──
-_MEM_DIAG_ENABLED = False  # set True to enable per-frame RSS logging
-
-def _mf(fmt: str, *args) -> None:
-    """Emit a memory-diag log line if enabled."""
-    if _MEM_DIAG_ENABLED:
-        logger.info("[MEM] " + fmt, *args)
+from gpu_setup import get_gpu_backend, get_engine_type
 
 def _rss_mb() -> float:
     import os as _os
@@ -154,25 +81,8 @@ def _sum_nbytes(seq) -> int:
 logger = logging.getLogger("RaceVideoToLog.pipeline")
 
 
-def _preprocess_standard(crop: np.ndarray, target_h: int, pad: int,
-                         max_width: int = 0) -> np.ndarray:
-    """标准预处理：resize (cv2) + 可选宽度限制 + 填充。
-
-    max_width > 0 时限制宽度上限（px），用于纠正扁宽字体
-    （如数字高度≈宽度时设为 96 可恢复 ~2:1 高宽比）。
-    """
-    h, w = crop.shape[:2]
-    if target_h < 8:
-        raise ValueError(f"target_h 必须 >= 8，当前为 {target_h}")
-    new_w = max(1, int(w * target_h / h)) if h > 0 else w
-    if max_width > 0:
-        new_w = min(new_w, max_width)
-    resized = cv2.resize(crop, (new_w, target_h)) if abs(target_h / h - 1.0) > 0.02 else crop
-    if pad > 0:
-        resized = cv2.copyMakeBorder(resized, pad, pad, pad, pad,
-                                     cv2.BORDER_REPLICATE)
-    return resized
-
+import video_utils
+from video_utils import _preprocess_standard
 
 ProgressFn = Callable[[str, float], None]
 
@@ -219,10 +129,11 @@ class ProcessingPipeline:
         self._final_check = final_check
         self._max_width = max_width
         self._video_backend_actual: str = ""  # set by _run_ocr: "decord/GPU" or "decord/CPU"
+        self._codec: str = ""  # 视频编码（_run_ocr 打开 reader 时记录）
 
         # 状态
-        self._ocr: "RapidOCR | None" = None
-        self._reocr: "RapidOCR | None" = None  # 重 OCR 引擎
+        self._ocr: "OcrEngine | None" = None
+        self._reocr: "OcrEngine | None" = None  # 重 OCR 引擎
         self._raw_frames: list[tuple[float, np.ndarray]] = []
         self._observations: list[SpeedObservation] = []
         self._rows: list[list] = []
@@ -239,10 +150,30 @@ class ProcessingPipeline:
         self._confidences: list[dict] = []
         self.last_output_path: Path | None = None
 
+    # ── 公开只读属性（消除跨模块私有访问）──
+    @property
+    def timing(self) -> dict[str, float]:
+        return self._timing
+
+    @property
+    def rows(self) -> list:
+        return self._rows
+
+    @property
+    def observations(self) -> list:
+        return self._observations
+
+    @property
+    def raw_frames(self) -> list:
+        return self._raw_frames
+
+    @property
+    def confidences(self) -> list:
+        return self._confidences
+
     # ═══════════════ 公开接口 ═══════════════
 
-    def run_auto(self, output_path: str | Path, reocr_only: bool = True,
-                 mode: str = "auto") -> None:
+    def run_auto(self, output_path: str | Path, mode: str = "auto") -> None:
         """纠错流水线 → 写 CSV。
 
         mode: \"auto\" → full pipeline + force_smooth
@@ -265,7 +196,7 @@ class ProcessingPipeline:
             self._write_csv(self._rows, Path(output_path))
             self._write_diagnostics(Path(output_path))
         else:
-            self._run_correction(Path(output_path), reocr_only=reocr_only, mode=mode)
+            self._run_correction(Path(output_path), mode=mode)
             for row in self._rows:
                 if row[2] > self._max_speed:
                     row[2] = -1
@@ -291,24 +222,21 @@ class ProcessingPipeline:
             rows.append([obs.timestamp, 0.0, int(obs.raw_speed_kmh), Flag.RAW])
         return rows
 
-    def _ensure_ocr(self) -> "RapidOCR":
-        from rapidocr import RapidOCR
+    def _ensure_ocr(self) -> "OcrEngine":
+        from ocr_native import OcrEngine
         if self._ocr is None:
             _reset_backend()
             self._backend_actual = _select_backend(self._backend)
-            engine_params = get_engine_params()
             _et = get_engine_type()
-            model_params = _get_model_params(self._ocr_model, _et)
-            all_params = {**(model_params or {}), **engine_params}
             if _et == "tensorrt":
-                self._emit("加载 TensorRT 引擎（首次使用可能需要几分钟构建引擎）...", 1.5)
-            self._ocr = RapidOCR(params=all_params)
+                self._emit("加载 TensorRT 引擎...", 1.5)
+            self._ocr = OcrEngine(self._ocr_model, _et,
+                                  progress_cb=lambda m: self._emit(m, 2.0))
             # 若指定了不同的重 OCR 模型，创建独立引擎
             _reocr_model = self._reocr_model or self._ocr_model
             if _reocr_model != self._ocr_model:
-                reocr_model_params = _get_model_params(_reocr_model, _et)
-                reocr_all_params = {**(reocr_model_params or {}), **engine_params}
-                self._reocr = RapidOCR(params=reocr_all_params)
+                self._reocr = OcrEngine(_reocr_model, _et,
+                                        progress_cb=lambda m: self._emit(m, 3.0))
             else:
                 self._reocr = self._ocr
         return self._ocr
@@ -329,9 +257,7 @@ class ProcessingPipeline:
         self._emit("Phase 1: error detection...", progress_base + 1.0)
         self._error_report = detect_errors(
             self._rows, self._observations, times,
-            self._max_accel, self._max_speed,
-            split_results=self._split_results if self._split_results else None,
-            fps=self._fps)
+            self._max_accel, self._max_speed, fps=self._fps)
         self._detection_confidence = self._error_report.confidence
         self._confidences = self._detection_confidence
         n_low = sum(1 for c in self._detection_confidence if c['score'] < 30)
@@ -342,15 +268,18 @@ class ProcessingPipeline:
         def _prog(done, total):
             if done % max(1, total // 5) != 0 and done != total: return
             self._emit(f"corr: {done}/{total}", progress_base + 2.0 + (done/max(total,1))*progress_span)
+        _reocr = self._reocr
+        assert _reocr is not None
         self._rows, self._detection_confidence = correct_errors(
-            self._rows, self._observations, self._raw_frames, self._reocr,
+            self._rows, self._observations, self._raw_frames, _reocr,
             self._detection_confidence, times,
             self._max_speed, self._max_accel, mode=mode,
             pinned=self._pinned if self._pinned else None,
-            reocr_cache=self._reocr_cache, reocr_only=reocr_only,
+            reocr_cache=self._reocr_cache,
             split_results=self._split_results if self._split_results else None,
             fps=self._fps, progress_fn=_prog,
-            notes=self._diag_notes if self._diag else None)
+            notes=self._diag_notes if self._diag else None,
+            max_width=self._max_width)
         self._confidences = self._detection_confidence
         self._populate_diag_final()
         self._timing["correction"] = _time.perf_counter() - t0
@@ -371,10 +300,9 @@ class ProcessingPipeline:
         self.last_output_path = out_path
         return out_path
 
-    def _run_correction(self, output_path: Path, reocr_only: bool = False,
-                        mode: str = "auto") -> None:
+    def _run_correction(self, output_path: Path, mode: str = "auto") -> None:
         """纠错 + 写 CSV（调用 _correct 后继续）。"""
-        self._correct(91.0, 6.0, reocr_only=reocr_only, mode=mode)
+        self._correct(91.0, 6.0, mode=mode)
         if not self._final_check:
             self.finalize(output_path)
 
@@ -388,6 +316,7 @@ class ProcessingPipeline:
         from queue import Queue
 
         ocr = self._ocr
+        assert ocr is not None
         speed_format = self._speed_format
         target_h = self._target_h
         pad = self._pad
@@ -397,14 +326,16 @@ class ProcessingPipeline:
 
         # ── 视频源：decord GPU 优先 → CPU 回退 ──
         _vr, _gpu_label = open_decord_vr(self._video_path)
+        try:
+            self._codec = _vr.get_codec() or ""
+        except Exception:
+            pass
         total_video_frames = len(_vr)
         fps = _vr.get_avg_fps(); self._fps = fps
         _first = _vr[0].asnumpy()
         h, w = _first.shape[:2]
         self._video_backend_actual = f"decord/{_gpu_label}"
         logger.info("Video source: decord (%s)", _gpu_label)
-        _mf("video-opened: %dframes %dx%d  %s  rss=%.0fMB",
-            total_video_frames, w, h, _gpu_label, _rss_mb())
 
         x1, y1, x2, y2 = clamp_region(*self._roi, w, h)
         f_start = _parse_int_or_none(self._frame_start)
@@ -429,20 +360,16 @@ class ProcessingPipeline:
                         self._cancel_check()
                     _t0 = _time.perf_counter()
                     try:
-                        _frame = _vr.next().asnumpy()
+                        # next_roi：GPU 上只拷 ROI 到主机（免全帧 D2H + crop）；
+                        # 老 DLL / CPU 回退 next() + 裁切
+                        _crop = video_utils.next_frame_roi(
+                            _vr, x1, y1, x2 + 1, y2 + 1)
                     except StopIteration:
                         break
-                    _crop = _frame[y1:y2 + 1, x1:x2 + 1].copy()
-                    del _frame
                     self._raw_frames.append((_fi, _crop))
                     _proc = _preprocess_standard(_crop, target_h, pad, max_width=_max_width)
                     _decode_ms += (_time.perf_counter() - _t0) * 1000.0
                     q.put((_fi, _proc))
-                    # ── memory diag ──
-                    if _MEM_DIAG_ENABLED and len(self._raw_frames) % 120 == 0:
-                        _raw_nb = _sum_nbytes([x[1] for x in self._raw_frames])
-                        _mf("decoded=%d  raw_frames=%5.1fMB  rss=%5.0fMB",
-                            len(self._raw_frames), _raw_nb/1e6, _rss_mb())
                     skip = frame_step - 1
                     if skip > 0:
                         _vr.skip_frames(skip)
@@ -461,54 +388,66 @@ class ProcessingPipeline:
         done = 0
         _inference_ms = 0.0  # accumulator: OCR inference time (ms)
         est_total = (_end_limit - (f_start or 0)) // frame_step
+        # ── 批处理识别：一次 session.run 处理多帧，摊销每帧固定开销 ──
+        # batch 上限 6：匹配 TRT rec 引擎 profile max_shape 的 batch 维度；
+        # CPU 下 batch 6 已接近最优（实测 0.26 ms/帧 vs 单帧 0.85 ms）。
+        _batch_size = max(1, config.OCR_FRAME_BATCH)
+        _batch: list = []
+
+        def _flush_batch() -> None:
+            """对 _batch 内所有帧做一次批识别，追加到 observations/diag。"""
+            nonlocal done, _inference_ms
+            if not _batch:
+                return
+            items = _batch[:]
+            _batch.clear()
+            t_ocr0 = _time.perf_counter()
+            results = ocr_rec_batch(ocr, [proc for _, proc in items])
+            t_ocr = (_time.perf_counter() - t_ocr0) * 1000.0
+            _inference_ms += t_ocr
+            t_ocr_each = t_ocr / len(items)
+            for (fi, _proc), ocr_result in zip(items, results):
+                sv, rt, conf = extract_speed_value(ocr_result)
+                if sv is not None and rt is not None:
+                    observations.append(SpeedObservation(
+                        timestamp=fi,
+                        raw_speed_kmh=int(sv * SOURCE_TO_KMH[speed_format]),
+                        raw_text=rt,
+                        confidence=conf))
+                else:
+                    observations.append(SpeedObservation(fi, -1, ""))
+                if _collect_diag:
+                    diag.append({
+                        "frame": fi,
+                        "raw_text": rt or "",
+                        "raw_value": sv,
+                        "confidence": round(conf, 4),
+                        "ocr_time_ms": round(t_ocr_each, 2),
+                    })
+                done += 1
+                if done % 10 == 0 or done <= 3 or done == est_total:
+                    pct = 3.0 + (done / max(est_total, 1)) * 87.0
+                    _label = f"{self._video_backend_actual} + {get_gpu_backend()}"
+                    self._emit(f"[{_label}] OCR: {done}/{est_total}", pct)
+
         while True:
             item = q.get()
             if item is None:
+                _flush_batch()
                 break
-            fi, proc = item
-            t_ocr0 = _time.perf_counter()
-            ocr_result = ocr(proc)
-            t_ocr = (_time.perf_counter() - t_ocr0) * 1000.0
-            _inference_ms += t_ocr
-            sv, rt, conf = extract_speed_value(ocr_result)
-            if sv is not None and rt is not None:
-                observations.append(SpeedObservation(
-                    timestamp=fi,
-                    raw_speed_kmh=int(sv * SOURCE_TO_KMH[speed_format]),
-                    raw_text=rt,
-                    confidence=conf))
-            else:
-                observations.append(SpeedObservation(fi, -1, ""))
-            if _collect_diag:
-                diag.append({
-                    "frame": fi,
-                    "raw_text": rt or "",
-                    "raw_value": sv,
-                    "confidence": round(conf, 4),
-                    "ocr_time_ms": round(t_ocr, 2),
-                })
-            done += 1
-            if done % 10 == 0 or done <= 3 or done == est_total:
-                pct = 3.0 + (done / max(est_total, 1)) * 87.0
-                _label = f"{self._video_backend_actual} + {get_gpu_backend()}"
-                self._emit(f"[{_label}] OCR: {done}/{est_total}", pct)
-            if _MEM_DIAG_ENABLED and done % 120 == 0:
-                _mf("consumer: done=%d  qsize~%d  rss=%.0fMB",
-                    done, q.qsize(), _rss_mb())
+            _batch.append(item)
+            if len(_batch) >= _batch_size:
+                _flush_batch()
         t.join()
         if errors:
             raise errors[0]
         self._observations = observations
         self._diag = diag
         self._diag_notes: dict[int, str] = {}
-        # ── memory diag: pre-release ──
-        _mf("pre-release: raw_frames=%d  rss=%.0fMB",
-            len(self._raw_frames), _rss_mb())
         # Release decoder to free internal frame buffers
         if _vr is not None:
             del _vr
         gc.collect()
-        _mf("post-release(del _vr): rss=%.0fMB", _rss_mb())
         self._timing["ocr"] = _time.perf_counter() - t_start
         self._timing["decode"] = _decode_ms / 1000.0
         self._timing["inference"] = _inference_ms / 1000.0
@@ -543,7 +482,7 @@ class ProcessingPipeline:
         n_pinned = sum(1 for row in rows if row[3] == Flag.PINNED)
         n_corrected = sum(1 for row in rows if Flag.is_corrected(row[3]))
         timing_str = ", ".join(f"{k}={v:.1f}s" for k, v in self._timing.items())
-        _codec = get_video_codec(str(self._video_path)) or ""
+        _codec = self._codec or ""
         with output_path.open("w", newline="", encoding="utf-8-sig") as fh:
             fh.write(f"# RaceVideoToLog v{config.__version__}\n")
             fh.write(f"# video_hash={vhash}, video={self._video_path.name}"
@@ -569,9 +508,9 @@ class ProcessingPipeline:
             if timing_str:
                 fh.write(f"# timing: {timing_str}\n")
             w = csv.writer(fh)
-            for row in rows:
-                w.writerow([f"{int(row[0])}", f"{row[1]:.2f}",
-                            f"{int(row[2])}", str(row[3])])
+            # 批量写（writerows 与 writerow 逐行输出逐字节一致，长视频省 1-2s）
+            w.writerows((f"{int(row[0])}", f"{row[1]:.2f}",
+                         f"{int(row[2])}", str(row[3])) for row in rows)
 
     def _populate_diag_final(self) -> None:
         """Fill final_value, flag, and correction_note into diagnostics."""

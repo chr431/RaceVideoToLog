@@ -22,7 +22,7 @@ set PY=.venv\Scripts\python
 
 REM [2/4] Verify key deps + PyInstaller
 echo [2/4] Checking dependencies ...
-%PY% -c "import rapidocr, onnxruntime, numpy, PySide6, matplotlib, decord, qfluentwidgets, shapely, pyclipper, tensorrt, cuda"
+%PY% -c "import onnxruntime, numpy, PySide6, decord, qfluentwidgets, shapely, pyclipper, cuda"
 if errorlevel 1 (
     echo   Some deps missing, reinstalling ...
     %PY% -m pip install -e .
