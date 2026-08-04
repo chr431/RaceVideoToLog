@@ -40,6 +40,38 @@ timing + 精度一并输出、JSON 记录）；新增 `tools/decord_smoke.py`
 无低成本解法）；decord GPU 路径 decode 硬底 ~1000fps（NVDEC 转换
 流水线每帧同步受 NVDEC surface 生命周期约束，无法移除）。
 
+### CPU 组合（decord/CPU 解码 + ONNX CPU 推理，无 NVIDIA GPU 用户）
+
+**核心修复（性能 -74%）**：`next_frame_roi` 对 CPU reader 返回了全帧
+（decord 的 next_roi 对非 CUDA 上下文回退全帧），封装未裁剪 → CPU
+路径把 1080p 全帧缩略图喂给 OCR → ~95% 帧识别失败 → 置信度崩溃 →
+每帧都进 correction → test4 全量 246s。修复后 63s（精度 97.98%，
+反超 GPU 路径的 97.86%）。
+
+**配套修复**：
+- ONNX 推理显式 `intra_op=cpu//2`（默认占满全部核会饿死解码器；
+  与 rapidocr 时代配置一致）
+- ONNX re-OCR 批量分片 64 帧（5942 帧一次性批推理 OOM：
+  MaxPool bad allocation）
+- re-OCR 失败帧也写 cache 空集（避免每帧 ~8.7ms 重试推理）；
+  `_multi_height_ocr` 重命名为 `_reocr_crop`（多高度早已弃用）
+
+**decord 侧（CPU 解码）**：
+- 强制 BT.601 色彩转换（setparams）：CUDA 路径固定 BT.601 矩阵，
+  FFmpeg 按流的 bt709 标志转换 → 同帧 RGB 系统性偏差（G 通道
+  +7.5）→ CPU 识别失败。对齐后 CPU/GPU 像素一致（差 ≤2）
+- SkipFramesImpl 改纯计数跳过（PTS 丢帧在 best_effort 时间戳不匹配
+  时失效 → 帧漂移）
+- SeekAccurate 恢复 seek(0) 回退（直接 keyframe seek 在 CPU 解码器
+  下落点偏 2 帧）
+- FFmpeg 解码线程默认 2（auto=全核与 ONNX 推理抢核，600 帧实测
+  27s → 20.5s）
+
+**剩余差距**（记录在案）：CPU 全量 decode ~16s（390fps 物理下限）
++ ONNX 推理 ~12s + correction ~15s ≈ 63s；decode 与推理并行时的
+抢核竞争使 pipeline 内 decode 计时升至 ~40s（producer/consumer
+架构性，无低成本解法）。
+
 ## v2.8.0 (2026-08-03) — 相对 v2.7.1 的完整变更（v2.7.2 未发布，合并记录）
 
 ### 算法精度提升（ground truth 验证，CPU 同口径）
