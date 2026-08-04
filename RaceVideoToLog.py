@@ -61,6 +61,13 @@ def main() -> None:
     # ── 从 CSV 导入设置 ──
     if args.from_csv:
         from ocr_engine import parse_csv_header, parse_csv_setting, csv_field_dest
+        # 命令行显式写出的参数（即使等于默认值）优先于 CSV。
+        # 例：--ocr-model v6_tiny 等于默认值，旧逻辑误判"未指定"被 CSV 的
+        # model=v6_small 覆盖，导致引擎静默换成 small。
+        _explicit = {
+            a[2:].split("=", 1)[0].replace("-", "_")
+            for a in sys.argv[1:] if a.startswith("--")
+        }
         csv_settings = parse_csv_header(args.from_csv)
         _defaults = {a.dest: a.default
                         for a in parser._actions if a.dest != "help"}
@@ -68,6 +75,8 @@ def main() -> None:
             dest = csv_field_dest(key)
             if dest is None or not hasattr(args, dest):
                 continue  # read-only fields (fps/codec) or unknown — skip
+            if dest in _explicit:
+                continue  # 命令行显式指定 — 不被 CSV 覆盖
             cur = getattr(args, dest)
             if cur != _defaults.get(dest):
                 continue  # user explicitly overrode — skip

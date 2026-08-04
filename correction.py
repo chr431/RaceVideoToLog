@@ -669,7 +669,12 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
             _batch_frames.append(fi)
             _batch_procs.append(_preprocess_standard(crop_bgr, 48, 0, max_width=max_width))
         if _batch_procs:
-            _results = ocr_rec_batch(ocr, _batch_procs)
+            # 分批推理（每批 ≤64 帧）：一次喂全部帧会在 __call__ 内产生
+            # (B, seq, 6906) 级中间数组（整批 argmax int64 峰值 ~2.2GB/千帧，
+            # Windows 堆不归还 → RSS 保持高位）。分批后峰值 ~600MB。
+            _results: list = []
+            for _s0 in range(0, len(_batch_procs), 64):
+                _results.extend(ocr_rec_batch(ocr, _batch_procs[_s0:_s0 + 64]))
             for fi, res in zip(_batch_frames, _results):
                 crop_bgr = raw_frames[fi][1]
                 raw = crop_bgr.data.tobytes() if hasattr(crop_bgr, 'data') else crop_bgr.tobytes()

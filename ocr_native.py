@@ -222,8 +222,10 @@ class OcrEngine:
             return np.concatenate(outs, axis=0)
         # ONNX 动态 batch 无上限：re-OCR 预热可能一次喂数千帧（test4 5942
         # 帧）→ 中间激活内存爆炸（MaxPool bad allocation）。分片限制单批
-        # 帧数，输出形状不变。
-        onnx_max = 64
+        # 帧数，输出形状不变。分片 16（原 64）：小片实测更快（64 片有线程
+        # 同步/带宽瓶颈）且 ORT arena 峰值更低（64: 920MB vs 16: 300MB，
+        # (3,48,320) small 模型 992 帧实测）。
+        onnx_max = 16
         if len(batch_np) <= onnx_max:
             return np.asarray(self._session.run(None, {"x": batch_np})[0],
                               dtype=np.float32)
@@ -295,25 +297,28 @@ class OcrEngine:
     def _ctc_decode_batch(self, preds: np.ndarray) -> list:
         """批 CTC decode：(B, seq, C) → list[RecOut]。
 
-        argmax/max/keep 掩码一次归约（与逐帧 _ctc_decode 的相同归约按行
-        应用 → 数值一致）；文本与置信度逐帧拼接。
+        分块归约（每块 64 帧）：整批 argmax 在 C=6906 时产生 (B, seq)
+        int64，~1000 帧一次归约峰值 ~2.2GB（Windows 堆不归还 → RSS 保持
+        高位）。分块后峰值 ~150MB。逐行归约与整批数值一致。
         """
-        idx = preds.argmax(axis=2)  # (B, seq)
-        prob = preds.max(axis=2)
-        keep = np.ones_like(idx, dtype=bool)
-        keep[:, 1:] = idx[:, 1:] != idx[:, :-1]
-        keep &= idx != 0  # blank
         out: list = []
-        for b in range(len(preds)):
-            kb = keep[b]
-            if kb.any():
-                text = "".join(self._chars[i] for i in idx[b][kb])
-                # 与 rapidocr 一致：每帧概率先 round(5) 再取均值，最后 round(5)
-                confs = [round(float(p), 5) for p in prob[b][kb]]
-                conf = round(float(np.mean(confs)), 5)
-            else:
-                text, conf = "", 0.0
-            out.append(RecOut(text, conf))
+        for s0 in range(0, len(preds), 64):
+            chunk = preds[s0:s0 + 64]
+            idx = chunk.argmax(axis=2)  # (B, seq) int64
+            prob = chunk.max(axis=2)
+            keep = np.ones_like(idx, dtype=bool)
+            keep[:, 1:] = idx[:, 1:] != idx[:, :-1]
+            keep &= idx != 0  # blank
+            for b in range(len(chunk)):
+                kb = keep[b]
+                if kb.any():
+                    text = "".join(self._chars[i] for i in idx[b][kb])
+                    # 与 rapidocr 一致：每帧概率先 round(5) 再取均值，最后 round(5)
+                    confs = [round(float(p), 5) for p in prob[b][kb]]
+                    conf = round(float(np.mean(confs)), 5)
+                else:
+                    text, conf = "", 0.0
+                out.append(RecOut(text, conf))
         return out
 
     # ═══════════════ 批处理入口 ═══════════════
