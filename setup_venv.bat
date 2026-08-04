@@ -66,6 +66,22 @@ rem 先清理 PyPI decord 自带的 FFmpeg 4.x DLL（避免与 FFmpeg 8 DLL 混�
 del /q "%_DECORD_DIR%\avcodec-58.dll" "%_DECORD_DIR%\avformat-58.dll" "%_DECORD_DIR%\avutil-56.dll" 2>nul
 del /q "%_DECORD_DIR%\avfilter-7.dll" "%_DECORD_DIR%\avdevice-58.dll" "%_DECORD_DIR%\swresample-3.dll" "%_DECORD_DIR%\swscale-5.dll" "%_DECORD_DIR%\postproc-55.dll" 2>nul
 for %%f in (_decord_build\*.dll _decord_build\ffprobe.exe) do copy /Y "%%f" "%_DECORD_DIR%\" >nul
+rem Fork Python 层（next_roi / get_codec）：PyPI decord 0.6.0 没有这两个
+rem API，只拷 DLL 会导致编码显示 "?" 且解码退回全帧路径（ROI 优化失效）。
+if exist "_decord_build\python\decord\video_reader.py" goto :py_layer_build
+if exist "..\decord\python\decord\video_reader.py" goto :py_layer_sibling
+echo [WARNING] Fork decord Python 层未找到 - next_roi/get_codec 不可用
+goto :decord_done
+
+:py_layer_build
+xcopy /E /Y /I "_decord_build\python\decord\*" "%_DECORD_DIR%\" >nul
+echo   Fork decord Python layer installed.
+set _COPIED=1
+goto :decord_done
+
+:py_layer_sibling
+xcopy /E /Y /I "..\decord\python\decord\*" "%_DECORD_DIR%\" >nul
+echo   Fork decord Python layer installed (from sibling repo).
 set _COPIED=1
 goto :decord_done
 

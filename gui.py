@@ -615,7 +615,7 @@ class RaceVideoToLogApp(QMainWindow):
             return
         self._export_btn.setEnabled(True); self._cancel_btn.setEnabled(False)
         self._export_thread = None
-        self._show_final_check(mode)
+        self._show_final_check()
 
     def _show_final_check(self) -> None:
         pipeline = getattr(self, "_pipeline", None)
