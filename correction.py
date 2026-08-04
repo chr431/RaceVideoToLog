@@ -238,6 +238,52 @@ def _reocr_crop(crop_bgr: "np.ndarray", ocr: "OcrEngine", max_speed_kmh: float,
 
 # ═══════════════════ Candidate generation ═══════════════════
 
+def _prewarm_reocr(frames: "set[int] | list[int]", raw_frames: list,
+                   ocr: "OcrEngine", cache: dict, max_speed_kmh: float,
+                   max_width: int = 0) -> None:
+    """批量 re-OCR 预热：对 frames 中未缓存帧一次性批推理填 cache。
+
+    供 correct_errors 和 pipeline（主 OCR 阶段后台线程）复用。
+    线程安全：与 correct_errors 的预热段并发调用时，同一帧的结果相同
+    （同模型同预处理），重复推理仅浪费、不产生错误。
+    """
+    from video_utils import _preprocess_standard
+    from ocr_engine import ocr_rec_batch, extract_speed_value as _esv
+    _batch_frames: list[int] = []
+    _batch_procs: list = []
+    for fi in sorted(frames):
+        if fi >= len(raw_frames):
+            continue
+        crop_bgr = raw_frames[fi][1]
+        if crop_bgr is None or crop_bgr.size == 0:
+            continue
+        raw = crop_bgr.tobytes()
+        ck = hash(raw[:256])
+        if ck in cache:
+            continue
+        _batch_frames.append(fi)
+        _batch_procs.append(_preprocess_standard(crop_bgr, 48, 0, max_width=max_width))
+    if not _batch_procs:
+        return
+    # 分批推理（每批 ≤64 帧）：一次喂全部帧会在 __call__ 内产生
+    # (B, seq, 6906) 级中间数组（整批 argmax int64 峰值 ~2.2GB/千帧，
+    # Windows 堆不归还 → RSS 保持高位）。分批后峰值 ~600MB。
+    _results: list = []
+    for _s0 in range(0, len(_batch_procs), 64):
+        _results.extend(ocr_rec_batch(ocr, _batch_procs[_s0:_s0 + 64]))
+    for fi, res in zip(_batch_frames, _results):
+        crop_bgr = raw_frames[fi][1]
+        raw = crop_bgr.tobytes()
+        sv, rt, _conf = _esv(res)
+        # 失败帧也写空集：同一帧重试结果必然相同（同模型同预处理），
+        # 避免 _reocr_crop 逐帧重试推理（CPU 低质帧多时曾
+        # 每帧 ~8.7ms × 数百帧重试）
+        if sv is not None and sv <= max_speed_kmh:
+            cache[hash(raw[:256])] = {int(sv)}
+        else:
+            cache[hash(raw[:256])] = set()
+
+
 def _generate_candidates(fi: int, rows: list, observations: list, raw_frames: list,
                          ocr: "OcrEngine", pinned_set: set, times: list,
                          max_speed_kmh: float, reocr_cache: dict,
@@ -634,41 +680,11 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
     # ── re-OCR 批量预热：候选生成前一次性批推理所有未缓存帧 ──
     # _reocr_crop 逐帧调用会浪费 session.run 固定开销（~3x 慢）。
     # 先批量预处理+推理填 cache，逐帧循环全部命中。
+    # （pipeline 可在主 OCR 阶段提前启动 _prewarm_reocr 并行预热，
+    #   此处只补剩余未缓存帧 —— cache 检查天然增量。）
     if raw_frames and ocr is not None:
-        from video_utils import _preprocess_standard
-        from ocr_engine import ocr_rec_batch, extract_speed_value as _esv
-        _batch_frames: list[int] = []
-        _batch_procs: list = []
-        for fi in sorted(correction_frames):
-            if fi >= len(raw_frames):
-                continue
-            crop_bgr = raw_frames[fi][1]
-            if crop_bgr is None or crop_bgr.size == 0:
-                continue
-            raw = crop_bgr.tobytes()
-            ck = hash(raw[:256])
-            if ck in cache:
-                continue
-            _batch_frames.append(fi)
-            _batch_procs.append(_preprocess_standard(crop_bgr, 48, 0, max_width=max_width))
-        if _batch_procs:
-            # 分批推理（每批 ≤64 帧）：一次喂全部帧会在 __call__ 内产生
-            # (B, seq, 6906) 级中间数组（整批 argmax int64 峰值 ~2.2GB/千帧，
-            # Windows 堆不归还 → RSS 保持高位）。分批后峰值 ~600MB。
-            _results: list = []
-            for _s0 in range(0, len(_batch_procs), 64):
-                _results.extend(ocr_rec_batch(ocr, _batch_procs[_s0:_s0 + 64]))
-            for fi, res in zip(_batch_frames, _results):
-                crop_bgr = raw_frames[fi][1]
-                raw = crop_bgr.tobytes()
-                sv, rt, _conf = _esv(res)
-                # 失败帧也写空集：同一帧重试结果必然相同（同模型同预处理），
-                # 避免 _reocr_crop 逐帧重试推理（CPU 低质帧多时曾
-                # 每帧 ~8.7ms × 数百帧重试）
-                if sv is not None and sv <= max_speed_kmh:
-                    cache[hash(raw[:256])] = {int(sv)}
-                else:
-                    cache[hash(raw[:256])] = set()
+        _prewarm_reocr(correction_frames, raw_frames, ocr, cache,
+                       max_speed_kmh, max_width)
 
     for idx, fi in enumerate(sorted(correction_frames)):
         cands = _generate_candidates(fi, rows, observations, raw_frames, ocr, pinned_set,
