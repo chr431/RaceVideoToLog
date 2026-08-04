@@ -31,8 +31,6 @@ hiddenimports = [
     'gui_export', 'gui_settings', 'gui_preview', 'viterbi', 'error_detection',
     'widget_utils', 'theme_manager', 'csv_io', 'ocr_text', 'signals',
     'video_utils', 'tensorrt', 'ocr_native',
-    # cv2 (rec 预处理 resize)
-    'cv2',
 ]
 
 # onnxruntime（CPU provider；TensorRT 由 tensorrt_bindings 直接调用）
@@ -197,8 +195,6 @@ _EXCLUDE_BINARIES = {
     'postproc-58.dll',
     'avformat-60.dll', 'avutil-58.dll', 'avcodec-60.dll',
     'avdevice-60.dll', 'avfilter-9.dll', 'postproc-57.dll',
-    # opencv (removed from project, exclude if caught transitively)
-    'opencv_world480.dll', 'opencv_world490.dll',
     # Stale FFmpeg DLLs (PyPI decord 4.x + previous self-build 5.x)
     'avcodec-58.dll', 'avformat-58.dll', 'avutil-56.dll',
     'avfilter-7.dll', 'avdevice-58.dll', 'swresample-3.dll',
@@ -206,9 +202,6 @@ _EXCLUDE_BINARIES = {
     'avcodec-59.dll', 'avformat-59.dll', 'avutil-57.dll',
     'avfilter-8.dll', 'avdevice-59.dll', 'swresample-4.dll',
     'swscale-6.dll', 'postproc-56.dll',
-    # opencv bundled FFmpeg (decord handles all video I/O)
-    'opencv_videoio_ffmpeg500_64.dll', 'opencv_videoio_ffmpeg490_64.dll',
-    'opencv_videoio_ffmpeg480_64.dll',
 }
 a.binaries = [(n, p, t) for n, p, t in a.binaries
               if os.path.basename(p) not in _EXCLUDE_BINARIES]

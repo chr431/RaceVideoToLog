@@ -6,7 +6,6 @@ from pathlib import Path
 DEPS = {
     "rapidocr": "3.9.2",
     "onnxruntime": "1.27.0",
-    "opencv-python-headless": "5.0.0.93",
     "decord": "0.6.0",
     "PySide6": "6.11.1",
     "PySide6-Fluent-Widgets": "1.11.2",

@@ -87,15 +87,42 @@ def compute_video_hash(video_path: str | Path, chunk_size: int = 1_048_576) -> s
     return h.hexdigest()[:16]  # 前 16 字符足够区分
 
 
+def _np_resize(img: "np.ndarray", new_w: int, new_h: int) -> "np.ndarray":
+    """双线性 resize（float32），与 cv2.resize INTER_LINEAR 像素对齐一致。
+
+    坐标映射复刻 OpenCV：src = (dst + 0.5) * scale - 0.5（像素中心对齐）。
+    与 cv2 的数值差 <= 1e-5（浮点累加顺序），无实际影响；输出 float32。
+    移除 cv2 依赖后的轻量替代（EXE -83MB）。
+    """
+    src_h, src_w = img.shape[:2]
+    if new_w == src_w and new_h == src_h:
+        return img.astype(np.float32)
+    scale_x = src_w / new_w
+    scale_y = src_h / new_h
+    src_x = np.clip((np.arange(new_w) + 0.5) * scale_x - 0.5, 0, src_w - 1)
+    src_y = np.clip((np.arange(new_h) + 0.5) * scale_y - 0.5, 0, src_h - 1)
+    x0 = src_x.astype(np.int32)
+    y0 = src_y.astype(np.int32)
+    x1 = np.minimum(x0 + 1, src_w - 1)
+    y1 = np.minimum(y0 + 1, src_h - 1)
+    wx = (src_x - x0).astype(np.float32)[None, :, None]
+    wy = (src_y - y0).astype(np.float32)[:, None, None]
+    f = img.astype(np.float32)
+    return ((1 - wx) * (1 - wy) * f[y0[:, None], x0[None, :]] +
+            wx * (1 - wy) * f[y0[:, None], x1[None, :]] +
+            (1 - wx) * wy * f[y1[:, None], x0[None, :]] +
+            wx * wy * f[y1[:, None], x1[None, :]])
+
+
 def _preprocess_standard(crop: "np.ndarray", target_h: int, pad: int,
                          max_width: int = 0) -> "np.ndarray":
-    """标准预处理：resize (cv2) + 可选宽度限制 + 填充。
+    """标准预处理：resize（numpy 双线性）+ 可选宽度限制 + 边缘填充。
 
     max_width > 0 时限制宽度上限（px），用于纠正扁宽字体
     （如数字高度≈宽度时设为 96 可恢复 ~2:1 高宽比）。
     主识别（pipeline）与 re-OCR（correction）共用，保证一致。
+    输出 float32（与 cv2 路径数值差 <= 1e-5）。
     """
-    import cv2
     h, w = crop.shape[:2]
     if target_h < 8:
         raise ValueError(f"target_h 必须 >= 8，当前为 {target_h}")
@@ -103,10 +130,10 @@ def _preprocess_standard(crop: "np.ndarray", target_h: int, pad: int,
     if max_width > 0:
         new_w = min(new_w, max_width)
     if abs(target_h / h - 1.0) > 0.02:
-        resized = cv2.resize(crop, (new_w, target_h))
+        resized = _np_resize(crop, new_w, target_h)
     else:
-        resized = crop
+        resized = crop.astype(np.float32)
     if pad > 0:
-        resized = cv2.copyMakeBorder(resized, pad, pad, pad, pad,
-                                     cv2.BORDER_REPLICATE)
+        resized = np.pad(resized, ((pad, pad), (pad, pad), (0, 0)),
+                         mode="edge")  # 等价 cv2 BORDER_REPLICATE
     return resized

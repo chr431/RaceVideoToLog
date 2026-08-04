@@ -160,6 +160,7 @@ class OcrEngine:
     def _resize_norm(img: np.ndarray, max_wh_ratio: float,
                      height: int = 48) -> np.ndarray:
         """resize 到 48 高 + (x/255-0.5)/0.5 归一化 + pad 到 batch 最大宽。"""
+        from video_utils import _np_resize
         img_width = int(height * max_wh_ratio)
         h, w = img.shape[:2]
         ratio = w / float(h)
@@ -167,9 +168,7 @@ class OcrEngine:
             resized_w = img_width
         else:
             resized_w = int(math.ceil(height * ratio))
-        import cv2
-        resized = cv2.resize(img, (resized_w, height))
-        resized = resized.astype("float32").transpose((2, 0, 1)) / 255
+        resized = _np_resize(img, resized_w, height).transpose((2, 0, 1)) / 255
         resized = (resized - 0.5) / 0.5
         pad = np.zeros((3, height, img_width), dtype=np.float32)
         pad[:, :, :resized_w] = resized

@@ -13,7 +13,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-import cv2
 import numpy as np
 
 from ocr_engine import extract_speed_value, build_speed_candidates, Flag

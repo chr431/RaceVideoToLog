@@ -15,7 +15,6 @@ dependencies = [
     "pyclipper",
     "shapely",
 ]
-# opencv-python-headless is a transitive dep of rapidocr — no longer used directly.
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
