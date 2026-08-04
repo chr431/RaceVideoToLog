@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer
 from widget_utils import make_static_card, disable_spin_flyout, set_value_silent
 from PySide6.QtGui import (
-    QPixmap, QImage, QPainter, QPen, QColor, QKeySequence, QShortcut,
+    QPixmap, QImage, QKeySequence, QShortcut,
 )
 
 from ocr_engine import (
@@ -68,7 +68,6 @@ class RaceVideoToLogApp(QMainWindow):
         self.video_path: Path | None = None
         self._pipeline: object | None = None
         self.metadata: VideoMetadata | None = None
-        self.first_frame_rgb: np.ndarray | None = None
         self.first_frame_qimg: QImage | None = None
         self._preview_vr: "VideoReader | None" = None  # decord VideoReader
         self._preview_frame_no: int = 0
@@ -76,7 +75,6 @@ class RaceVideoToLogApp(QMainWindow):
         self._throttle_timer.setSingleShot(True)
         self._throttle_timer.timeout.connect(self._show_throttled_frame)
         self.ocr_engine: "OcrEngine | None" = None
-        self._codec_cache: dict[str, str] = {}
 
         self._export_thread: ExportThread | None = None
         self.correction_mode: str = config.DEFAULT_CORRECTION_MODE
@@ -341,8 +339,6 @@ class RaceVideoToLogApp(QMainWindow):
         self.video_path = path
         self.metadata = VideoMetadata(path=path, duration_sec=dur, width=w, height=h,
             fps=fps, codec=codec, frame_count=fc)
-        self.first_frame_rgb = first
-
         hh, ww, ch = first.shape
         self.first_frame_qimg = QImage(first.data, ww, hh, ch * ww,
             QImage.Format.Format_RGB888).copy()
@@ -427,10 +423,6 @@ class RaceVideoToLogApp(QMainWindow):
         actual = _select_backend(key)
         _backend_labels = {"TensorRT": "TensorRT (GPU)", "CUDA": "CUDA (GPU)", "CPU": "CPU"}
         self._status_label.setText(f"OCR 后端: {_backend_labels.get(actual, actual)}")
-
-    def get_ocr_engine(self) -> "OcrEngine":
-        if self.ocr_engine is None: self.ocr_engine = self._create_ocr()
-        return self.ocr_engine
 
     def _reocr_model(self) -> str | None:
         """解析重 OCR 模型选择：'同主模型' → None，否则返回模型名。"""
@@ -625,23 +617,18 @@ class RaceVideoToLogApp(QMainWindow):
         self._export_thread = None
         self._show_final_check(mode)
 
-    def _show_final_check(self, review_scope: str = "auto") -> None:
+    def _show_final_check(self) -> None:
         pipeline = getattr(self, "_pipeline", None)
         out = getattr(self, "_review_output_path", None)
         if pipeline is None or out is None:
             return
         rows = pipeline.rows
-        confidences = getattr(pipeline, 'confidences', None)
-        if confidences is None:
-            from correction import compute_confidence
-            confidences = compute_confidence(rows, pipeline.observations,
-                pipeline._max_speed, pipeline._max_accel)
+        confidences = pipeline.confidences
         # 传入 rows 深副本：对话框内的预览修改不会泄漏到主数据；
         # 只有 get_corrections() 的确认项在关闭后单点写回。
         dlg = ReviewDialog(self, [r[:] for r in rows], pipeline.observations,
             pipeline.raw_frames, confidences,
-            pipeline._max_speed, pipeline._max_accel,
-            review_scope=review_scope)
+            pipeline._max_speed, pipeline._max_accel)
         _t("final_check: before exec")
         if dlg.exec() == QDialog.DialogCode.Accepted:
             for fi, v in dlg.get_corrections().items():

@@ -28,8 +28,7 @@ class ReviewDialog(QDialog):
                     raw_frames: list, confidences: list[dict],
                     max_speed: float,
                     max_accel: float = config.DEFAULT_MAX_ACCEL,
-                    review_scope: str = "auto",
-                        fps: float = 1.0) -> None:
+                    fps: float = 1.0) -> None:
         super().__init__(parent)
         self.setWindowTitle("最终检查 — 点击图中任意点修正单帧")
         self.resize(1200, 750)
@@ -43,7 +42,6 @@ class ReviewDialog(QDialog):
         self._max_speed = max_speed
         self._max_accel = max_accel
         self._fps = fps
-        self._review_scope = review_scope  # "auto"=仅剖面偏离, "full"=所有信号
         self._corrections: dict[int, float] = {}
         self._current_frame: int = 0
 
@@ -426,12 +424,6 @@ class ReviewDialog(QDialog):
             i += 1
         return regions
 
-    def _get_correction_xy(self, times: list[float]
-                            ) -> tuple[list[float], list[float]]:
-        cx = [times[fi] for fi in self._corrections if fi < len(times)]
-        cy = [self._corrections[fi] for fi in self._corrections if fi < len(times)]
-        return cx, cy
-
     # ═══════════════ 图像 + 导航 ═══════════════
 
     def _show_frame_image(self, frame_index: int) -> None:
@@ -486,10 +478,6 @@ class ReviewDialog(QDialog):
 
     # pick 已由 _on_scatter_clicked 处理（pyqtgraph sigClicked）
 
-
-    @staticmethod
-    def _speed_label(val: float) -> str:
-        return "失败" if val < 0 else f"{val:.0f}km/h"
 
     def _speed_input_value(self, fi: int) -> int:
         if fi in self._corrections:

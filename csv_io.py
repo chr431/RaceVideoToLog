@@ -28,7 +28,6 @@ _CSV_FIELD_MAP: dict[str, tuple[str, str]] = {
     "frame_end":     ("frame_end",     "int"),
     "model":         ("ocr_model",     "str"),
     "reocr_model":   ("reocr_model",   "str"),
-    "video_backend": ("video_backend", "str"),
     "fps":          ("fps",          "float"),
     "codec":        ("codec",        "str"),
 }

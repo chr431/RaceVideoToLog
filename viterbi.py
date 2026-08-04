@@ -55,15 +55,14 @@ def viterbi_correct(
     corrected: dict[int, float] = {}
     error_set: set[int] = set()
     dp_cost: list[float] = [-1.0] * n
-    path_values: list[float | None] = [None] * n
 
     for seg_start, seg_end in segments:
         _viterbi_segment(seg_start, seg_end, rows, candidates_by_frame, conf_by_idx,
             times, max_speed_kmh, max_accel_mps2, obs_weight, accel_weight,
-            trusted_boundary_threshold, corrected, error_set, dp_cost, path_values,
+            trusted_boundary_threshold, corrected, error_set, dp_cost,
             reference_values=reference_values)
 
-    confidence = _compute_confidence_scores(n, dp_cost, path_values, rows, conf_by_idx, max_speed_kmh)
+    confidence = _compute_confidence_scores(n, dp_cost, rows, conf_by_idx, max_speed_kmh)
 
     return {'corrected': corrected, 'confidence': confidence,
             'error_set': error_set, 'dp_cost': dp_cost}
@@ -101,7 +100,7 @@ def _viterbi_segment(
     times: list[float], max_speed_kmh: float, max_accel_mps2: float,
     obs_weight: float, accel_weight: float, trusted_boundary_threshold: int,
     corrected: dict[int, float], error_set: set[int],
-    dp_cost: list[float], path_values: list[float | None],
+    dp_cost: list[float],
     reference_values: dict[int, float] | None = None,
 ) -> None:
     n_seg = seg_end - seg_start + 1
@@ -219,7 +218,6 @@ def _viterbi_segment(
         fi = seg_start + k
         optimal_val = path[k]
         raw_val = rows[fi][2]
-        path_values[fi] = optimal_val
         raw_cost = float(np.min(dp_vals[k]))
         dp_cost[fi] = raw_cost if isinstance(raw_cost, (int, float)) and raw_cost >= 0 else 0.0
         if abs(optimal_val - raw_val) > VITERBI_CHANGE_THRESHOLD_KMH:
@@ -254,8 +252,7 @@ def _trans_cost(v: float, w: float, dt: float, max_accel_mps2: float,
     return accel_weight * excess * excess
 
 
-def _compute_confidence_scores(n: int, dp_cost: list[float],
-                               path_values: list[float | None], rows: list,
+def _compute_confidence_scores(n: int, dp_cost: list[float], rows: list,
                                conf_by_idx: dict[int, float],
                                max_speed_kmh: float) -> list[dict]:
     max_cost = VITERBI_MIN_MAX_COST

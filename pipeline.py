@@ -5,7 +5,6 @@ from __future__ import annotations
 import csv
 import gc
 import os as _os
-import sys
 import logging
 import time as _time
 from pathlib import Path
@@ -62,14 +61,6 @@ import config
 from error_detection import detect_errors
 from correction import correct_errors
 from gpu_setup import get_gpu_backend, get_engine_type
-
-# ── Memory diagnostics (feat/memory-diag) ──
-_MEM_DIAG_ENABLED = False  # set True to enable per-frame RSS logging
-
-def _mf(fmt: str, *args) -> None:
-    """Emit a memory-diag log line if enabled."""
-    if _MEM_DIAG_ENABLED:
-        logger.info("[MEM] " + fmt, *args)
 
 def _rss_mb() -> float:
     import os as _os
@@ -182,8 +173,7 @@ class ProcessingPipeline:
 
     # ═══════════════ 公开接口 ═══════════════
 
-    def run_auto(self, output_path: str | Path, reocr_only: bool = True,
-                 mode: str = "auto") -> None:
+    def run_auto(self, output_path: str | Path, mode: str = "auto") -> None:
         """纠错流水线 → 写 CSV。
 
         mode: \"auto\" → full pipeline + force_smooth
@@ -206,7 +196,7 @@ class ProcessingPipeline:
             self._write_csv(self._rows, Path(output_path))
             self._write_diagnostics(Path(output_path))
         else:
-            self._run_correction(Path(output_path), reocr_only=reocr_only, mode=mode)
+            self._run_correction(Path(output_path), mode=mode)
             for row in self._rows:
                 if row[2] > self._max_speed:
                     row[2] = -1
@@ -267,9 +257,7 @@ class ProcessingPipeline:
         self._emit("Phase 1: error detection...", progress_base + 1.0)
         self._error_report = detect_errors(
             self._rows, self._observations, times,
-            self._max_accel, self._max_speed,
-            split_results=self._split_results if self._split_results else None,
-            fps=self._fps)
+            self._max_accel, self._max_speed, fps=self._fps)
         self._detection_confidence = self._error_report.confidence
         self._confidences = self._detection_confidence
         n_low = sum(1 for c in self._detection_confidence if c['score'] < 30)
@@ -287,7 +275,7 @@ class ProcessingPipeline:
             self._detection_confidence, times,
             self._max_speed, self._max_accel, mode=mode,
             pinned=self._pinned if self._pinned else None,
-            reocr_cache=self._reocr_cache, reocr_only=reocr_only,
+            reocr_cache=self._reocr_cache,
             split_results=self._split_results if self._split_results else None,
             fps=self._fps, progress_fn=_prog,
             notes=self._diag_notes if self._diag else None,
@@ -312,10 +300,9 @@ class ProcessingPipeline:
         self.last_output_path = out_path
         return out_path
 
-    def _run_correction(self, output_path: Path, reocr_only: bool = False,
-                        mode: str = "auto") -> None:
+    def _run_correction(self, output_path: Path, mode: str = "auto") -> None:
         """纠错 + 写 CSV（调用 _correct 后继续）。"""
-        self._correct(91.0, 6.0, reocr_only=reocr_only, mode=mode)
+        self._correct(91.0, 6.0, mode=mode)
         if not self._final_check:
             self.finalize(output_path)
 
@@ -349,8 +336,6 @@ class ProcessingPipeline:
         h, w = _first.shape[:2]
         self._video_backend_actual = f"decord/{_gpu_label}"
         logger.info("Video source: decord (%s)", _gpu_label)
-        _mf("video-opened: %dframes %dx%d  %s  rss=%.0fMB",
-            total_video_frames, w, h, _gpu_label, _rss_mb())
 
         x1, y1, x2, y2 = clamp_region(*self._roi, w, h)
         f_start = _parse_int_or_none(self._frame_start)
@@ -385,11 +370,6 @@ class ProcessingPipeline:
                     _proc = _preprocess_standard(_crop, target_h, pad, max_width=_max_width)
                     _decode_ms += (_time.perf_counter() - _t0) * 1000.0
                     q.put((_fi, _proc))
-                    # ── memory diag ──
-                    if _MEM_DIAG_ENABLED and len(self._raw_frames) % 120 == 0:
-                        _raw_nb = _sum_nbytes([x[1] for x in self._raw_frames])
-                        _mf("decoded=%d  raw_frames=%5.1fMB  rss=%5.0fMB",
-                            len(self._raw_frames), _raw_nb/1e6, _rss_mb())
                     skip = frame_step - 1
                     if skip > 0:
                         _vr.skip_frames(skip)
@@ -449,9 +429,6 @@ class ProcessingPipeline:
                     pct = 3.0 + (done / max(est_total, 1)) * 87.0
                     _label = f"{self._video_backend_actual} + {get_gpu_backend()}"
                     self._emit(f"[{_label}] OCR: {done}/{est_total}", pct)
-                if _MEM_DIAG_ENABLED and done % 120 == 0:
-                    _mf("consumer: done=%d  qsize~%d  rss=%.0fMB",
-                        done, q.qsize(), _rss_mb())
 
         while True:
             item = q.get()
@@ -467,14 +444,10 @@ class ProcessingPipeline:
         self._observations = observations
         self._diag = diag
         self._diag_notes: dict[int, str] = {}
-        # ── memory diag: pre-release ──
-        _mf("pre-release: raw_frames=%d  rss=%.0fMB",
-            len(self._raw_frames), _rss_mb())
         # Release decoder to free internal frame buffers
         if _vr is not None:
             del _vr
         gc.collect()
-        _mf("post-release(del _vr): rss=%.0fMB", _rss_mb())
         self._timing["ocr"] = _time.perf_counter() - t_start
         self._timing["decode"] = _decode_ms / 1000.0
         self._timing["inference"] = _inference_ms / 1000.0

@@ -41,8 +41,6 @@ def main() -> None:
         help="预处理最大宽度 px（0=不限）。扁宽字体设为 96 可改善识别")
     parser.add_argument("--buffer", type=int, default=config.DEFAULT_BUFFER_SIZE)
     parser.add_argument("--backend", choices=config.BACKEND_KEYS, default=config.DEFAULT_BACKEND)
-    parser.add_argument("--video-backend", choices=["cv2","decord"], default="decord",
-        help=argparse.SUPPRESS)  # deprecated; only decord is supported
     parser.add_argument("--ocr-model", choices=["v6_tiny", "v6_small"], default=config.DEFAULT_OCR_MODEL,
         help="主 OCR 模型 (默认 tiny)")
     parser.add_argument("--reocr-model", choices=["v6_tiny", "v6_small"], default=config.DEFAULT_REOCR_MODEL,

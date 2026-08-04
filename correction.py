@@ -210,7 +210,7 @@ def _reocr_crop(crop_bgr: "np.ndarray", ocr: "OcrEngine", max_speed_kmh: float,
                 cache: dict | None = None, max_width: int = 0) -> set:
     cache = cache if cache is not None else {}
     if crop_bgr is not None and crop_bgr.size > 0:
-        raw = crop_bgr.data.tobytes() if hasattr(crop_bgr, 'data') else crop_bgr.tobytes()
+        raw = crop_bgr.tobytes()
         cache_key = hash(raw[:256])
     else:
         cache_key = None
@@ -242,8 +242,7 @@ def _generate_candidates(fi: int, rows: list, observations: list, raw_frames: li
                          ocr: "OcrEngine", pinned_set: set, times: list,
                          max_speed_kmh: float, reocr_cache: dict,
                          split_results: dict[int, str] | None,
-                         reocr_only: bool, fps: float,
-                         confidence_score: float,
+                         fps: float,
                          max_accel_mps2: float | None = None,
                          max_width: int = 0) -> list[float]:
     raw_val = rows[fi][2]
@@ -281,14 +280,7 @@ def _generate_candidates(fi: int, rows: list, observations: list, raw_frames: li
     other: list[float] = []
     other_set: set[float] = set()
 
-    if not reocr_only:
-        for cv in build_speed_candidates(obs.raw_text, max_speed_kmh):
-            if cv not in protected_set and cv not in other_set:
-                other.append(cv); other_set.add(cv)
-        for cv in _auto_expand_digits(obs.raw_text, max_speed_kmh):
-            if cv not in protected_set and cv not in other_set:
-                other.append(cv); other_set.add(cv)
-    needs_interp = (not reocr_only) or (raw_val < 0)
+    needs_interp = raw_val < 0
     if needs_interp:
         interp_val = _interp_candidate(fi, rows, times, max_speed_kmh, fps=fps)
         if interp_val is None:
@@ -314,22 +306,13 @@ def _fill_unrecoverable(rows: list, pinned_set: set, error_set: set, times: list
                         max_speed_kmh: float, max_accel_mps2: float, fps: float = 1.0,
                         progress_fn: "Callable | None" = None,
                         notes: dict[int, str] | None = None,
-                        candidates_by_frame: dict[int, list[float]] | None = None,
-                        conservative: bool = False) -> None:
-    """Fill frames that Viterbi could not recover.
-
-    conservative=True (manual mode): only fill truly unreadable frames
-    (raw<0 or raw>max_speed). Readable-but-wrong frames keep their raw
-    value so outliers stay visible for manual correction — interpolation
-    guesses trade small bias for a smooth-but-wrong ramp.
-    """
+                        candidates_by_frame: dict[int, list[float]] | None = None) -> None:
+    """Fill frames that Viterbi could not recover."""
     n = len(rows)
     sorted_errors = sorted(i for i in error_set if i not in pinned_set and not Flag.is_trusted(rows[i][3]))
     total = len(sorted_errors)
     for idx, i in enumerate(sorted_errors):
         raw_v = rows[i][2]
-        if conservative and 0 <= raw_v <= max_speed_kmh:
-            continue  # 可读帧保留原始值，离群留给人工
         la = None
         for j in range(i - 1, -1, -1):
             if Flag.is_trusted(rows[j][3]) and 0 <= rows[j][2] <= max_speed_kmh:
@@ -616,7 +599,7 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
                    ocr: "OcrEngine", confidence_scores: list[dict],
                    times: list[float], max_speed_kmh: float, max_accel_mps2: float,
                    mode: str = "auto", pinned: set[int] | None = None,
-                   reocr_cache: dict | None = None, reocr_only: bool = True,
+                   reocr_cache: dict | None = None,
                    split_results: dict[int, str] | None = None,
                    fps: float = 1.0, log_fn: "Callable | None" = None,
                    progress_fn: "Callable | None" = None,
@@ -662,7 +645,7 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
             crop_bgr = raw_frames[fi][1]
             if crop_bgr is None or crop_bgr.size == 0:
                 continue
-            raw = crop_bgr.data.tobytes() if hasattr(crop_bgr, 'data') else crop_bgr.tobytes()
+            raw = crop_bgr.tobytes()
             ck = hash(raw[:256])
             if ck in cache:
                 continue
@@ -677,7 +660,7 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
                 _results.extend(ocr_rec_batch(ocr, _batch_procs[_s0:_s0 + 64]))
             for fi, res in zip(_batch_frames, _results):
                 crop_bgr = raw_frames[fi][1]
-                raw = crop_bgr.data.tobytes() if hasattr(crop_bgr, 'data') else crop_bgr.tobytes()
+                raw = crop_bgr.tobytes()
                 sv, rt, _conf = _esv(res)
                 # 失败帧也写空集：同一帧重试结果必然相同（同模型同预处理），
                 # 避免 _reocr_crop 逐帧重试推理（CPU 低质帧多时曾
@@ -689,8 +672,8 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
 
     for idx, fi in enumerate(sorted(correction_frames)):
         cands = _generate_candidates(fi, rows, observations, raw_frames, ocr, pinned_set,
-            times, max_speed_kmh, cache, split_results, reocr_only=reocr_only,
-            fps=fps, confidence_score=conf_by_idx.get(fi, 50),
+            times, max_speed_kmh, cache, split_results,
+            fps=fps,
             max_accel_mps2=max_accel_mps2, max_width=max_width)
         if cands: candidates_by_frame[fi] = cands
         if progress_fn and total_correct > 0: progress_fn(idx + 1, total_correct)
@@ -945,27 +928,3 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
             c['score'] = round(c['score'] * FINAL_CONF_BLEND_PHASE1 + viterbi_conf[i] * FINAL_CONF_BLEND_VITERBI, 1)
 
     return rows, confidence_scores
-
-
-# ═══════════════════ Backward-compat API ═══════════════════
-
-def compute_confidence(rows: list, observations: list, max_speed: float,
-                       max_accel: float, pinned: set[int] | None = None,
-                       fps: float = 1.0) -> list[dict]:
-    from error_detection import _signal_physics, _signal_ocr_conf
-    n = len(rows)
-    times = [r[0] / fps for r in rows]
-    ocr_conf = _signal_ocr_conf(observations, n)
-    physics = _signal_physics(rows, times, max_accel)
-    confidences = []
-    from config import COMPAT_CONF_OCR_WEIGHT, COMPAT_CONF_PHYSICS_WEIGHT
-    for i in range(n):
-        score = round(max(0.0, min(100.0, COMPAT_CONF_OCR_WEIGHT * ocr_conf[i] + COMPAT_CONF_PHYSICS_WEIGHT * physics[i])), 1)
-        flags = [r[3] for r in rows]; cur = rows[i][2]
-        if cur < 0 or cur > max_speed: reason = '速度超出范围'
-        elif score >= 70: reason = '正常'
-        elif score >= 30: reason = '存疑'
-        else: reason = '错误'
-        confidences.append({'index': i, 'score': score,
-            'is_corrected': Flag.is_corrected(flags[i]), 'speed': cur, 'reason': reason})
-    return confidences

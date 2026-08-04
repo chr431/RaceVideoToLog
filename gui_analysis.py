@@ -12,7 +12,7 @@ import pyqtgraph as pg
 
 from PySide6.QtWidgets import (
     QWidget, QFileDialog, QMessageBox, QHBoxLayout, QVBoxLayout, QGridLayout,
-    QStackedWidget, QSpinBox,
+    QStackedWidget,
 )
 from PySide6.QtCore import Qt, QTimer
 from qfluentwidgets import (PushButton, PrimaryPushButton, CompactSpinBox, isDarkTheme,
@@ -232,7 +232,7 @@ class AnalysisTab:
 
 
     def _setup_chart_interactions(self, plot, all_x, all_y, is_dtx, is_vt,
-                                 delta_label, label):
+                                 label):
         """交互：LinearRegionItem 拖选区间统计 + 悬停竖线 + 修饰键缩放。"""
         import pyqtgraph as pg
         plot_item = plot.getPlotItem()
@@ -556,13 +556,12 @@ class AnalysisTab:
             if is_dtx:
                 xlabel, ylabel = "距离 (m)", "Δt (s)"
                 title = f"时间差-距离 ({name1} vs {name2})"
-                delta_label = "Δ(Δt)"
             elif is_vt:
                 xlabel, ylabel = "时间 (s)", "速度 (km/h)"
-                title = "速度-时间曲线"; delta_label = "行驶距离"
+                title = "速度-时间曲线"
             else:
                 xlabel, ylabel = "距离 (m)", "速度 (km/h)"
-                title = "速度-距离曲线"; delta_label = "用时"
+                title = "速度-距离曲线"
 
             plot.setLabel('bottom', xlabel, color=fg)
             plot.setLabel('left', ylabel, color=fg)
@@ -580,7 +579,7 @@ class AnalysisTab:
 
             # ── 交互 ──
             self._setup_chart_interactions(plot, all_x, all_y,
-                is_dtx, is_vt, delta_label, label)
+                is_dtx, is_vt, label)
 
             vb2 = plot_item.vb
             assert vb2 is not None

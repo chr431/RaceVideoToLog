@@ -1,64 +1,50 @@
-# 上游依赖跟踪
+# 上游依赖跟踪（v2.9.0）
 
 ## 核心依赖
 
-| 包 | 当前版本 | 最低版本 | PyPI | 备注 |
-| --- | --- | --- | --- | --- |
-| rapidocr | 3.9.2 | 3.9 | [rapidocr](https://pypi.org/project/rapidocr/) | PP-OCRv6 ONNX 模型。3.9.2 新增 `use_preprocess_img`（保持 True，TRT 内部 resize 更优） |
-| onnxruntime | 1.28.0 | 1.27 | [onnxruntime](https://pypi.org/project/onnxruntime/) | CPU 推理回退；CUDA provider 已移除 |
-| opencv-python-headless | 5.0.0 | 5.0 | [opencv-python-headless](https://pypi.org/project/opencv-python-headless/) | 图像预处理 (resize, cvtColor) |
-| decord | 0.6.0 | 0.6 | [decord](https://pypi.org/project/decord/) | NVDEC 硬件视频解码；⚠️ 捆绑 FFmpeg 4.x DLL |
-| PySide6 | 6.11.1 | 6.11 | [PySide6](https://pypi.org/project/PySide6/) | Qt 6 GUI |
-| PySide6-Fluent-Widgets | 1.11.2 | 1.11 | [PySide6-Fluent-Widgets](https://pypi.org/project/PySide6-Fluent-Widgets/) | Fluent Design 组件库 |
-| numpy | 2.5.1 | 2.0 | [numpy](https://pypi.org/project/numpy/) | |
-| pyclipper | 1.4.0 | — | [pyclipper](https://pypi.org/project/pyclipper/) | rapidocr 依赖 |
-| shapely | 2.1.2 | — | [shapely](https://pypi.org/project/shapely/) | rapidocr 依赖 |
-
-## GPU 加速
-
-| 包 | 当前测试版本 | 来源 | 备注 |
+| 包 | 最低版本 | 来源 | 备注 |
 | --- | --- | --- | --- |
-| tensorrt | 10.16.1.11 | [tensorrt](https://pypi.org/project/tensorrt/) | **仅 10.x**；`--no-deps` 安装，DLL 走系统 PATH |
-| tensorrt_cu13_bindings | 10.16.1.11 | [tensorrt_cu13_bindings](https://pypi.org/project/tensorrt_cu13_bindings/) | Python 绑定（~1MB） |
-| cuda-python | 13.3.1 | [cuda-python](https://pypi.org/project/cuda-python/) | CUDA Python 绑定（~33MB） |
-| CUDA Toolkit | 12.9 | [NVIDIA 官网](https://developer.nvidia.com/cuda-downloads) | 提供 cudart, cublas 等 DLL（系统 PATH） |
+| onnxruntime | 1.27 | PyPI | CPU 推理后端（OcrEngine 直连） |
+| numpy | 2.0 | PyPI | 预处理/信号计算（纯 numpy，无 scipy） |
+| PySide6-Essentials | 6.11 | PyPI | Qt 6 GUI（只装核心，省 Addons ~300MB） |
+| PySide6-Fluent-Widgets | 1.11 | PyPI | Fluent Design 组件库 |
+| pyqtgraph | 0.14 | PyPI | 分析/检查图表（替代 matplotlib） |
+| cuda-python | — | PyPI | CUDA Python 绑定（TRT 执行 + decord GPU DLL 注册） |
+| tensorrt_cu13_bindings | 10 | PyPI | TensorRT Python 绑定（~1MB） |
+| decord | 自建 | 自建仓库 chr431/decord（feat/perf-deep） | NVDEC 硬解 + CPU 软件解码；FFmpeg 8.x DLL。**PyPI 版不支持 next_roi / CPU ROI 优化**，见 setup_venv.bat |
 
-**注意**：`tensorrt_cu13_bindings`（Python 绑定，~1MB）通过 `setup_venv.bat` 的 `pip install -e ".[gpu]"` 安装。`tensorrt` 元包及 `tensorrt_cu13_libs`（~2.2GB DLL）被有意排除，运行时 DLL 从系统 PATH（CUDA/TensorRT 安装目录）加载。
+## GPU 加速（运行时，不打包）
+
+| 组件 | 来源 | 备注 |
+| --- | --- | --- |
+| CUDA Toolkit | NVIDIA 官网 | cudart/cublas 等 DLL，需在 PATH |
+| TensorRT | NVIDIA 官网 | nvinfer DLL，需在 PATH；首次运行自动构建引擎缓存到 `%LOCALAPPDATA%/RaceVideoToLog/ocr_engines/` |
+
+`tensorrt` 元包与 `tensorrt_cu13_libs`（~2.2GB DLL）被有意排除 —— 运行时 DLL 从系统 PATH 加载。
 
 ## 打包工具
 
-| 包 | 当前版本 | PyPI |
-| --- | --- | --- |
-| pyinstaller | 6.21.0 | [pyinstaller](https://pypi.org/project/pyinstaller/) |
+| 包 | PyPI |
+| --- | --- |
+| pyinstaller | [pyinstaller](https://pypi.org/project/pyinstaller/) |
 
 ## 已知问题
 
-### rapidocr 3.9.1
-- `_initialize()` 无条件创建 `TextDetector` / `TextClassifier`（即使 `use_det=False` / `use_cls=False`）。已通过 monkey-patch 规避 (`ocr_engine._patch_rapidocr_init`)
-- 识别模型需要 BGR 输入（不能灰度），已适配 `_preprocess_standard` 和 `_re_ocr_frame`
+### decord（自建）
+- 需与 FFmpeg 8.x DLL（avcodec-62 等）同目录；`setup_venv.bat` 自动从 `_decord_build/` 拷贝
+- 无 NVIDIA GPU 时自动回退 CPU 软件解码（`DECORD_FORCE_CPU=1` 可强制）
 
-### decord 0.6.0
-- 捆绑 FFmpeg 4.x DLL（avcodec-58 等）。必须**在 ORT 之后导入**，否则 DLL 初始化失败
-- 无 CPU 软件解码路径（`cpu(0)` 仍用 NVDEC），无 GPU 时回退 cv2
-
-### onnxruntime 1.27
-- `onnxruntime_providers_tensorrt.dll` 和 `onnxruntime_providers_cuda.dll` 已从 EXE 排除（TRT 直接调用 rapidocr，不走 ORT）
+### onnxruntime
+- TRT/CUDA provider DLL 已从 EXE 排除（TRT 由 OcrEngine 直接调用，不走 ORT provider）
 
 ### tensorrt 10.x
-- `find_lib()` 只搜 `os.environ["PATH"]`，不认 `os.add_dll_directory()`。已在 `gpu_setup` 中同时更新 PATH
-- 首次构建引擎 ~80s (FP32)；引擎缓存于 `rapidocr/models/models/*.engine`
-- FP16 构建 ~178s (2.2x slower)，推理速度无提升，不推荐
-- `cuda.bindings` 需额外安装 `cuda-python`
-- ⚠️ 不允许 pip 自动拉入 `tensorrt_cu13_libs`（~2.2GB DLL），使用 `--no-deps` 安装
+- `find_lib()` 只搜 `os.environ["PATH"]`，不认 `os.add_dll_directory()` —— `gpu_setup` 已同时更新 PATH
+- 首次构建引擎 FP32 ~80s，缓存于用户目录；FP16 构建 2.2x 慢且推理无提升，不推荐
 
 ## 检查更新
 
 ```bash
-# 查看所有可更新包
 pip list --outdated
-
-# 仅检查核心依赖
-pip list --outdated | grep -iE "rapidocr|onnxruntime|opencv|decord|pyside6|qfluentwidgets|numpy|tensorrt|cuda-python|pyinstaller"
 ```
 
 ### 测试新版本

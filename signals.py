@@ -55,7 +55,6 @@ def _neighbor_consistency_score_lr(i: int, v: float, rows: list, times: list[flo
     - 单侧无邻居时默认 1.0（不惩罚边界帧）
     - high_weight 中的帧额外 ×CONSISTENCY_PINNED_WEIGHT 权重
     """
-    import math
     n = len(rows)
     if v < 0 or v > max_speed_kmh:
         return 0.0, 0.0
@@ -87,7 +86,7 @@ def _neighbor_consistency_score(i: int, v: float, rows: list, times: list[float]
                             max_speed_kmh: float, max_accel_mps2: float,
                             time_window: float = CONSISTENCY_TIME_WINDOW, tau: float = CONSISTENCY_DECAY_TAU,
                             high_weight: set[int] | None = None) -> float:
-    """邻域一致性合并分数（向后兼容）。左右侧权重合并后的单值分数。"""
+    """邻域一致性合并分数。左右侧权重合并后的单值分数。"""
     left, right = _neighbor_consistency_score_lr(i, v, rows, times, max_speed_kmh, max_accel_mps2,
                                     time_window, tau, high_weight)
     return (left + right) / 2.0

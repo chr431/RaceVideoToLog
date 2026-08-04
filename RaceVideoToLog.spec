@@ -147,7 +147,7 @@ a = Analysis(
         'onnxruntime.backend',
         # scipy: 已用纯 numpy 替代 savgol_filter，完全排除
         'scipy', 'tkinter', '_tkinter',
-        # PaddlePaddle (only for paddlepaddle_migrate branch; ~1.1GB)
+        # PaddlePaddle (rapidocr 时代遗留；~1.1GB)
         'paddle', 'paddlepaddle', 'paddlepaddle_gpu',
         # Unused paddle deps
         'safetensors', 'opt_einsum', 'networkx',

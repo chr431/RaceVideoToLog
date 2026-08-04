@@ -24,7 +24,6 @@ _dll_dir_cookies: list = []  # 保持 os.add_dll_directory() 返回值存活
 _BACKEND_FALLBACK: dict[str, list[str]] = {
     "auto": ["TensorRT", "CPU"],
     "tensorrt": ["TensorRT", "CPU"],
-    "cuda": ["CUDA", "CPU"],
     "cpu":  ["CPU"],
 }
 
@@ -204,14 +203,6 @@ def select_backend(preferred: str = "auto") -> str:
                 break
             except Exception as _trt_err:
                 logger.info("TensorRT import failed (%s), falling back", _trt_err)
-                continue
-        elif candidate == "CUDA":
-            try:
-                import onnxruntime as ort
-                if "CUDAExecutionProvider" in set(ort.get_available_providers()):
-                    chosen = "CUDA"
-                    break
-            except Exception:
                 continue
         else:
             chosen = "CPU"

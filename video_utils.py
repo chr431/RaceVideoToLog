@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-import hashlib
 from functools import lru_cache
 
 import numpy as np
@@ -32,29 +31,6 @@ def format_duration(seconds: float) -> str:
     if hours:
         return f"{hours:d}:{minutes:02d}:{secs:02d}"
     return f"{minutes:d}:{secs:02d}"
-def codec_from_fourcc(fourcc: float) -> str:
-    value = int(fourcc)
-    if value == 0:
-        return "Unknown"
-    chars = [chr((value >> (8 * index)) & 0xFF) for index in range(4)]
-    codec = "".join(chars).strip("\x00").strip()
-    return codec or "Unknown"
-def safe_int(value: str) -> int | None:
-    value = value.strip()
-    if not value:
-        return None
-    try:
-        return int(float(value))
-    except ValueError:
-        return None
-def safe_float(value: str) -> float | None:
-    value = value.strip()
-    if not value:
-        return None
-    try:
-        return float(value)
-    except ValueError:
-        return None
 def _parse_int_or_none(s: str) -> int | None:
     """解析字符串为 int，空字符串返回 None。"""
     s = s.strip()

@@ -24,7 +24,6 @@ DEFAULT_CORRECTION_MODE: str = "auto"  # 纠错模式 (auto / manual)
 # ═══════════════════ 枚举值（CLI/GUI 单点定义） ═══════════════════
 BACKEND_KEYS: list[str] = ["auto", "tensorrt", "cpu"]
 BACKEND_LABELS: dict[str, str] = {"auto": "自动", "tensorrt": "TensorRT", "cpu": "CPU"}
-OCR_REC_BATCH_NUM: int = 12            # OCR 识别批处理大小
 OCR_FRAME_BATCH: int = 6               # 帧批处理大小（≤6 兼容 TRT profile 上限）
 
 # ═══════════════════ 图表颜色 ═══════════════════
@@ -59,7 +58,6 @@ SOURCE_TO_KMH: dict[str, float] = {
     "km/h": 1.0,
     "mile/h": 1.609344,
 }
-SPEED_UNITS: list[str] = list(SOURCE_TO_KMH.keys())  # m/s, km/h, mile/h
 
 # ═══════════════════ GPU 后端公共 API ═══════════════════
 _gpu_backend: str = "CPU"
@@ -84,7 +82,6 @@ ERROR_DETECT_OCR_CONF_WEIGHT: float = 0.01   # OCR 模型内部置信度
 ERROR_DETECT_PHYSICS_WEIGHT: float = 0.15     # 物理可达性
 ERROR_DETECT_LINEARITY_WEIGHT: float = 0.15   # 局部线性度（中位数鲁棒插值）
 ERROR_DETECT_ACCEL_SPIKE_WEIGHT: float = 0.50 # 加速度尖峰对检测
-ERROR_DETECT_CANDIDATE_THRESHOLD: int = 65
 # 最差信号地板：任一信号低于阈值时，组合分数上限
 ERROR_DETECT_FLOOR_CAP: dict[float, float] = {30.0: 25.0, 50.0: 50.0, 70.0: 69.0}
 
@@ -166,10 +163,6 @@ ACCEL_SCORE_NEAR_ONE: float = 50.0           # 近一个尖峰的得分
 ACCEL_SCORE_SAME_DIR: float = 60.0           # 同向尖峰得分
 ACCEL_SCORE_VIOLATION: float = 20.0          # 违反帧得分
 ACCEL_SCORE_ISLAND_INTERIOR: float = 10.0    # 孤岛内部帧得分
-
-# ═══════════════════ 向后兼容置信度权重 ═══════════════════
-COMPAT_CONF_PHYSICS_WEIGHT: float = 0.60
-COMPAT_CONF_OCR_WEIGHT: float = 0.40
 
 # ═══════════════════ 部分数字扩展参数 ═══════════════════
 MAX_PARTIAL_WILDCARDS: int = 2         # expand_partial 最大通配符数

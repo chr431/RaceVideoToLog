@@ -51,7 +51,7 @@ def _extract_speed_from_text(raw_text: str, conf: float) -> tuple[float | None, 
     except ValueError:
         return None, None, conf
 def extract_speed_value(ocr_result: "object | None") -> tuple[float | None, str | None, float]:
-    """从 RapidOCR 3.x 结果中提取速度值和置信度。
+    """从 OCR 结果（OcrEngine RecOut，带 .txts/.scores）中提取速度值和置信度。
 
     Returns: (speed_value, raw_text, confidence)
         confidence: 0.0-1.0 (含), 0.0 表示置信度不可用
@@ -59,7 +59,6 @@ def extract_speed_value(ocr_result: "object | None") -> tuple[float | None, str 
     if not ocr_result:
         return None, None, 0.0
 
-    # RapidOCR 3.x TextRecOutput (use_det=False 时返回)
     if hasattr(ocr_result, "txts"):
         txts = ocr_result.txts  # type: ignore[attr-defined]
         if not txts or not txts[0]:
@@ -68,52 +67,7 @@ def extract_speed_value(ocr_result: "object | None") -> tuple[float | None, str 
         conf = float(scores[0]) if scores else 0.0
         return _extract_speed_from_text(str(txts[0]), conf)
 
-    # RapidOCR 3.x 带检测时返回 tuple (dt_boxes, rec_res, elapse)
-    if isinstance(ocr_result, (tuple, list)) and len(ocr_result) >= 2:
-        rec = ocr_result[1]
-        if rec is None:
-            return None, None, 0.0
-        candidates: list[str] = []
-        if isinstance(rec, list):
-            for item in rec:
-                if isinstance(item, (list, tuple)) and len(item) >= 2:
-                    text = str(item[1]).strip()
-                elif hasattr(item, "txts"):
-                    if item.txts and item.txts[0]:  # type: ignore[attr-defined]
-                        text = str(item.txts[0]).strip()  # type: ignore[attr-defined]
-                    else:
-                        continue
-                elif hasattr(item, "text"):
-                    text = str(getattr(item, "text")).strip()
-                else:
-                    text = str(item).strip()
-                if text:
-                    candidates.append(text)
-        elif hasattr(rec, "txts"):
-            if rec.txts and rec.txts[0]:  # type: ignore[attr-defined]
-                candidates.append(str(rec.txts[0]).strip())  # type: ignore[attr-defined]
-        elif hasattr(rec, "text"):
-            candidates.append(str(rec.text).strip())  # type: ignore[attr-defined]
-        elif isinstance(rec, str):
-            candidates.append(rec.strip())
-
-        if not candidates:
-            return None, None, 0.0
-        joined = normalize_ocr_text(" ".join(candidates)).replace(" ", "")
-        match = OCR_NUMBER_RE.search(joined)
-        if not match:
-            return None, None, 0.0
-        raw_text = re.sub(r"\D", "", match.group(0))
-        if not raw_text:
-            return None, None, 0.0
-        try:
-            return float(raw_text), raw_text, 0.0
-        except ValueError:
-            return None, None, 0.0
-
     return None, None, 0.0
-def convert_speed_to_kmh(speed_value: float, source_unit: str) -> float:
-    return float(speed_value) * SOURCE_TO_KMH[source_unit]
 def build_speed_candidates(raw_text: str, max_speed_kmh: float) -> list[int]:
     """根据 OCR 原始文本生成可能的速度候选值。
 

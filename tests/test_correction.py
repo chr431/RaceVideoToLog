@@ -10,7 +10,7 @@ from pathlib import Path
 
 from correction import expand_partial, _find_neighbor_trusted, _interp_candidate, _auto_expand_digits
 from ocr_engine import (
-    _savgol_filter_np, normalize_ocr_text, safe_int, safe_float, Flag,
+    _savgol_filter_np, normalize_ocr_text, Flag,
     build_speed_candidates, SpeedObservation,
 )
 from analysis import parse_csv
@@ -73,15 +73,6 @@ class TestOCRUtils:
         assert normalize_ocr_text("l23") == "123"
         assert normalize_ocr_text("S6") == "56"
 
-    def test_safe_int(self):
-        assert safe_int("123") == 123
-        assert safe_int("") is None
-        assert safe_int("abc") is None
-
-    def test_safe_float(self):
-        assert safe_float("3.14") == 3.14
-        assert safe_float("") is None
-
 
 # ═══════════════════ Flag Enum ═══════════════════
 
@@ -99,13 +90,6 @@ class TestFlag:
         assert not Flag.is_trusted(0)
         assert not Flag.is_trusted(11)
         assert not Flag.is_trusted(13)
-
-    def test_is_anchor_backward_compat(self):
-        """is_anchor() remains as backward-compat alias for is_trusted()."""
-        assert Flag.is_anchor(21)
-        assert Flag.is_anchor(22)
-        assert not Flag.is_anchor(0)
-        assert not Flag.is_anchor(11)
 
 
 # ═══════════════════ Find Neighbor Trusted ═══════════════════

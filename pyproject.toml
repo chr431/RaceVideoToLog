@@ -12,13 +12,11 @@ dependencies = [
     "cuda-python",
     "tensorrt_cu13_bindings>=10,<11",
     "decord",
-    "pyclipper",
-    "shapely",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
-# cuda-python / tensorrt_cu13_bindings 为主依赖：rapidocr TRT 引擎
+# cuda-python / tensorrt_cu13_bindings 为主依赖：OcrEngine TRT 引擎
 # import tensorrt (shim -> tensorrt_bindings) 与 decord GPU DLL 注册必需。
 # tensorrt (meta-package) is intentionally omitted: it pulls in
 # tensorrt_libs (~2.2 GB of DLLs).  Runtime DLLs are loaded from the
@@ -45,6 +43,7 @@ py-modules = [
     "gui_settings",
     "headless",
     "ocr_engine",
+    "ocr_native",
     "ocr_text",
     "pipeline",
     "signals",
