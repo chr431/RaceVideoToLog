@@ -66,13 +66,13 @@ _decord_build\
 ## 输出格式
 
 ```csv
-# RaceVideoToLog v2.7.0
+# RaceVideoToLog v2.9.0
 # video_hash=..., video=test5.mp4, fps=59.767, codec=h264
 # roi=843,993,948,1025, format=km/h, frame_start=362, frame_end=7585
 # max_speed=400.0, max_accel=40.0, div=1, target_h=48, pad=0, buffer=16
-# backend=CPU, model=v6_tiny, reocr_model=v6_small, video_backend=decord/GPU
+# backend=TensorRT, model=v6_tiny, reocr_model=v6_small, video_backend=decord/GPU
 # stats: total=7223, trusted=7090, corrected=118
-# timing: ocr=17.0s, decode=16.6s, inference=15.7s, correction=4.5s
+# timing: ocr=13.5s, decode=6.4s, inference=12.7s, correction=0.9s
 362,0.00,257,21
 ```
 

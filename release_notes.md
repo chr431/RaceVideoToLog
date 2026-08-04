@@ -1,5 +1,45 @@
 # Release Notes
 
+## v2.9.0 (2026-08-04) — 全流程性能深度优化（本仓库 + 自建 decord）
+
+### 性能（GPU TRT 口径，test4 6203 帧 / test5 7223 帧）
+
+| 阶段 | test4 total | test5 total |
+| --- | --- | --- |
+| v2.8.0 基线 | 17.1s | 18.9s |
+| 最终 | **9.6s**（-44%） | **14.3s**（-24%） |
+
+精度全程无回退（test4 err 2.14% / test5 err 0.06%，与基线逐位一致）。
+
+**decord 侧（自建仓库，feat/perf-deep 已推送）**：
+- `next_roi()` 新 API：GPU 上只拷 ROI 矩形到主机（cudaMemcpy2D），替代
+  全帧 6MB D2H + Python 裁切 —— decode 13.5→5.9s（test4）/ 17.0→6.4s（test5）
+- CacheFrame 零拷贝：容错缓存改为持有池缓冲引用（refcount），消除每帧
+  一次整帧同步 D2D 深拷贝；输出池 20→22
+- 解码背压忙等（1ns sleep 空转核）→ condition_variable 阻塞等待
+- 冒烟验证：next_roi 与 next()+crop 逐字节一致；200 帧哈希与旧 DLL 相同
+
+**本仓库侧**：
+- `_resize_norm` 等尺寸短路（省每帧一次 astype 拷贝 + zeros 双写）
+- `_np_resize` 坐标映射 lru_cache（映射只依赖尺寸，主路径每帧省 ~60% 计算）
+- viterbi DP 内层 C×C 循环向量化（元素级运算无归约 → 决策逐位一致，
+  小候选集保留标量快路径）
+- `_signal_linearity` 配对插值向量化（邻居扫描保留，中位数语义不变）
+- 删除 `_auto_align_pass` 循环内 O(n) pinned_set 重建（死代码参数一并移除）
+- `_ctc_decode` 批向量化（argmax/max/keep 一次归约）
+- TRT `set_input_shape` 按 shape 缓存（实测每批省 ~0.5ms）
+- CSV 批量写（writerows）、`parse_csv` 单趟解析
+
+**测量基座**：`tools/bench_decoder.py` 重构为统一基准（参数化视频、
+timing + 精度一并输出、JSON 记录）；新增 `tools/decord_smoke.py`
+（decord 每次重建后的内容正确性冒烟）、`tools/bench_trt_fp16.py`
+（FP16 vs FP32 引擎对比 —— 实测 0.97x，无收益，确认维持 FP32 默认）。
+
+**剩余瓶颈**（记录在案）：test5 长视频墙钟 14.3s 中 GPU 利用率仅
+~45%，大头为 producer/consumer 线程的 CPU 侧同步与 GIL 争抢（架构性，
+无低成本解法）；decord GPU 路径 decode 硬底 ~1000fps（NVDEC 转换
+流水线每帧同步受 NVDEC surface 生命周期约束，无法移除）。
+
 ## v2.8.0 (2026-08-03) — 相对 v2.7.1 的完整变更（v2.7.2 未发布，合并记录）
 
 ### 算法精度提升（ground truth 验证，CPU 同口径）
