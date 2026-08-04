@@ -40,8 +40,14 @@ def resolve(video_name: str) -> tuple[str, str]:
 
 
 def run(video: str, truth: str, backend: str, out_csv: str,
-        cpu_decord: bool = False) -> dict:
-    """Run headless pipeline, parse timing + actual backend from output CSV/stdout."""
+        cpu_decord: bool = False, ocr_model: str = "v6_tiny",
+        reocr_model: str = "v6_small") -> dict:
+    """Run headless pipeline, parse timing + actual backend from output CSV/stdout.
+
+    ocr_model/reocr_model 必须显式传给 CLI —— truth CSV 头的 model= 字段
+    可能是别的模型（如 test5_ref 记录 v6_small），不传时 from-csv 会覆盖
+    默认值，主 OCR 被静默换成 small（实测 infer 26.5s vs tiny 6.4s）。
+    """
     Path(out_csv).unlink(missing_ok=True)  # stale CSV from a prior run must not be parsed
     t0 = time.perf_counter()
     env = dict(os.environ)
@@ -53,32 +59,51 @@ def run(video: str, truth: str, backend: str, out_csv: str,
         import psutil  # type: ignore[import-not-found]
     except ImportError:
         psutil = None  # type: ignore[assignment]
+    # stdout/stderr 重定向到文件而不是 PIPE：CLI 每帧 progress print +
+    # flush，7223 帧输出远超 64KB 管道缓冲 —— 父进程采样循环不读管道时
+    # 子进程会阻塞在写 stdout 而挂死（实测 bench 超时 10 分钟）。
+    stdout_log = Path(out_csv).with_suffix(".stdout.txt")
+    stderr_log = Path(out_csv).with_suffix(".stderr.txt")
+    fo = open(stdout_log, "w", encoding="utf-8", errors="replace")
+    fe = open(stderr_log, "w", encoding="utf-8", errors="replace")
     child = subprocess.Popen(
         [sys.executable, str(PROJECT / "RaceVideoToLog.py"),
          video, "--from-csv", truth,
          "--backend", backend,
+         "--ocr-model", ocr_model,
+         "--reocr-model", reocr_model,
          "--log-level", "detailed",
          "-o", out_csv],
-        cwd=str(PROJECT), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        text=True, encoding="utf-8", errors="replace", env=env,
+        cwd=str(PROJECT), stdout=fo, stderr=fe, env=env,
     )
     peak_rss, cur_rss = 0.0, 0.0
     if psutil is not None:
+        # Windows venv 的 python.exe 是 launcher（有子进程）：真正干活的是
+        # 子进程，必须对 proc + 全部后代采样，否则 peak RSS 恒为 ~5MB。
         pchild = psutil.Process(child.pid)
         while child.poll() is None:
             try:
-                cur_rss = pchild.memory_info().rss / 1e6
+                procs = [pchild] + pchild.children(recursive=True)
+                cur_rss = 0.0
+                for pr in procs:
+                    try:
+                        cur_rss = max(cur_rss, pr.memory_info().rss / 1e6)
+                    except psutil.Error:
+                        pass
                 peak_rss = max(peak_rss, cur_rss)
             except psutil.Error:
                 pass
             time.sleep(0.2)
     try:
-        r_stdout, r_stderr = child.communicate(timeout=900)
-        r = subprocess.CompletedProcess(child.args, child.returncode or 1,
-                                        r_stdout, r_stderr)
+        r = child.wait(timeout=900)
     except subprocess.TimeoutExpired:
         child.kill()
+        fo.close(); fe.close()
         raise
+    fo.close(); fe.close()
+    r_stdout = stdout_log.read_text(encoding="utf-8", errors="replace")
+    r_stderr = stderr_log.read_text(encoding="utf-8", errors="replace")
+    r = subprocess.CompletedProcess(child.args, r, r_stdout, r_stderr)
     timing: dict = {"wall_s": round(time.perf_counter() - t0, 2)}
     if psutil is not None:
         timing["peak_rss_mb"] = round(peak_rss)
@@ -152,6 +177,11 @@ def main() -> None:
     ap.add_argument("--backend", default="tensorrt", choices=["tensorrt", "cpu", "auto"])
     ap.add_argument("--cpu-decord", action="store_true",
                     help="force decord CPU decoder (DECORD_FORCE_CPU=1)")
+    ap.add_argument("--ocr-model", default="v6_tiny", choices=["v6_tiny", "v6_small"],
+                    help="main OCR model (explicit — otherwise from-csv may "
+                         "override with the truth CSV's model= value)")
+    ap.add_argument("--reocr-model", default="v6_small", choices=["v6_tiny", "v6_small"],
+                    help="re-OCR model (explicit, same reason)")
     ap.add_argument("--runs", type=int, default=2, help="runs (last one used for stats)")
     ap.add_argument("--json", type=str, default="", help="save record to JSON (default outputs/bench_<video>.json)")
     args = ap.parse_args()
@@ -165,12 +195,15 @@ def main() -> None:
     print(f"Backend: {args.backend}, decord: {'CPU' if args.cpu_decord else 'auto'}, runs: {args.runs}")
 
     record: dict = {"video": args.video, "backend": args.backend,
-                    "cpu_decord": args.cpu_decord, "runs": []}
+                    "cpu_decord": args.cpu_decord,
+                    "ocr_model": args.ocr_model, "reocr_model": args.reocr_model,
+                    "runs": []}
     for run_i in range(args.runs):
         out_csv = str(OUT_DIR / f"bench_{args.video}_r{run_i + 1}.csv")
         label = f"run {run_i + 1}"
         print(f"  Running {label}...", end=" ", flush=True)
-        t = run(video, truth, args.backend, out_csv, cpu_decord=args.cpu_decord)
+        t = run(video, truth, args.backend, out_csv, cpu_decord=args.cpu_decord,
+                ocr_model=args.ocr_model, reocr_model=args.reocr_model)
         acc = accuracy(out_csv, truth) if "frames" in t else None
         if run_i == args.runs - 1:  # warm run -> report + record
             print_row(label, t, acc)

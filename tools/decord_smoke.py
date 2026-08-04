@@ -98,6 +98,23 @@ def run_smoke(use_roi: bool) -> None:
         assert fa.shape == (y2 - y1, x2 - x1, 3), fa.shape
         print(f"  post-seek ROI shape: {fa.shape}")
 
+    # 5. CPU path ROI: NextFrameRoi on a CPU ctx does a row-stride ROI copy
+    #    (must be byte-identical to full-frame next() + slice)
+    if use_roi:
+        print("CPU ctx next_roi vs next()+crop byte compare x50 ...", flush=True)
+        vr_cpu_a = VideoReader(VIDEO, ctx=decord.cpu(0))
+        vr_cpu_b = VideoReader(VIDEO, ctx=decord.cpu(0))
+        for _ in range(50):
+            ra = vr_cpu_a.next_roi(x1, y1, x2, y2).asnumpy()
+            fb = vr_cpu_b.next().asnumpy()
+            rb = fb[y1:y2, x1:x2]
+            np.testing.assert_array_equal(ra, rb)
+        print("  OK")
+        vr_cpu_a.seek_accurate(1000)
+        fa = vr_cpu_a.next_roi(x1, y1, x2, y2).asnumpy()
+        assert fa.shape == (y2 - y1, x2 - x1, 3), fa.shape
+        print(f"  post-seek CPU ROI shape: {fa.shape}")
+
 
 def hash_worker(frames: int) -> None:
     """Subprocess: print hashes of first K frames (uses DECORD_LIBRARY_PATH)."""

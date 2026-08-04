@@ -77,16 +77,28 @@ timing + 精度一并输出、JSON 记录）；新增 `tools/decord_smoke.py`
   时失效 → 帧漂移）
 - SeekAccurate 恢复 seek(0) 回退（直接 keyframe seek 在 CPU 解码器
   下落点偏 2 帧）
-- FFmpeg 解码线程默认 2（auto=全核与 ONNX 推理抢核，600 帧实测
-  27s → 20.5s）
+- **NextFrameRoi CPU 分支 ROI-only 输出**（新）：原 CPU 路径返回全帧、
+  asnumpy 每帧拷贝 6.2MB 再 Python 裁剪；改为 C++ 内 row-stride memcpy
+  只输出 ROI 矩形（106×33 = 10KB）—— 消除每帧 ~0.6ms 全帧拷贝
+  （decode 计时的 ~37%）。GPU 路径 cudaMemcpy2D 不变。
+- **FFmpeg 解码线程默认 2 → 4**（16 核实测矩阵：2 线程 decode 18.1s /
+  总 23.6s；4 线程 decode 11.6s / 总 16.9s；6 线程无增益且推理更慢）
 
-**无 GPU 用户全量验证**（DECORD_FORCE_CPU=1 强制 CPU 解码 + CPU 推理，
-test5 7223 帧全范围）：**23.6s**（= v2.7.0 的 23.4s 持平，精度 99.93%
-vs 当时 97.98%）。构成：decode 18.1s（390fps 物理下限，无争用拖累）+
-inference 7.7s（与 decode 并行，+20% 竞争开销）+ correction 4.7s；
-内存峰值 650MB（decode 段 ~390MB 稳定）。GPU 硬解路径 13.0s 的
-差异全部来自 decode 硬底（NVDEC ~1000fps vs CPU 390fps），
-推理/纠错无额外开销。
+**无 GPU 用户全量验证**（DECORD_FORCE_CPU=1，test5 7223 帧全范围）：
+**23.6s → 14.7s（-38%）**，精度 99.93% 不变。构成：decode 9.7s
+（745fps，原 18.1s）+ inference 7.4s（并行）+ correction 4.3s；
+peak RSS 843MB（decode 段 ~400MB 稳定）。与 GPU 硬解路径（12.5s）
+差距缩小到 ~15%（NVDEC 硬底 ~1000fps vs CPU 745fps）。
+
+**bench_decoder.py 修复**：
+- 子进程 stdout/stderr 由 PIPE 改为文件重定向 —— 原 PIPE 不读管道，
+  CLI 每帧 progress flush 超 64KB 缓冲后子进程阻塞挂死（bench 超时
+  10 分钟的根因）
+- 显式传 --ocr-model/--reocr-model（默认 v6_tiny/v6_small）——
+  原命令不传，from-csv 用 truth CSV 头的 model=v6_small 覆盖默认值，
+  主 OCR 静默变 small（实测 infer 26.5s vs tiny 6.4s，同款坑第二次）
+- RSS 采样覆盖 launcher 后代进程（Windows venv python.exe 是 launcher，
+  原采样恒 5MB，现实测 843MB）
 
 ## v2.8.0 (2026-08-03) — 相对 v2.7.1 的完整变更（v2.7.2 未发布，合并记录）
 
