@@ -47,16 +47,42 @@ def run(video: str, truth: str, backend: str, out_csv: str,
     env = dict(os.environ)
     if cpu_decord:
         env["DECORD_FORCE_CPU"] = "1"
-    r = subprocess.run(
+    # 子进程 RSS 采样（教训：速度测试必须同时监测内存 —— CPU 解码的
+    # 视图引用泄漏曾让 3000 帧吃掉 18GB）
+    try:
+        import psutil  # type: ignore[import-not-found]
+    except ImportError:
+        psutil = None  # type: ignore[assignment]
+    child = subprocess.Popen(
         [sys.executable, str(PROJECT / "RaceVideoToLog.py"),
          video, "--from-csv", truth,
          "--backend", backend,
          "--log-level", "detailed",
          "-o", out_csv],
-        cwd=str(PROJECT), capture_output=True, text=True, timeout=900,
-        encoding="utf-8", errors="replace", env=env,
+        cwd=str(PROJECT), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, encoding="utf-8", errors="replace", env=env,
     )
+    peak_rss, cur_rss = 0.0, 0.0
+    if psutil is not None:
+        pchild = psutil.Process(child.pid)
+        while child.poll() is None:
+            try:
+                cur_rss = pchild.memory_info().rss / 1e6
+                peak_rss = max(peak_rss, cur_rss)
+            except psutil.Error:
+                pass
+            time.sleep(0.2)
+    try:
+        r_stdout, r_stderr = child.communicate(timeout=900)
+        r = subprocess.CompletedProcess(child.args, child.returncode or 1,
+                                        r_stdout, r_stderr)
+    except subprocess.TimeoutExpired:
+        child.kill()
+        raise
     timing: dict = {"wall_s": round(time.perf_counter() - t0, 2)}
+    if psutil is not None:
+        timing["peak_rss_mb"] = round(peak_rss)
+        timing["end_rss_mb"] = round(cur_rss)
     # logger goes to stderr (Python logging default), prints go to stdout —
     # scan both. "OCR 完成: N 帧 (decord/gpu), ..." gives frames + backend.
     text = (r.stdout or "") + "\n" + (r.stderr or "")
@@ -111,10 +137,13 @@ def print_row(label: str, t: dict, acc: dict | None = None) -> None:
     if acc:
         extra = (f" | acc: matched {acc['matched']}/{acc['matched'] + acc['wrong']} "
                  f"err {acc['error_rate']:.2f}% falseT {acc['false_trusted']}")
+    mem = ""
+    if t.get("peak_rss_mb"):
+        mem = f" | peak RSS {t['peak_rss_mb']:5d}MB"
     print(f"  {label:12s} | {t.get('actual_backend', '?'):9s} | {t['frames']:6d} fr | "
           f"wall {t['wall_s']:5.1f}s | decode {t.get('decode_s', 0):5.1f}s | "
           f"infer {t.get('inference_s', 0):5.1f}s | corr {t.get('correction_s', 0):4.1f}s | "
-          f"total {t.get('total_pipeline_s', t.get('total_s', 0)):5.1f}s{extra}")
+          f"total {t.get('total_pipeline_s', t.get('total_s', 0)):5.1f}s{mem}{extra}")
 
 
 def main() -> None:
@@ -148,7 +177,8 @@ def main() -> None:
             record["timing"] = {k: t.get(k) for k in
                                 ("frames", "actual_backend", "wall_s",
                                  "ocr_s", "decode_s", "inference_s",
-                                 "correction_s", "total_pipeline_s")}
+                                 "correction_s", "total_pipeline_s",
+                                 "peak_rss_mb", "end_rss_mb")}
             record["accuracy"] = acc
         else:
             print_row(label, t)

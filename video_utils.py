@@ -81,11 +81,13 @@ def next_frame_roi(vr, x1: int, y1: int, x2: int, y2: int) -> "np.ndarray":
             # GPU：next_roi 已裁剪；CPU reader 的 next_roi 回退全帧
             # （decord 的 NextFrameRoi 对 CPU 返回 NextFrameImpl()）→ 裁剪
             if f.shape[0] != y2 - y1 or f.shape[1] != x2 - x1:
-                return f[y1:y2, x1:x2]
+                return f[y1:y2, x1:x2].copy()
             return f
         raise StopIteration()
     f = vr.next().asnumpy()
-    return f[y1:y2, x1:x2]
+    # 必须 .copy()：视图会引用整个 6MB 全帧缓冲区，调用方持有返回值
+    # （如 pipeline 的 raw_frames）时每帧泄漏一帧（实测 3000 帧 → 18GB）
+    return f[y1:y2, x1:x2].copy()
 
 
 def clamp_region(x1: int, y1: int, x2: int, y2: int, width: int, height: int) -> tuple[int, int, int, int]:
