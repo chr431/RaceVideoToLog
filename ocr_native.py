@@ -13,6 +13,7 @@ from __future__ import annotations
 import math
 import os
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -45,7 +46,7 @@ class OcrEngine:
 
     def __init__(self, variant: str = "v6_tiny",
                  engine_type: str = "onnxruntime",
-                 progress_cb: "object | None" = None) -> None:
+                 progress_cb: "Callable[[str], None] | None" = None) -> None:
         """progress_cb: 构建引擎等耗时阶段的进度消息回调 (str)。"""
         self._variant = variant
         self._progress_cb = progress_cb

@@ -76,6 +76,7 @@ class RaceVideoToLogApp(QMainWindow):
         self._throttle_timer.setSingleShot(True)
         self._throttle_timer.timeout.connect(self._show_throttled_frame)
         self.ocr_engine: "OcrEngine | None" = None
+        self._codec_cache: dict[str, str] = {}
 
         self._export_thread: ExportThread | None = None
         self.correction_mode: str = config.DEFAULT_CORRECTION_MODE
@@ -315,8 +316,19 @@ class RaceVideoToLogApp(QMainWindow):
         _t("load_video: start")
         vr, label = open_decord_vr(str(path))
         _t("load_video: decord open")
-        codec = get_video_codec(str(path)) or "?"
-        _t("load_video: ffprobe")
+        # ffprobe 子进程在 frozen 环境可能被安全扫描拖慢数秒 →
+        # 后台获取编码信息（不阻塞导入），同视频缓存
+        _codec_cache = getattr(self, '_codec_cache', {})
+        codec = _codec_cache.get(str(path), "")
+        if not codec:
+            import threading as _th
+            def _fetch_codec():
+                c = get_video_codec(str(path)) or "?"
+                self._codec_cache[str(path)] = c
+                from PySide6.QtCore import QTimer as _QT
+                _QT.singleShot(0, lambda: self._codec_label.setText(c))
+            _th.Thread(target=_fetch_codec, daemon=True).start()
+        _t("load_video: ffprobe (bg)")
         try:
             fc = len(vr)
             fps = vr.get_avg_fps()
@@ -644,11 +656,18 @@ class RaceVideoToLogApp(QMainWindow):
                     rows[fi][2] = v
                     rows[fi][3] = Flag.PINNED
         _t("final_check: dialog closed")
-        pipeline.finalize(out)
-        _t("final_check: finalize done")
-        self._finish_export()
-        _t("final_check: finish_export done")
-        self._status_label.setText("最终检查完成 — 结果已保存。")
+        # finalize（写 CSV/统计）在 frozen 环境可能被安全扫描拖慢数秒 →
+        # 后台执行，完成后回主线程收尾
+        import threading as _th
+        from PySide6.QtCore import QTimer as _QT
+        def _finalize_bg():
+            _t("final_check: finalize start")
+            pipeline.finalize(out)
+            _t("final_check: finalize done")
+            _QT.singleShot(0, lambda: (self._finish_export(),
+                                       self._status_label.setText("最终检查完成 — 结果已保存。"),
+                                       _t("final_check: finish_export done")))
+        _th.Thread(target=_finalize_bg, daemon=True).start()
 
     def _on_error(self, err: str) -> None:
         if self.sender() is not self._export_thread:

@@ -19,7 +19,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-import cv2
+import cv2  # type: ignore[import-not-found]  # 仅基准工具需要，需另装 opencv
 import numpy as np
 
 from ocr_engine import extract_speed_value
