@@ -106,15 +106,6 @@ datas = [(s, d) for s, d in datas if os.path.basename(s) not in _EXCLUDE_FILES
 binaries = [(s, d) for s, d in binaries if os.path.basename(s) not in _EXCLUDE_FILES
             and not os.path.basename(s).endswith('.engine')]
 
-# matplotlib（数据分析 tab）
-tmp_ret = collect_all('matplotlib')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-# 二次过滤：matplotlib 可能带回部分之前排除的文件
-datas = [(s, d) for s, d in datas if os.path.basename(s) not in _EXCLUDE_FILES
-         and not os.path.basename(s).endswith('.engine')]
-binaries = [(s, d) for s, d in binaries if os.path.basename(s) not in _EXCLUDE_FILES
-            and not os.path.basename(s).endswith('.engine')]
-
 # 过滤 onnxruntime 非推理子目录（transformers/tools/quantization 等在 excludes 中已被跳过，
 # 但若以 data 形式被 collect_all 收集则需二次过滤）
 _EXCLUDE_DATAS_SUBDIRS = {
@@ -156,7 +147,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[os.path.join(_PROJECT_ROOT, 'runtime_hook.py')],
-    # 排除 onnxruntime 中的非推理模块 + scipy/matplotlib 测试和未用子模块
+    # 排除 onnxruntime 中的非推理模块 + scipy 测试和未用子模块
     # 这些模块的 hidden imports 会产生大量 ERROR 日志（不影响功能）
     excludes=[
         'onnxruntime.transformers', 'onnxruntime.transformers.*',
@@ -164,19 +155,6 @@ a = Analysis(
         'onnxruntime.quantization', 'onnxruntime.quantization.*',
         'onnxruntime.datasets', 'onnxruntime.datasets.*',
         'onnxruntime.backend',
-        # matplotlib: 排除测试和未用后端
-        'matplotlib.tests', 'matplotlib.testing',
-        'matplotlib.backends.backend_gtk3', 'matplotlib.backends.backend_gtk3agg',
-        'matplotlib.backends.backend_gtk3cairo', 'matplotlib.backends.backend_gtk4',
-        'matplotlib.backends.backend_gtk4agg', 'matplotlib.backends.backend_gtk4cairo',
-        'matplotlib.backends.backend_cairo', 'matplotlib.backends.backend_macosx',
-        'matplotlib.backends.backend_nbagg', 'matplotlib.backends.backend_pgf',
-        'matplotlib.backends.backend_ps', 'matplotlib.backends.backend_qt5',
-        'matplotlib.backends.backend_qt5agg', 'matplotlib.backends.backend_qt5cairo',
-        'matplotlib.backends.backend_svg', 'matplotlib.backends.backend_template',
-        'matplotlib.backends.backend_tkcairo', 'matplotlib.backends.backend_wx',
-        'matplotlib.backends.backend_wxagg', 'matplotlib.backends.backend_wxcairo',
-        'matplotlib.sphinxext',
         # scipy: 已用纯 numpy 替代 savgol_filter，完全排除
         'scipy', 'tkinter', '_tkinter',
         # PaddlePaddle (only for paddlepaddle_migrate branch; ~1.1GB)

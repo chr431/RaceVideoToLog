@@ -63,12 +63,6 @@ _decord_build\
 .venv\Scripts\python RaceVideoToLog.py video.mp4 --roi X1 Y1 X2 Y2 -o output.csv
 ```
 
-### 数据分析
-
-```bash
-.venv\Scripts\python RaceVideoToLog.py --analysis csv1.csv csv2.csv --analysis-out prefix
-```
-
 ## 输出格式
 
 ```csv
@@ -119,8 +113,6 @@ python RaceVideoToLog.py [video] [options]
   --frame-end N                  结束帧号
   --from-csv PATH                从 CSV 文件头导入设置
   -o, --output PATH              输出 CSV 路径
-  --analysis CSV1 CSV2           分析模式：比较两个 CSV
-  --analysis-out PREFIX          分析输出前缀
 ```
 
 ## 打包

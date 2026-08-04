@@ -13,42 +13,10 @@ import numpy as np
 
 import config
 
+logger = logging.getLogger(__name__)
+
 if TYPE_CHECKING:
     from rapidocr import RapidOCR
-
-_matplotlib_configured = False
-
-def _ensure_matplotlib_fonts() -> None:
-    """配置 matplotlib 中文字体支持（幂等，可多次调用）。"""
-    global _matplotlib_configured
-    if not _matplotlib_configured:
-        try:
-            import matplotlib
-            matplotlib.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
-            matplotlib.rcParams["axes.unicode_minus"] = False
-        except ImportError:
-            pass
-        _matplotlib_configured = True
-
-# 确保字体配置在 import 时生效（所有模块在创建 Figure 前都已导入 ocr_engine）
-_ensure_matplotlib_fonts()
-
-# ── 模块级 Logger ──
-logger = logging.getLogger("RaceVideoToLog.ocr_engine")
-
-# ── 导出列表：包含 _ 前缀的私有符号供 RaceVideoToLog.py / headless.py 使用 ──
-__all__ = [
-    "SpeedObservation", "VideoMetadata",
-    "extract_speed_value", "convert_speed_to_kmh", "clamp_region",
-    "build_speed_candidates",
-    "normalize_ocr_text", "format_duration", "codec_from_fourcc",
-    "safe_int", "safe_float", "SOURCE_TO_KMH", "OCR_NUMBER_RE",
-    "compute_video_hash",
-    "_neighbor_consistency_score", "_neighbor_consistency_score_lr",
-    "_reset_backend", "_select_backend", "_get_model_params",
-    "_parse_int_or_none", "parse_csv_header", "_savgol_filter_np",
-    "Flag", "logger",
-]
 
 # ── 新模块 re-export（向后兼容：消费者可直接 from ocr_engine import ...）──
 from constants import Flag, OCR_NUMBER_RE  # noqa: F401

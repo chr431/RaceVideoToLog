@@ -11,7 +11,6 @@
 | PySide6 | 6.11.1 | 6.11 | [PySide6](https://pypi.org/project/PySide6/) | Qt 6 GUI |
 | PySide6-Fluent-Widgets | 1.11.2 | 1.11 | [PySide6-Fluent-Widgets](https://pypi.org/project/PySide6-Fluent-Widgets/) | Fluent Design 组件库 |
 | numpy | 2.5.1 | 2.0 | [numpy](https://pypi.org/project/numpy/) | |
-| matplotlib | 3.11.1 | 3.10 | [matplotlib](https://pypi.org/project/matplotlib/) | 数据分析图表 |
 | pyclipper | 1.4.0 | — | [pyclipper](https://pypi.org/project/pyclipper/) | rapidocr 依赖 |
 | shapely | 2.1.2 | — | [shapely](https://pypi.org/project/shapely/) | rapidocr 依赖 |
 
@@ -59,7 +58,7 @@
 pip list --outdated
 
 # 仅检查核心依赖
-pip list --outdated | grep -iE "rapidocr|onnxruntime|opencv|decord|pyside6|qfluentwidgets|numpy|matplotlib|tensorrt|cuda-python|pyinstaller"
+pip list --outdated | grep -iE "rapidocr|onnxruntime|opencv|decord|pyside6|qfluentwidgets|numpy|tensorrt|cuda-python|pyinstaller"
 ```
 
 ### 测试新版本

@@ -48,8 +48,6 @@ def main() -> None:
     parser.add_argument("--reocr-model", choices=["v6_tiny", "v6_small"], default=config.DEFAULT_REOCR_MODEL,
         help="重 OCR 模型 (默认 small，推荐 tiny+small 组合)")
     parser.add_argument("-o", "--output", type=str)
-    parser.add_argument("--analysis", nargs=2, metavar=("CSV1","CSV2"))
-    parser.add_argument("--analysis-out", type=str)
     parser.add_argument("--frame-start", type=int, metavar="N")
     parser.add_argument("--frame-end", type=int, metavar="N")
     parser.add_argument("--log-level", choices=["normal","detailed","debug"],
@@ -84,9 +82,6 @@ def main() -> None:
     if args.video:
         from headless import run_headless
         run_headless(args)
-    elif args.analysis:
-        from analysis import run_analysis_headless
-        run_analysis_headless(args)
     else:
         from PySide6.QtWidgets import QApplication
         import io, sys as _sys

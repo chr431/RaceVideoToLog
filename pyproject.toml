@@ -7,7 +7,6 @@ dependencies = [
     "rapidocr>=3.9",
     "onnxruntime>=1.27",
     "numpy>=2",
-    "matplotlib>=3.10",
     "PySide6-Essentials>=6.11",
     "pyqtgraph>=0.14",  # 只装核心模块，省 Addons (~300MB: QtWebEngine 等)
     "PySide6-Fluent-Widgets>=1.11",

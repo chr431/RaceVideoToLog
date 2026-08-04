@@ -11,7 +11,6 @@ DEPS = {
     "PySide6": "6.11.1",
     "PySide6-Fluent-Widgets": "1.11.2",
     "numpy": "2.5.1",
-    "matplotlib": "3.11.1",
     "pyclipper": "1.4.0",
     "shapely": "2.1.2",
 }
