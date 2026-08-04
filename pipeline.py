@@ -90,6 +90,7 @@ def _sum_nbytes(seq) -> int:
 logger = logging.getLogger("RaceVideoToLog.pipeline")
 
 
+import video_utils
 from video_utils import _preprocess_standard
 
 ProgressFn = Callable[[str, float], None]
@@ -374,11 +375,12 @@ class ProcessingPipeline:
                         self._cancel_check()
                     _t0 = _time.perf_counter()
                     try:
-                        _frame = _vr.next().asnumpy()
+                        # next_roi：GPU 上只拷 ROI 到主机（免全帧 D2H + crop）；
+                        # 老 DLL / CPU 回退 next() + 裁切
+                        _crop = video_utils.next_frame_roi(
+                            _vr, x1, y1, x2 + 1, y2 + 1)
                     except StopIteration:
                         break
-                    _crop = _frame[y1:y2 + 1, x1:x2 + 1].copy()
-                    del _frame
                     self._raw_frames.append((_fi, _crop))
                     _proc = _preprocess_standard(_crop, target_h, pad, max_width=_max_width)
                     _decode_ms += (_time.perf_counter() - _t0) * 1000.0
@@ -533,9 +535,9 @@ class ProcessingPipeline:
             if timing_str:
                 fh.write(f"# timing: {timing_str}\n")
             w = csv.writer(fh)
-            for row in rows:
-                w.writerow([f"{int(row[0])}", f"{row[1]:.2f}",
-                            f"{int(row[2])}", str(row[3])])
+            # 批量写（writerows 与 writerow 逐行输出逐字节一致，长视频省 1-2s）
+            w.writerows((f"{int(row[0])}", f"{row[1]:.2f}",
+                         f"{int(row[2])}", str(row[3])) for row in rows)
 
     def _populate_diag_final(self) -> None:
         """Fill final_value, flag, and correction_note into diagnostics."""

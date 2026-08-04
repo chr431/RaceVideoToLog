@@ -242,11 +242,11 @@ class TestInterpCandidate:
         rows = [[0.0, 0.0, 100.0, Flag.HIGH_TRUST],
                 [0.1, 0.0, 0.0, Flag.RAW],
                 [0.2, 0.0, 200.0, Flag.HIGH_TRUST]]
-        val = _interp_candidate(1, rows, set(), [r[0] for r in rows], 400)
+        val = _interp_candidate(1, rows, [r[0] for r in rows], 400)
         assert val == pytest.approx(150.0)
 
     def test_no_neighbors(self):
         rows = [[0.0, 0.0, 100.0, Flag.RAW],
                 [0.1, 0.0, 0.0, Flag.RAW]]
-        val = _interp_candidate(0, rows, set(), [r[0] for r in rows], 400)
+        val = _interp_candidate(0, rows, [r[0] for r in rows], 400)
         assert val is None

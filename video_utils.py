@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import hashlib
+from functools import lru_cache
 
 import numpy as np
 
@@ -63,6 +64,26 @@ def _parse_int_or_none(s: str) -> int | None:
         return int(s)
     except ValueError:
         return None
+def next_frame_roi(vr, x1: int, y1: int, x2: int, y2: int) -> "np.ndarray":
+    """Grab next frame, returning the ROI crop (RGB uint8 HxWx3).
+
+    Uses ``vr.next_roi(x1, y1, x2, y2)`` (half-open bounds, numpy slice
+    semantics — pass closed bounds + 1) when the DLL provides it; the GPU
+    path copies only the ROI from device memory.  Falls back to
+    ``vr.next()`` + Python crop for old DLLs / CPU builds.  Raises
+    StopIteration on EOF.
+    """
+    roi = getattr(vr, "next_roi", None)
+    if roi is not None:
+        arr = roi(x1, y1, x2, y2)
+        f = arr.asnumpy()
+        if f.ndim == 3 and f.shape[2] == 3:
+            return f
+        raise StopIteration()
+    f = vr.next().asnumpy()
+    return f[y1:y2, x1:x2]
+
+
 def clamp_region(x1: int, y1: int, x2: int, y2: int, width: int, height: int) -> tuple[int, int, int, int]:
     x1, x2 = sorted((max(0, min(width - 1, x1)), max(0, min(width - 1, x2))))
     y1, y2 = sorted((max(0, min(height - 1, y1)), max(0, min(height - 1, y2))))
@@ -87,6 +108,26 @@ def compute_video_hash(video_path: str | Path, chunk_size: int = 1_048_576) -> s
     return h.hexdigest()[:16]  # 前 16 字符足够区分
 
 
+@lru_cache(maxsize=64)
+def _resize_map(src_w: int, src_h: int, new_w: int, new_h: int):
+    """双线性坐标映射（缓存）：只依赖输入/输出尺寸，与像素无关。
+
+    主流水线每帧同一 ROI 调 _np_resize（目标尺寸恒定）→ 映射缓存
+    后每帧省去 arange/clip/cast 等 ~60% 的 numpy 工作量。
+    """
+    scale_x = src_w / new_w
+    scale_y = src_h / new_h
+    src_x = np.clip((np.arange(new_w) + 0.5) * scale_x - 0.5, 0, src_w - 1)
+    src_y = np.clip((np.arange(new_h) + 0.5) * scale_y - 0.5, 0, src_h - 1)
+    x0 = src_x.astype(np.int32)
+    y0 = src_y.astype(np.int32)
+    x1 = np.minimum(x0 + 1, src_w - 1)
+    y1 = np.minimum(y0 + 1, src_h - 1)
+    wx = (src_x - x0).astype(np.float32)
+    wy = (src_y - y0).astype(np.float32)
+    return x0, x1, y0, y1, wx, wy
+
+
 def _np_resize(img: "np.ndarray", new_w: int, new_h: int) -> "np.ndarray":
     """双线性 resize（float32），与 cv2.resize INTER_LINEAR 像素对齐一致。
 
@@ -97,21 +138,14 @@ def _np_resize(img: "np.ndarray", new_w: int, new_h: int) -> "np.ndarray":
     src_h, src_w = img.shape[:2]
     if new_w == src_w and new_h == src_h:
         return img.astype(np.float32)
-    scale_x = src_w / new_w
-    scale_y = src_h / new_h
-    src_x = np.clip((np.arange(new_w) + 0.5) * scale_x - 0.5, 0, src_w - 1)
-    src_y = np.clip((np.arange(new_h) + 0.5) * scale_y - 0.5, 0, src_h - 1)
-    x0 = src_x.astype(np.int32)
-    y0 = src_y.astype(np.int32)
-    x1 = np.minimum(x0 + 1, src_w - 1)
-    y1 = np.minimum(y0 + 1, src_h - 1)
-    wx = (src_x - x0).astype(np.float32)[None, :, None]
-    wy = (src_y - y0).astype(np.float32)[:, None, None]
+    x0, x1, y0, y1, wx, wy = _resize_map(src_w, src_h, new_w, new_h)
     f = img.astype(np.float32)
-    return ((1 - wx) * (1 - wy) * f[y0[:, None], x0[None, :]] +
-            wx * (1 - wy) * f[y0[:, None], x1[None, :]] +
-            (1 - wx) * wy * f[y1[:, None], x0[None, :]] +
-            wx * wy * f[y1[:, None], x1[None, :]])
+    wx3 = wx[None, :, None]
+    wy3 = wy[:, None, None]
+    return ((1 - wx3) * (1 - wy3) * f[y0[:, None], x0[None, :]] +
+            wx3 * (1 - wy3) * f[y0[:, None], x1[None, :]] +
+            (1 - wx3) * wy3 * f[y1[:, None], x0[None, :]] +
+            wx3 * wy3 * f[y1[:, None], x1[None, :]])
 
 
 def _preprocess_standard(crop: "np.ndarray", target_h: int, pad: int,

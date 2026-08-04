@@ -26,33 +26,31 @@ def parse_csv(path: str | Path) -> tuple[list[float], list[float], list[float], 
     - 裁剪起始零速帧，距离和时间归零
     """
     import re
-    # ── 解析 CSV 头，提取 fps ──
+    # ── 单趟解析：头阶段（# 行）收集 fps，数据行出现后直接解析 ──
     fps = 0.0
-    with open(str(path), "r", encoding="utf-8-sig") as f:
-        for line in f:
-            line = line.strip()
-            if not line.startswith("#"):
-                break
-            m = re.search(r"\bfps=([\d.]+)", line)
-            if m:
-                try:
-                    fps = float(m.group(1))
-                except ValueError:
-                    pass
-    if fps <= 0:
-        fps = 1.0  # fallback: treat frame index as-is
-
     times, dists, speeds, flags = [], [], [], []
     with open(str(path), "r", encoding="utf-8-sig") as f:
         for line in f:
             line = line.strip()
-            if line.startswith("#") or not line:
+            if not line:
+                continue
+            if line.startswith("#"):
+                if not times:  # 头阶段：只在数据行出现前收集 fps
+                    m = re.search(r"\bfps=([\d.]+)", line)
+                    if m:
+                        try:
+                            fps = float(m.group(1))
+                        except ValueError:
+                            pass
                 continue
             parts = line.split(",")
             if len(parts) >= 3:
                 try:
                     frame_idx = float(parts[0])
-                    times.append(frame_idx / fps)  # frame → seconds
+                    # fps 头可能在数据行后才读到？不会 —— 头固定在前；
+                    # 但数据行前 fps<=0 时用 1.0 兜底（与原行为一致）
+                    div = fps if fps > 0 else 1.0
+                    times.append(frame_idx / div)  # frame → seconds
                     dists.append(float(parts[1]))
                     speeds.append(float(parts[2]))
                     flags.append(int(parts[3]) if len(parts) > 3 else 0)

@@ -15,6 +15,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+import numpy as np
+
 
 from config import (
     MPS_TO_KMH,
@@ -176,27 +178,30 @@ def _signal_linearity(rows: list, times: list[float],
             continue
 
         # Expected values from all left-right pairs, median for robustness
-        expected_vals: list[float] = []
-        for li in left_frames:
-            lv = rows[li][2]
-            lt = times[li]
-            for ri in right_frames:
-                rv = rows[ri][2]
-                rt = times[ri]
-                span = rt - lt
-                if span < 1e-6:
-                    continue
-                frac = (t_i - lt) / span
-                expected = lv + (rv - lv) * frac
-                if expected > 0:
-                    expected_vals.append(expected)
+        # （配对部分向量化：集合语义与原双层循环相同 —— span 过滤 +
+        # expected>0 过滤 → 排序后中位数一致）
+        lv = np.fromiter((rows[li][2] for li in left_frames),
+                         dtype=np.float64, count=len(left_frames))
+        lt = np.fromiter((times[li] for li in left_frames),
+                         dtype=np.float64, count=len(left_frames))
+        rv = np.fromiter((rows[ri][2] for ri in right_frames),
+                         dtype=np.float64, count=len(right_frames))
+        rt = np.fromiter((times[ri] for ri in right_frames),
+                         dtype=np.float64, count=len(right_frames))
+        span = rt[None, :] - lt[:, None]
+        mask = span >= 1e-6
+        with np.errstate(divide='ignore', invalid='ignore'):
+            frac = (t_i - lt[:, None]) / span  # span==0 → nan，被 mask 排除
+        expected = lv[:, None] + (rv[None, :] - lv[:, None]) * frac
+        exp_flat = expected[mask]
+        exp_flat = exp_flat[exp_flat > 0]
 
-        if not expected_vals:
+        if exp_flat.size == 0:
             scores.append(50.0)
             continue
 
-        expected_vals.sort()
-        expected = expected_vals[len(expected_vals) // 2]  # median
+        exp_flat.sort()
+        expected = float(exp_flat[exp_flat.size // 2])  # median
 
         deviation = abs(v - expected) / expected
         score = 100.0 * math.exp(-deviation * LINEARITY_DECAY_FACTOR)

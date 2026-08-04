@@ -130,6 +130,8 @@ class OcrEngine:
             self._max_in_shape = tuple(int(v) for v in prof_in[2])
             self._max_out_shape = tuple(int(v) for v in prof_out[2])
             self._buffers: tuple | None = None  # (dev_in, dev_out, host_in, host_out)
+            self._last_in_shape: tuple | None = None
+            self._out_shape: tuple | None = None
             self._trt = True
         except Exception as e:
             log.warning("TensorRT 引擎不可用 (%s)，回退 ONNX 后端。", e)
@@ -167,7 +169,12 @@ class OcrEngine:
     @staticmethod
     def _resize_norm(img: np.ndarray, max_wh_ratio: float,
                      height: int = 48) -> np.ndarray:
-        """resize 到 48 高 + (x/255-0.5)/0.5 归一化 + pad 到 batch 最大宽。"""
+        """resize 到 48 高 + (x/255-0.5)/0.5 归一化 + pad 到 batch 最大宽。
+
+        输入已是 target 高度 float32（pipeline._preprocess_standard 输出）
+        时跳过 _np_resize —— 其等尺寸路径的 astype 拷贝是无谓开销。
+        数值路径不变（省略的是同一 float32 数据的整块拷贝），逐位一致。
+        """
         from video_utils import _np_resize
         img_width = int(height * max_wh_ratio)
         h, w = img.shape[:2]
@@ -176,10 +183,17 @@ class OcrEngine:
             resized_w = img_width
         else:
             resized_w = int(math.ceil(height * ratio))
-        resized = _np_resize(img, resized_w, height).transpose((2, 0, 1)) / 255
+        if resized_w == w and h == height and img.dtype == np.float32:
+            resized = img
+        else:
+            resized = _np_resize(img, resized_w, height)
+        resized = resized.transpose((2, 0, 1)) / 255
         resized = (resized - 0.5) / 0.5
-        pad = np.zeros((3, height, img_width), dtype=np.float32)
+        pad = np.empty((3, height, img_width), dtype=np.float32)
         pad[:, :, :resized_w] = resized
+        if resized_w < img_width:
+            # np.empty 未初始化：尾部必须显式置 0（原 np.zeros 语义）
+            pad[:, :, resized_w:] = 0.0
         return pad
 
     # ═══════════════ 推理 ═══════════════
@@ -196,8 +210,13 @@ class OcrEngine:
 
     def _trt_execute(self, x: np.ndarray) -> np.ndarray:
         from cuda.bindings import runtime as cudart  # type: ignore[import-not-found]
-        self._trt_ctx.set_input_shape(self._trt_in_name, x.shape)
-        out_shape = tuple(self._trt_ctx.get_tensor_shape(self._trt_out_name))
+        # 主路径 shape 恒定（batch 6, 320 宽）：set_input_shape 实测每批
+        # 开销 ~0.5ms（TRT context 重配置），只在 shape 变化时调用
+        if self._last_in_shape != x.shape:
+            self._trt_ctx.set_input_shape(self._trt_in_name, x.shape)
+            self._last_in_shape = x.shape
+            self._out_shape = tuple(self._trt_ctx.get_tensor_shape(self._trt_out_name))
+        out_shape = self._out_shape
         # 输入 buffer：max profile 形状预分配并复用
         if self._buffers is None:
             size_in = int(np.prod(self._max_in_shape)) * 4
@@ -247,6 +266,30 @@ class OcrEngine:
             text, conf = "", 0.0
         return RecOut(text, conf)
 
+    def _ctc_decode_batch(self, preds: np.ndarray) -> list:
+        """批 CTC decode：(B, seq, C) → list[RecOut]。
+
+        argmax/max/keep 掩码一次归约（与逐帧 _ctc_decode 的相同归约按行
+        应用 → 数值一致）；文本与置信度逐帧拼接。
+        """
+        idx = preds.argmax(axis=2)  # (B, seq)
+        prob = preds.max(axis=2)
+        keep = np.ones_like(idx, dtype=bool)
+        keep[:, 1:] = idx[:, 1:] != idx[:, :-1]
+        keep &= idx != 0  # blank
+        out: list = []
+        for b in range(len(preds)):
+            kb = keep[b]
+            if kb.any():
+                text = "".join(self._chars[i] for i in idx[b][kb])
+                # 与 rapidocr 一致：每帧概率先 round(5) 再取均值，最后 round(5)
+                confs = [round(float(p), 5) for p in prob[b][kb]]
+                conf = round(float(np.mean(confs)), 5)
+            else:
+                text, conf = "", 0.0
+            out.append(RecOut(text, conf))
+        return out
+
     # ═══════════════ 批处理入口 ═══════════════
 
     def __call__(self, img_list: list) -> list:
@@ -265,6 +308,13 @@ class OcrEngine:
                              for i in order])
         preds = self._infer(batch_np)
         results: list = [None] * len(img_list)
-        for k, idx in enumerate(order):
-            results[idx] = self._ctc_decode(preds[k])
+        # 批向量化 decode：argmax/max/keep 一次归约（与逐帧 _ctc_decode
+        # 数值相同 —— 同一归约按行应用）；text 拼接保持逐帧
+        if preds.ndim == 3:
+            batch_results = self._ctc_decode_batch(preds)
+            for k, idx in enumerate(order):
+                results[idx] = batch_results[k]
+        else:
+            for k, idx in enumerate(order):
+                results[idx] = self._ctc_decode(preds[k])
         return results

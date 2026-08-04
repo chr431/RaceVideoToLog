@@ -99,7 +99,7 @@ def _find_neighbor_trusted(i: int, n: int, rows: list) -> tuple[int | None, int 
     return la, ra
 
 
-def _interp_candidate(i: int, rows: list, pinned_set: set, times: list,
+def _interp_candidate(i: int, rows: list, times: list,
                       max_speed_kmh: float, fps: float = 1.0) -> float | None:
     n = len(rows)
     la, ra = _find_neighbor_trusted(i, n, rows)
@@ -290,7 +290,7 @@ def _generate_candidates(fi: int, rows: list, observations: list, raw_frames: li
                 other.append(cv); other_set.add(cv)
     needs_interp = (not reocr_only) or (raw_val < 0)
     if needs_interp:
-        interp_val = _interp_candidate(fi, rows, pinned_set, times, max_speed_kmh, fps=fps)
+        interp_val = _interp_candidate(fi, rows, times, max_speed_kmh, fps=fps)
         if interp_val is None:
             interp_val = _local_interp(fi, rows, observations, times, max_speed_kmh, fps=fps, max_accel_mps2=max_accel_mps2)
         if interp_val is not None and interp_val not in protected_set and interp_val not in other_set:
@@ -477,8 +477,7 @@ def _auto_align_pass(rows: list, observations: list, times: list,
                                               Flag.PARTIAL_AUTO})
         if interp is None:
             # Try trusted-neighbor interpolation as fallback
-            pinned_set = {j for j in range(n) if Flag.is_trusted(rows[j][3])}
-            interp = _interp_candidate(i, rows, pinned_set, times, max_speed_kmh, fps=fps)
+            interp = _interp_candidate(i, rows, times, max_speed_kmh, fps=fps)
         if interp is None:
             continue
         diff = interp - cur_v
@@ -792,7 +791,7 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
                 elif distant != raw_v:
                     candidates_by_frame[i] = [raw_v, distant]
         if ref is None:
-            ref = _interp_candidate(i, rows, pinned_set, times, max_speed_kmh, fps=fps)
+            ref = _interp_candidate(i, rows, times, max_speed_kmh, fps=fps)
         # Safety: if interpolation is far from raw OCR (>50 km/h), the
         # interpolation likely crosses a real speed change. Skip it to
         # prevent false corrections (e.g., 168→68 across a speed jump).
