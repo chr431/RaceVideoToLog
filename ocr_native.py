@@ -72,9 +72,19 @@ class OcrEngine:
 
     def _init_onnx(self, models: Path, size: str) -> None:
         import onnxruntime as ort
+        # 线程数必须显式限制：默认（=全部核）会让 ONNX 推理占满 CPU，
+        # 与 decord 解码线程抢核（实测 decode 343fps → 68fps）。与
+        # rapidocr 时代一致：intra_op = cpu//2 留核给解码器。
+        so = ort.SessionOptions()
+        try:
+            n = max(2, int(os.cpu_count() or 4) // 2)
+        except (ValueError, TypeError):
+            n = 4
+        so.intra_op_num_threads = n
+        so.inter_op_num_threads = 2
         self._session = ort.InferenceSession(
             str(models / f"PP-OCRv6_rec_{size}.onnx"),
-            providers=["CPUExecutionProvider"])
+            sess_options=so, providers=["CPUExecutionProvider"])
         self._trt = False
         self._max_batch = None  # ONNX 动态 batch，不分片
 
@@ -205,8 +215,19 @@ class OcrEngine:
             for i in range(0, len(batch_np), self._max_batch):
                 outs.append(self._trt_execute(batch_np[i:i + self._max_batch]))
             return np.concatenate(outs, axis=0)
-        out = self._session.run(None, {"x": batch_np})[0]
-        return np.asarray(out, dtype=np.float32)
+        # ONNX 动态 batch 无上限：re-OCR 预热可能一次喂数千帧（test4 5942
+        # 帧）→ 中间激活内存爆炸（MaxPool bad allocation）。分片限制单批
+        # 帧数，输出形状不变。
+        onnx_max = 64
+        if len(batch_np) <= onnx_max:
+            return np.asarray(self._session.run(None, {"x": batch_np})[0],
+                              dtype=np.float32)
+        outs = []
+        for i in range(0, len(batch_np), onnx_max):
+            outs.append(np.asarray(
+                self._session.run(None, {"x": batch_np[i:i + onnx_max]})[0],
+                dtype=np.float32))
+        return np.concatenate(outs, axis=0)
 
     def _trt_execute(self, x: np.ndarray) -> np.ndarray:
         from cuda.bindings import runtime as cudart  # type: ignore[import-not-found]

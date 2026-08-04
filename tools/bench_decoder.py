@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -38,9 +39,14 @@ def resolve(video_name: str) -> tuple[str, str]:
     return str(video), str(truth)
 
 
-def run(video: str, truth: str, backend: str, out_csv: str) -> dict:
+def run(video: str, truth: str, backend: str, out_csv: str,
+        cpu_decord: bool = False) -> dict:
     """Run headless pipeline, parse timing + actual backend from output CSV/stdout."""
+    Path(out_csv).unlink(missing_ok=True)  # stale CSV from a prior run must not be parsed
     t0 = time.perf_counter()
+    env = dict(os.environ)
+    if cpu_decord:
+        env["DECORD_FORCE_CPU"] = "1"
     r = subprocess.run(
         [sys.executable, str(PROJECT / "RaceVideoToLog.py"),
          video, "--from-csv", truth,
@@ -48,7 +54,7 @@ def run(video: str, truth: str, backend: str, out_csv: str) -> dict:
          "--log-level", "detailed",
          "-o", out_csv],
         cwd=str(PROJECT), capture_output=True, text=True, timeout=900,
-        encoding="utf-8", errors="replace",
+        encoding="utf-8", errors="replace", env=env,
     )
     timing: dict = {"wall_s": round(time.perf_counter() - t0, 2)}
     # logger goes to stderr (Python logging default), prints go to stdout —
@@ -114,7 +120,9 @@ def print_row(label: str, t: dict, acc: dict | None = None) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--video", default="test4", help="video name (resolved under D:/Videos/racelog_test)")
-    ap.add_argument("--backend", default="tensorrt", choices=["tensorrt", "onnx", "auto"])
+    ap.add_argument("--backend", default="tensorrt", choices=["tensorrt", "cpu", "auto"])
+    ap.add_argument("--cpu-decord", action="store_true",
+                    help="force decord CPU decoder (DECORD_FORCE_CPU=1)")
     ap.add_argument("--runs", type=int, default=2, help="runs (last one used for stats)")
     ap.add_argument("--json", type=str, default="", help="save record to JSON (default outputs/bench_<video>.json)")
     args = ap.parse_args()
@@ -125,14 +133,15 @@ def main() -> None:
 
     print(f"Video: {video}")
     print(f"Truth: {truth}")
-    print(f"Backend: {args.backend}, runs: {args.runs}")
+    print(f"Backend: {args.backend}, decord: {'CPU' if args.cpu_decord else 'auto'}, runs: {args.runs}")
 
-    record: dict = {"video": args.video, "backend": args.backend, "runs": []}
+    record: dict = {"video": args.video, "backend": args.backend,
+                    "cpu_decord": args.cpu_decord, "runs": []}
     for run_i in range(args.runs):
         out_csv = str(OUT_DIR / f"bench_{args.video}_r{run_i + 1}.csv")
         label = f"run {run_i + 1}"
         print(f"  Running {label}...", end=" ", flush=True)
-        t = run(video, truth, args.backend, out_csv)
+        t = run(video, truth, args.backend, out_csv, cpu_decord=args.cpu_decord)
         acc = accuracy(out_csv, truth) if "frames" in t else None
         if run_i == args.runs - 1:  # warm run -> report + record
             print_row(label, t, acc)

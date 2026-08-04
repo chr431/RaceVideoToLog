@@ -78,6 +78,10 @@ def next_frame_roi(vr, x1: int, y1: int, x2: int, y2: int) -> "np.ndarray":
         arr = roi(x1, y1, x2, y2)
         f = arr.asnumpy()
         if f.ndim == 3 and f.shape[2] == 3:
+            # GPU：next_roi 已裁剪；CPU reader 的 next_roi 回退全帧
+            # （decord 的 NextFrameRoi 对 CPU 返回 NextFrameImpl()）→ 裁剪
+            if f.shape[0] != y2 - y1 or f.shape[1] != x2 - x1:
+                return f[y1:y2, x1:x2]
             return f
         raise StopIteration()
     f = vr.next().asnumpy()

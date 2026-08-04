@@ -206,8 +206,8 @@ def _auto_expand_digits(raw_text: str, max_speed_kmh: float) -> list[int]:
     return candidates
 
 
-def _multi_height_ocr(crop_bgr: "np.ndarray", ocr: "OcrEngine", max_speed_kmh: float,
-                  cache: dict | None = None, max_width: int = 0) -> set:
+def _reocr_crop(crop_bgr: "np.ndarray", ocr: "OcrEngine", max_speed_kmh: float,
+                cache: dict | None = None, max_width: int = 0) -> set:
     cache = cache if cache is not None else {}
     if crop_bgr is not None and crop_bgr.size > 0:
         raw = crop_bgr.data.tobytes() if hasattr(crop_bgr, 'data') else crop_bgr.tobytes()
@@ -259,7 +259,7 @@ def _generate_candidates(fi: int, rows: list, observations: list, raw_frames: li
     obs = observations[min(fi, len(observations) - 1)]
 
     if fi < len(raw_frames):
-        reocr_set = _multi_height_ocr(raw_frames[fi][1], ocr, max_speed_kmh, cache=reocr_cache, max_width=max_width)
+        reocr_set = _reocr_crop(raw_frames[fi][1], ocr, max_speed_kmh, cache=reocr_cache, max_width=max_width)
         for cv in sorted(reocr_set):
             if 0 <= cv <= max_speed_kmh and cv not in protected_set:
                 protected.append(cv); protected_set.add(cv)
@@ -649,7 +649,7 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
     total_correct = len(correction_frames)
 
     # ── re-OCR 批量预热：候选生成前一次性批推理所有未缓存帧 ──
-    # _multi_height_ocr 逐帧调用会浪费 session.run 固定开销（~3x 慢）。
+    # _reocr_crop 逐帧调用会浪费 session.run 固定开销（~3x 慢）。
     # 先批量预处理+推理填 cache，逐帧循环全部命中。
     if raw_frames and ocr is not None:
         from video_utils import _preprocess_standard
@@ -671,11 +671,16 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
         if _batch_procs:
             _results = ocr_rec_batch(ocr, _batch_procs)
             for fi, res in zip(_batch_frames, _results):
+                crop_bgr = raw_frames[fi][1]
+                raw = crop_bgr.data.tobytes() if hasattr(crop_bgr, 'data') else crop_bgr.tobytes()
                 sv, rt, _conf = _esv(res)
+                # 失败帧也写空集：同一帧重试结果必然相同（同模型同预处理），
+                # 避免 _reocr_crop 逐帧重试推理（CPU 低质帧多时曾
+                # 每帧 ~8.7ms × 数百帧重试）
                 if sv is not None and sv <= max_speed_kmh:
-                    crop_bgr = raw_frames[fi][1]
-                    raw = crop_bgr.data.tobytes() if hasattr(crop_bgr, 'data') else crop_bgr.tobytes()
                     cache[hash(raw[:256])] = {int(sv)}
+                else:
+                    cache[hash(raw[:256])] = set()
 
     for idx, fi in enumerate(sorted(correction_frames)):
         cands = _generate_candidates(fi, rows, observations, raw_frames, ocr, pinned_set,
