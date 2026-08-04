@@ -72,14 +72,19 @@ class OcrEngine:
 
     def _init_onnx(self, models: Path, size: str) -> None:
         import onnxruntime as ort
-        # 线程数必须显式限制：默认（=全部核）会让 ONNX 推理占满 CPU，
-        # 与 decord 解码线程抢核（实测 decode 343fps → 68fps）。与
-        # rapidocr 时代一致：intra_op = cpu//2 留核给解码器。
+        # 线程数必须显式限制：默认（=全部逻辑核）会让 ONNX 推理占满 CPU
+        # 并与解码器抢核；且 os.cpu_count() 是逻辑核（7945HX 16核32线程），
+        # 逻辑核/2=16 线程对物理 16 核超配（实测 16 线程 0.823ms/帧 vs
+        # 8 线程 0.598ms/帧 —— 超线程核上的线程开销）。用物理核数/2。
         so = ort.SessionOptions()
         try:
-            n = max(2, int(os.cpu_count() or 4) // 2)
-        except (ValueError, TypeError):
-            n = 4
+            import psutil  # type: ignore[import-not-found]
+            physical = psutil.cpu_count(logical=False)
+        except ImportError:
+            physical = None
+        if not physical:
+            physical = (int(os.cpu_count() or 8) // 2)  # 假设 2 线程/核
+        n = max(2, physical // 2)
         so.intra_op_num_threads = n
         so.inter_op_num_threads = 2
         self._session = ort.InferenceSession(
