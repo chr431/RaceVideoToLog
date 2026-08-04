@@ -123,6 +123,15 @@ build_exe.bat
 
 生成 `dist/RaceVideoToLog/`。GPU 用户仅需 NVIDIA 驱动（NVDEC 解码）；TensorRT OCR 推理需额外安装 CUDA Toolkit + TensorRT 并加入 PATH。
 
+## 运行时缓存（卸载时需删除）
+
+程序会在用户目录创建以下缓存（卸载/清理时需手动删除）：
+
+| 路径 | 内容 |
+| --- | --- |
+| `%LOCALAPPDATA%\RaceVideoToLog\ocr_engines\`（Windows）；`~/.cache/racevideotolog/ocr_engines/`（Linux/macOS） | TensorRT 引擎缓存：首次运行时由 ONNX 模型自动构建（约 2 分钟），之后直接复用。**与 GPU 架构绑定**（如 sm89 = RTX 40 系）—— 换显卡后旧引擎会自动失效并回退/重建。删除后下次运行会重新构建。 |
+| `%LOCALAPPDATA%\RaceVideoToLog\gui_timing.log` | 调试计时日志（排查界面卡顿用），可随时删除。 |
+
 ## License
 
 GPLv3（因依赖 PySide6-Fluent-Widgets GPLv3）。详见 LICENSE 文件。
