@@ -42,19 +42,32 @@ timing + 精度一并输出、JSON 记录）；新增 `tools/decord_smoke.py`
 
 ### CPU 组合（decord/CPU 解码 + ONNX CPU 推理，无 NVIDIA GPU 用户）
 
-**核心修复（性能 -74%）**：`next_frame_roi` 对 CPU reader 返回了全帧
-（decord 的 next_roi 对非 CUDA 上下文回退全帧），封装未裁剪 → CPU
-路径把 1080p 全帧缩略图喂给 OCR → ~95% 帧识别失败 → 置信度崩溃 →
-每帧都进 correction → test4 全量 246s。修复后 63s（精度 97.98%，
-反超 GPU 路径的 97.86%）。
+**核心修复（性能 -95%，test5 33.1s → 13.0s）**：
+- `next_frame_roi` 对 CPU reader 返回了全帧（decord 的 next_roi 对非
+  CUDA 上下文回退全帧），封装未裁剪 → CPU 路径把 1080p 全帧缩略图喂给
+  OCR → ~95% 帧识别失败 → 置信度崩溃 → 每帧都进 correction → test4
+  全量 246s → 修复后 63s（精度 97.98%）
+- **from-csv 覆盖循环误判显式参数**：`值==argparse 默认值` 被判定为
+  "用户未指定" → 显式 `--ocr-model v6_tiny` 被 CSV 头的 `model=v6_small`
+  静默覆盖，引擎实际是 small（CPU 3.1ms/帧 vs tiny 0.7ms/帧）→ 解释
+  了"进程级 ONNX 推理慢 4 倍"谜团（非性能问题，是引擎被换）。修复后
+  33.1s → 13.0s（比 v2.7.0 的 23.4s 快 43%），精度 99.93%（0.07% 误差，
+  0 false_trusted）
+
+**内存峰值优化（correction 阶段 7.3GB → ~1GB）**：批量 re-OCR 预热
+一次喂 ~1000 帧 → `__call__` 内产生 (B, seq, 6906) 级中间数组
+（整批 argmax int64 ~2.2GB/千帧；Windows 堆不归还 → RSS 保持高位）：
+- ONNX 分片 64 → 16（实测更快 + ORT arena 峰值 920 → 300MB）
+- `_ctc_decode_batch` 分块归约（每块 64 帧，峰值 ~150MB，数值一致）
+- correction 批量预热分批 ≤64 帧/次调用
 
 **配套修复**：
 - ONNX 推理显式 `intra_op=cpu//2`（默认占满全部核会饿死解码器；
   与 rapidocr 时代配置一致）
-- ONNX re-OCR 批量分片 64 帧（5942 帧一次性批推理 OOM：
-  MaxPool bad allocation）
 - re-OCR 失败帧也写 cache 空集（避免每帧 ~8.7ms 重试推理）；
   `_multi_height_ocr` 重命名为 `_reocr_crop`（多高度早已弃用）
+- 内存泄漏修复：`next_frame_roi` 视图引用全帧（3000 帧 → 18GB）
+  改为 `.copy()`
 
 **decord 侧（CPU 解码）**：
 - 强制 BT.601 色彩转换（setparams）：CUDA 路径固定 BT.601 矩阵，
