@@ -1,4 +1,4 @@
-"""Unified padding benchmark — external (replicate) vs internal (rapidocr).
+"""Unified padding benchmark — external (replicate) padding sweep.
 
 Compares:
     - External pad values: 0, 2, 4, 8, 16
@@ -22,8 +22,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import cv2
 import numpy as np
 
-from ocr_engine import _init_rapidocr, _get_model_params, extract_speed_value
-from gpu_setup import select_backend, get_engine_params, get_engine_type
+from ocr_engine import extract_speed_value
+from gpu_setup import select_backend, get_engine_type
 from pipeline import _preprocess_standard
 
 VIDEO = r"D:\Repo\RaceVideoToLog\test4.mp4"
@@ -40,23 +40,15 @@ PAD_VALUES = [0, 2, 4, 8, 16]
 
 
 def _patch_ocr(ocr, use_preprocess_img: bool, use_vertical_padding: bool):
-    """Patch a RapidOCR instance's internal preprocessing params."""
-    ocr.cfg.Global.use_preprocess_img = use_preprocess_img
-    ocr.cfg.Global.use_vertical_padding = use_vertical_padding
-    # Refresh cached local copies
-    ocr.min_side_len = ocr.cfg.Global.min_side_len
-    ocr.max_side_len = ocr.cfg.Global.max_side_len
+    """OcrEngine 预处理参数固定（不再支持运行时补丁），保留签名兼容。"""
+    return ocr
 
 
 def _create_ocr():
-    """Create a fresh RapidOCR instance for the given backend and model."""
-    _init_rapidocr()
-    from rapidocr import RapidOCR
-    engine_params = get_engine_params()
+    """Create a fresh OcrEngine for the given backend and model."""
+    from ocr_native import OcrEngine
     et = get_engine_type()
-    model_params = _get_model_params(OCR_MODEL, et)
-    all_params = {**(model_params or {}), **engine_params}
-    return RapidOCR(params=all_params)
+    return OcrEngine(OCR_MODEL, et)
 
 
 def run_bench(ocr, cap, pad: int, label: str):
@@ -74,7 +66,7 @@ def run_bench(ocr, cap, pad: int, label: str):
             continue
         crop = frame[ROI[1]:ROI[3], ROI[0]:ROI[2]]
         proc = _preprocess_standard(crop, TARGET_H, pad)
-        ocr_res = ocr(proc)
+        ocr_res = ocr([proc])[0]
         sv, rt, _ = extract_speed_value(ocr_res)
         results.append(sv if sv is not None else "")
         f += 1
@@ -88,7 +80,7 @@ def run_bench(ocr, cap, pad: int, label: str):
 
 def main():
     print("=" * 80)
-    print("Padding Benchmark: external pad + rapidocr internal preprocessing")
+    print("Padding Benchmark: external pad (OcrEngine)")
     print(f"Video: {VIDEO}, frames: {FRAME_START}-{FRAME_END}, target_h={TARGET_H}")
     print("=" * 80)
 
@@ -103,7 +95,7 @@ def main():
 
     all_results = {}
 
-    # ── 1. External padding sweep (rapidocr defaults: ppi=T, vp=T) ──
+    # ── 1. External padding sweep ──
     print("── External padding sweep (use_preprocess_img=True, use_vertical_padding=True) ──")
     for pad in PAD_VALUES:
         ocr = _create_ocr()

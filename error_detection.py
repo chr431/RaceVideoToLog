@@ -4,7 +4,7 @@ Computes continuous confidence scores [0, 100] for every frame using 4
 independent signals. READ-ONLY: does not modify any values or flags.
 
 Signals:
-  1. OCR model confidence — from RapidOCR output
+  1. OCR model confidence — from OcrEngine output
   2. Physics reachability  — both-neighbor check
   3. Local linearity       — median-of-pairs robust interpolation
   4. Acceleration spikes   — opposing spike pairs = consistency island
@@ -33,7 +33,7 @@ from config import (
 )
 
 if TYPE_CHECKING:
-    from rapidocr import RapidOCR
+    from ocr_native import OcrEngine
 
 logger = logging.getLogger("RaceVideoToLog.error_detection")
 

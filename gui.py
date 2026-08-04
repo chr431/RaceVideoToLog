@@ -10,8 +10,8 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
+    from ocr_native import OcrEngine
     from decord import VideoReader
-    from rapidocr import RapidOCR
 
 import config
 
@@ -28,7 +28,7 @@ from PySide6.QtGui import (
 from ocr_engine import (
     VideoMetadata, Flag,
     format_duration,
-    _reset_backend, _select_backend, _get_model_params,
+    _reset_backend, _select_backend,
 )
 from gui_analysis import AnalysisTab
 from gui_review import ReviewDialog
@@ -62,7 +62,7 @@ class RaceVideoToLogApp(QMainWindow):
         self._throttle_timer = QTimer(self)
         self._throttle_timer.setSingleShot(True)
         self._throttle_timer.timeout.connect(self._show_throttled_frame)
-        self.ocr_engine: "RapidOCR | None" = None
+        self.ocr_engine: "OcrEngine | None" = None
 
         self._export_thread: ExportThread | None = None
         self.correction_mode: str = config.DEFAULT_CORRECTION_MODE
@@ -406,7 +406,7 @@ class RaceVideoToLogApp(QMainWindow):
         _backend_labels = {"TensorRT": "TensorRT (GPU)", "CUDA": "CUDA (GPU)", "CPU": "CPU"}
         self._status_label.setText(f"OCR 后端: {_backend_labels.get(actual, actual)}")
 
-    def get_ocr_engine(self) -> "RapidOCR":
+    def get_ocr_engine(self) -> "OcrEngine":
         if self.ocr_engine is None: self.ocr_engine = self._create_ocr()
         return self.ocr_engine
 
@@ -415,26 +415,23 @@ class RaceVideoToLogApp(QMainWindow):
         text = self._settings["reocr_model_combo"].currentText()
         return None if text == "同主模型" else text
 
-    def _create_ocr(self) -> "RapidOCR":
-        from rapidocr import RapidOCR
+    def _create_ocr(self) -> "OcrEngine":
+        from ocr_native import OcrEngine
         _reset_backend()
         keys = config.BACKEND_KEYS
         key = keys[self._settings["backend_combo"].currentIndex()]
         _select_backend(key)
-        from gpu_setup import get_engine_params, get_engine_type, get_setup_advice
-        engine_params = get_engine_params()
+        from gpu_setup import get_engine_type, get_setup_advice
         _et = get_engine_type()
 
         _advice = get_setup_advice()
         if _advice:
             self._status_label.setText(_advice.split("\n")[0])
 
-        model_params = _get_model_params(self._settings["model_combo"].currentText(), _et)
-        all_params = {**(model_params or {}), **engine_params}
         if _et == "tensorrt":
-            self._status_label.setText("正在加载 TensorRT 引擎（首次使用可能需要几分钟）...")
+            self._status_label.setText("正在加载 TensorRT 引擎...")
             self._status_label.repaint()
-        return RapidOCR(params=all_params)
+        return OcrEngine(self._settings["model_combo"].currentText(), _et)
 
     def _release_engines(self) -> None:
         for e in ([self.ocr_engine] if self.ocr_engine else []):

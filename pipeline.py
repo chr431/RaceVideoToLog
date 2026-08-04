@@ -13,7 +13,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from rapidocr import RapidOCR
+    from ocr_native import OcrEngine
 
 import cv2
 import numpy as np
@@ -88,12 +88,12 @@ from ocr_engine import (
     clamp_region, compute_video_hash,
     extract_speed_value, ocr_rec_batch, SpeedObservation, Flag,
     SOURCE_TO_KMH, _parse_int_or_none,
-    _reset_backend, _select_backend, _get_model_params,
+    _reset_backend, _select_backend,
 )
 import config
 from error_detection import detect_errors
 from correction import correct_errors
-from gpu_setup import get_gpu_backend, get_engine_params, get_engine_type
+from gpu_setup import get_gpu_backend, get_engine_type
 
 # ── Memory diagnostics (feat/memory-diag) ──
 _MEM_DIAG_ENABLED = False  # set True to enable per-frame RSS logging
@@ -171,8 +171,8 @@ class ProcessingPipeline:
         self._video_backend_actual: str = ""  # set by _run_ocr: "decord/GPU" or "decord/CPU"
 
         # 状态
-        self._ocr: "RapidOCR | None" = None
-        self._reocr: "RapidOCR | None" = None  # 重 OCR 引擎
+        self._ocr: "OcrEngine | None" = None
+        self._reocr: "OcrEngine | None" = None  # 重 OCR 引擎
         self._raw_frames: list[tuple[float, np.ndarray]] = []
         self._observations: list[SpeedObservation] = []
         self._rows: list[list] = []
@@ -262,24 +262,19 @@ class ProcessingPipeline:
             rows.append([obs.timestamp, 0.0, int(obs.raw_speed_kmh), Flag.RAW])
         return rows
 
-    def _ensure_ocr(self) -> "RapidOCR":
-        from rapidocr import RapidOCR
+    def _ensure_ocr(self) -> "OcrEngine":
+        from ocr_native import OcrEngine
         if self._ocr is None:
             _reset_backend()
             self._backend_actual = _select_backend(self._backend)
-            engine_params = get_engine_params()
             _et = get_engine_type()
-            model_params = _get_model_params(self._ocr_model, _et)
-            all_params = {**(model_params or {}), **engine_params}
             if _et == "tensorrt":
-                self._emit("加载 TensorRT 引擎（首次使用可能需要几分钟构建引擎）...", 1.5)
-            self._ocr = RapidOCR(params=all_params)
+                self._emit("加载 TensorRT 引擎...", 1.5)
+            self._ocr = OcrEngine(self._ocr_model, _et)
             # 若指定了不同的重 OCR 模型，创建独立引擎
             _reocr_model = self._reocr_model or self._ocr_model
             if _reocr_model != self._ocr_model:
-                reocr_model_params = _get_model_params(_reocr_model, _et)
-                reocr_all_params = {**(reocr_model_params or {}), **engine_params}
-                self._reocr = RapidOCR(params=reocr_all_params)
+                self._reocr = OcrEngine(_reocr_model, _et)
             else:
                 self._reocr = self._ocr
         return self._ocr

@@ -18,13 +18,11 @@ os.environ["PATH"] = ";".join([
 datas = []
 binaries = []
 hiddenimports = [
-    'queue', 'PIL._tkinter_finder',
+    'queue',
     'threading', 'concurrent.futures',
     # numpy 2.x PyInstaller 兼容性修复
     'numpy._core._multiarray_umath', 'numpy._core.multiarray',
     'numpy._core.umath', 'numpy._core._methods',
-    # rapidocr 内部依赖
-    'yaml',
     # decord
     'decord',
     # Project modules (force inclusion; auto-discovered but explicit is safer)
@@ -32,16 +30,12 @@ hiddenimports = [
     'headless', 'analysis', 'gui_analysis', 'gui_review',
     'gui_export', 'gui_settings', 'gui_preview', 'viterbi', 'error_detection',
     'widget_utils', 'theme_manager', 'csv_io', 'ocr_text', 'signals',
-    'video_utils', 'tensorrt',
-    # rapidocr transitive deps (may not be auto-discovered)
-    'shapely', 'pyclipper', 'colorlog', 'omegaconf',
+    'video_utils', 'tensorrt', 'ocr_native',
+    # cv2 (rec 预处理 resize)
+    'cv2',
 ]
 
-# rapidocr（OCR 引擎，含 ONNX 后端）
-tmp_ret = collect_all('rapidocr')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-
-# onnxruntime（CPU provider；TensorRT 由 rapidocr 直接调用）
+# onnxruntime（CPU provider；TensorRT 由 tensorrt_bindings 直接调用）
 tmp_ret = collect_all('onnxruntime')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
@@ -85,18 +79,6 @@ for _qt_mod in ['PySide6.QtWidgets', 'PySide6.QtCore', 'PySide6.QtGui',
 # v5_server 模型 (已从 UI 移除，省 165MB)
 # DirectML provider (未使用)
 _EXCLUDE_FILES = {
-    # v5 models (replaced by v6_small)
-    'ch_PP-OCRv5_mobile_det_infer.onnx', 'ch_PP-OCRv5_mobile_rec_infer.onnx',
-    'ch_PP-OCRv5_det_server_infer.onnx', 'ch_PP-OCRv5_rec_server_infer.onnx',
-    # v3 legacy
-    'ch_PP-OCRv3_det_infer.onnx', 'ch_PP-OCRv3_rec_infer.onnx',
-    'ch_ppocr_mobile_v2.0_cls_infer.onnx',
-    # v6 detection models (skipped — ROI is already tightly cropped)
-    'PP-OCRv6_det_tiny.onnx', 'PP-OCRv6_det_small.onnx',
-    # v6 extras (medium unused)
-    'PP-OCRv6_det_medium.onnx', 'PP-OCRv6_rec_medium.onnx',
-    # TRT engine cache (GPU-specific, rebuilt by user if needed)
-    # Use prefix match below for all .engine files
     # Unused ONNX providers (TRT replaces CUDA; CPU uses onnxruntime.dll)
     'DirectML.dll', 'onnxruntime_providers_tensorrt.dll',
     'onnxruntime_providers_cuda.dll',
@@ -115,6 +97,16 @@ _EXCLUDE_DATAS_SUBDIRS = {
 }
 datas = [(s, d) for s, d in datas
          if not any(e in d.replace('/', '\\') for e in _EXCLUDE_DATAS_SUBDIRS)]
+
+# ── OCR 模型资产（onnx + 字符表）──
+# TRT .engine 不随 EXE 分发（GPU 架构绑定）：首次运行时本地自动构建，
+# 缓存到 %LOCALAPPDATA%/RaceVideoToLog/ocr_engines/
+for _root, _dirs, _files in os.walk('assets/ocr_models'):
+    for _f in _files:
+        if _f.endswith('.engine'):
+            continue
+        datas.append((os.path.join(_root, _f),
+                      os.path.join('ocr_models', os.path.relpath(_root, 'assets/ocr_models'))))
 
 # ── 精简二进制：移除不需要的 DLL ──
 _NVIDIA_DLL_PREFIXES = {

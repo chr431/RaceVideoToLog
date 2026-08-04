@@ -18,7 +18,6 @@ logger = logging.getLogger("RaceVideoToLog.gpu_setup")
 # ═══════════════════ 内部状态 ═══════════════════
 _gpu_initialized: bool = False
 _gpu_backend: str = "CPU"
-_gpu_params: dict = {}
 _dll_dir_cookies: list = []  # 保持 os.add_dll_directory() 返回值存活
 
 # 后端优先级：用户选择 → 回退链
@@ -33,10 +32,6 @@ def get_gpu_backend() -> str:
     """返回当前实际使用的 GPU 后端名称（TensorRT / CUDA / CPU）。"""
     return _gpu_backend
 
-
-def get_engine_params() -> dict:
-    """返回用于 RapidOCR params 的引擎配置片段。"""
-    return dict(_gpu_params)
 
 def get_engine_type() -> str:
     """返回引擎类型字符串 ('tensorrt' | 'onnxruntime')。"""
@@ -193,9 +188,8 @@ def select_backend(preferred: str = "auto") -> str:
     """按用户偏好选择 OCR 后端，不可用时自动回退。
 
     首次调用时触发 GPU DLL 延迟初始化。返回后端名称字符串。
-    同时设置 _gpu_params 供 RapidOCR 引擎配置。
     """
-    global _gpu_backend, _gpu_params
+    global _gpu_backend
 
     _ensure_gpu_initialized()
 
@@ -225,29 +219,7 @@ def select_backend(preferred: str = "auto") -> str:
     if chosen is None:
         chosen = "CPU"
 
-    if chosen == "TensorRT":
-        _gpu_params = {
-            "EngineConfig.tensorrt.device_id": 0,
-            "EngineConfig.tensorrt.use_fp16": False,  # FP32: faster engine build, same speed/accuracy for OCR
-            "EngineConfig.tensorrt.workspace_size": 1073741824,  # 1 GB
-        }
-    elif chosen == "CUDA":
-        _gpu_params = {
-            "EngineConfig.onnxruntime.use_cuda": True,
-            "EngineConfig.onnxruntime.cuda_ep_cfg.device_id": 0,
-            "EngineConfig.onnxruntime.cuda_ep_cfg.arena_extend_strategy": "kNextPowerOfTwo",
-            "EngineConfig.onnxruntime.cuda_ep_cfg.cudnn_conv_algo_search": "HEURISTIC",
-            "EngineConfig.onnxruntime.cuda_ep_cfg.do_copy_in_default_stream": True,
-        }
-    else:
-        import multiprocessing as _mp
-        _cpu_count = _mp.cpu_count()
-        _gpu_params = {
-            "EngineConfig.onnxruntime.use_cuda": False,
-            "EngineConfig.onnxruntime.enable_cpu_mem_arena": True,
-            "EngineConfig.onnxruntime.intra_op_num_threads": max(2, _cpu_count // 2),
-            "EngineConfig.onnxruntime.inter_op_num_threads": 2,
-        }
+
 
     _gpu_backend = chosen
     config.set_gpu_backend(chosen)
@@ -257,7 +229,6 @@ def select_backend(preferred: str = "auto") -> str:
 
 def reset_backend() -> None:
     """重置后端选择状态，允许用户在运行时切换后端。"""
-    global _gpu_backend, _gpu_params
+    global _gpu_backend
     _gpu_backend = "CPU"
-    _gpu_params = {}
     config.set_gpu_backend("CPU")

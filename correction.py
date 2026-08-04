@@ -43,7 +43,7 @@ from config import (
 )
 
 if TYPE_CHECKING:
-    from rapidocr import RapidOCR
+    from ocr_native import OcrEngine
 
 logger = logging.getLogger("RaceVideoToLog.correction")
 
@@ -207,7 +207,7 @@ def _auto_expand_digits(raw_text: str, max_speed_kmh: float) -> list[int]:
     return candidates
 
 
-def _multi_height_ocr(crop_bgr: "np.ndarray", ocr: "RapidOCR", max_speed_kmh: float,
+def _multi_height_ocr(crop_bgr: "np.ndarray", ocr: "OcrEngine", max_speed_kmh: float,
                   cache: dict | None = None, max_width: int = 0) -> set:
     cache = cache if cache is not None else {}
     if crop_bgr is not None and crop_bgr.size > 0:
@@ -228,7 +228,7 @@ def _multi_height_ocr(crop_bgr: "np.ndarray", ocr: "RapidOCR", max_speed_kmh: fl
     # 否则 re-OCR 对扁数字读不出正确值（实测 bug）。
     from video_utils import _preprocess_standard
     proc = _preprocess_standard(crop_bgr, 48, 0, max_width=max_width)
-    res = ocr(proc)
+    res = ocr([proc])[0]
     sv, rt, _conf = extract_speed_value(res)
     if sv is not None and sv <= max_speed_kmh:
         candidates.add(int(sv))
@@ -240,7 +240,7 @@ def _multi_height_ocr(crop_bgr: "np.ndarray", ocr: "RapidOCR", max_speed_kmh: fl
 # ═══════════════════ Candidate generation ═══════════════════
 
 def _generate_candidates(fi: int, rows: list, observations: list, raw_frames: list,
-                         ocr: "RapidOCR", pinned_set: set, times: list,
+                         ocr: "OcrEngine", pinned_set: set, times: list,
                          max_speed_kmh: float, reocr_cache: dict,
                          split_results: dict[int, str] | None,
                          reocr_only: bool, fps: float,
@@ -615,7 +615,7 @@ def _force_median_smooth(rows: list, times: list, max_speed_kmh: float,
 # ═══════════════════ Main correction pipeline ═══════════════════
 
 def correct_errors(rows: list, observations: list, raw_frames: list,
-                   ocr: "RapidOCR", confidence_scores: list[dict],
+                   ocr: "OcrEngine", confidence_scores: list[dict],
                    times: list[float], max_speed_kmh: float, max_accel_mps2: float,
                    mode: str = "auto", pinned: set[int] | None = None,
                    reocr_cache: dict | None = None, reocr_only: bool = True,
