@@ -334,6 +334,7 @@ class AnalysisTab:
 
         self._pin_hover_text = _pin_hover_text
         vb.sigRangeChanged.connect(_pin_hover_text)
+        _pin_hover_text()  # 初始定位：重建后视图未变化时不触发 sigRangeChanged
         import bisect
 
         def _on_mouse_moved(pos) -> None:

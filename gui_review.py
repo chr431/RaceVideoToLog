@@ -232,6 +232,7 @@ class ReviewDialog(QDialog):
             plot.scene().sigMouseMoved.connect(self._on_hover_moved)
             plot.plotItem.vb.sigRangeChanged.connect(self._pin_hover_text)
             self._hover_connected = True
+        self._pin_hover_text()  # 初始定位：重建后视图未变化时不触发 sigRangeChanged
 
     def _pin_hover_text(self, *args) -> None:
         """悬停文字钉在视图左上角：缩放/平移时跟随，不拖后腿跳回。"""
