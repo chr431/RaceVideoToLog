@@ -80,10 +80,13 @@ timing + 精度一并输出、JSON 记录）；新增 `tools/decord_smoke.py`
 - FFmpeg 解码线程默认 2（auto=全核与 ONNX 推理抢核，600 帧实测
   27s → 20.5s）
 
-**剩余差距**（记录在案）：CPU 全量 decode ~16s（390fps 物理下限）
-+ ONNX 推理 ~12s + correction ~15s ≈ 63s；decode 与推理并行时的
-抢核竞争使 pipeline 内 decode 计时升至 ~40s（producer/consumer
-架构性，无低成本解法）。
+**无 GPU 用户全量验证**（DECORD_FORCE_CPU=1 强制 CPU 解码 + CPU 推理，
+test5 7223 帧全范围）：**23.6s**（= v2.7.0 的 23.4s 持平，精度 99.93%
+vs 当时 97.98%）。构成：decode 18.1s（390fps 物理下限，无争用拖累）+
+inference 7.7s（与 decode 并行，+20% 竞争开销）+ correction 4.7s；
+内存峰值 650MB（decode 段 ~390MB 稳定）。GPU 硬解路径 13.0s 的
+差异全部来自 decode 硬底（NVDEC ~1000fps vs CPU 390fps），
+推理/纠错无额外开销。
 
 ## v2.8.0 (2026-08-03) — 相对 v2.7.1 的完整变更（v2.7.2 未发布，合并记录）
 
