@@ -311,24 +311,17 @@ class RaceVideoToLogApp(QMainWindow):
             self._status_label.setText("导入失败。")
 
     def _load_video(self, path: Path) -> None:
-        from pipeline import open_decord_vr, get_video_codec
+        from pipeline import open_decord_vr
 
         _t("load_video: start")
         vr, label = open_decord_vr(str(path))
         _t("load_video: decord open")
-        # ffprobe 子进程在 frozen 环境可能被安全扫描拖慢数秒 →
-        # 后台获取编码信息（不阻塞导入），同视频缓存
-        _codec_cache = getattr(self, '_codec_cache', {})
-        codec = _codec_cache.get(str(path), "")
-        if not codec:
-            import threading as _th
-            def _fetch_codec():
-                c = get_video_codec(str(path)) or "?"
-                self._codec_cache[str(path)] = c
-                from PySide6.QtCore import QTimer as _QT
-                _QT.singleShot(0, lambda: self._codec_label.setText(c))
-            _th.Thread(target=_fetch_codec, daemon=True).start()
-        _t("load_video: ffprobe (bg)")
+        # 编码信息直接来自 decord（自建版新增 get_codec），无子进程开销
+        try:
+            codec = vr.get_codec() or "?"
+        except Exception:
+            codec = "?"
+        _t("load_video: codec")
         try:
             fc = len(vr)
             fps = vr.get_avg_fps()

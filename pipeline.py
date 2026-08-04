@@ -19,37 +19,6 @@ import numpy as np
 
 
 
-def _find_ffprobe() -> str | None:
-    """Locate ffprobe.exe bundled alongside the decord package."""
-    import importlib.util as _iu
-    try:
-        _spec = _iu.find_spec("decord")
-        if _spec and _spec.origin:
-            _d = Path(_spec.origin).parent / "ffprobe.exe"
-            if _d.is_file():
-                return str(_d)
-    except Exception:
-        pass
-    return None
-
-
-def get_video_codec(video_path) -> str:
-    """Return the video codec name (e.g. h264, hevc) using bundled ffprobe."""
-    _ffprobe = _find_ffprobe()
-    if not _ffprobe:
-        return ""
-    import subprocess
-    try:
-        _r = subprocess.run(
-            [_ffprobe, "-v", "error", "-select_streams", "v:0",
-             "-show_entries", "stream=codec_name",
-             "-of", "default=noprint_wrappers=1:nokey=1", str(video_path)],
-            capture_output=True, text=True, timeout=15)
-        return _r.stdout.strip() if _r.returncode == 0 else ""
-    except Exception:
-        return ""
-
-
 def open_decord_vr(video_path, force_cpu: bool = False):
     """Open video with decord — GPU (NVDEC) preferred, CPU fallback.
 
@@ -168,6 +137,7 @@ class ProcessingPipeline:
         self._final_check = final_check
         self._max_width = max_width
         self._video_backend_actual: str = ""  # set by _run_ocr: "decord/GPU" or "decord/CPU"
+        self._codec: str = ""  # 视频编码（_run_ocr 打开 reader 时记录）
 
         # 状态
         self._ocr: "OcrEngine | None" = None
@@ -368,6 +338,10 @@ class ProcessingPipeline:
 
         # ── 视频源：decord GPU 优先 → CPU 回退 ──
         _vr, _gpu_label = open_decord_vr(self._video_path)
+        try:
+            self._codec = _vr.get_codec() or ""
+        except Exception:
+            pass
         total_video_frames = len(_vr)
         fps = _vr.get_avg_fps(); self._fps = fps
         _first = _vr[0].asnumpy()
@@ -533,7 +507,7 @@ class ProcessingPipeline:
         n_pinned = sum(1 for row in rows if row[3] == Flag.PINNED)
         n_corrected = sum(1 for row in rows if Flag.is_corrected(row[3]))
         timing_str = ", ".join(f"{k}={v:.1f}s" for k, v in self._timing.items())
-        _codec = get_video_codec(str(self._video_path)) or ""
+        _codec = self._codec or ""
         with output_path.open("w", newline="", encoding="utf-8-sig") as fh:
             fh.write(f"# RaceVideoToLog v{config.__version__}\n")
             fh.write(f"# video_hash={vhash}, video={self._video_path.name}"
