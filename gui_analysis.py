@@ -596,7 +596,8 @@ class AnalysisTab:
             else:
                 vb2.autoRange()  # 新模式：自适应数据
             # 渲染后禁用自动范围检测：悬停/交互 item 的变化不再扩展视图
-            vb2.enableAutoRange(False)
+            # enableAutoRange(axis, enable)：False 作 axis 是 no-op，必须传 enable 关键字
+            vb2.enableAutoRange(None, False)
 
             self._last_mode = mode
             self._sync_figure_theme()

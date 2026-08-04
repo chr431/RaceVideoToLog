@@ -148,4 +148,11 @@ class ModPlotWidget(pg.PlotWidget):
         # 自实现缩放绕过了 ViewBox.wheelEvent → 补发手动变更信号
         # （审核窗口依赖它记录视图范围，避免重绘时被 autoRange 重置）
         self._region_vb.sigRangeChangedManually.emit(mask)
+        # 缩放不触发 sigMouseMoved → 悬停竖线停在旧位置。
+        # 补发一次鼠标位置，让图表的 _on_hover_moved 立即跟随。
+        try:
+            self.scene().sigMouseMoved.emit(
+                self.mapToScene(ev.position().toPoint()))
+        except Exception:
+            pass
         ev.accept()

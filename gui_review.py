@@ -366,7 +366,8 @@ class ReviewDialog(QDialog):
             vb.setXRange(xr[0], xr[1], padding=0)
             vb.setYRange(yr[0], yr[1], padding=0)
         # 渲染后禁用自动范围检测：悬停/交互 item 的变化不再扩展视图
-        vb.enableAutoRange(False)
+        # enableAutoRange(axis, enable)：False 作 axis 是 no-op，必须传 enable 关键字
+        vb.enableAutoRange(None, False)
 
     def _update_corr_and_cur(self, times: list) -> None:
         """增量更新修正蓝点与当前帧红点（pyqtgraph setData 高效）。"""
