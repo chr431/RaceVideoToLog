@@ -13,6 +13,7 @@ from __future__ import annotations
 import math
 import os
 import sys
+import threading
 from collections.abc import Callable
 from pathlib import Path
 
@@ -50,6 +51,11 @@ class OcrEngine:
         """progress_cb: 构建引擎等耗时阶段的进度消息回调 (str)。"""
         self._variant = variant
         self._progress_cb = progress_cb
+        # 推理锁：pipeline 在 ocr_model == reocr_model 时共享同一实例
+        # （主 OCR 线程 + 后台预热线程并发调用）。TRT IExecutionContext
+        # 非线程安全 —— 并发 execute_v2 报 Myelin "already loaded binary
+        # graph" 并级联 CUDA illegal access（实测 test6 首轮 OCR 50% 崩溃）。
+        self._lock = threading.Lock()
         size = variant.replace("v6_", "")
         models = _models_dir()
 
@@ -214,6 +220,12 @@ class OcrEngine:
     # ═══════════════ 推理 ═══════════════
 
     def _infer(self, batch_np: np.ndarray) -> np.ndarray:
+        # 整段持锁：TRT 路径的 ctx/buffers 是实例共享可变状态，预热线程与
+        # 主 OCR 线程必须串行（GPU 单上下文本就不能并行，串行不损失吞吐）。
+        with self._lock:
+            return self._infer_locked(batch_np)
+
+    def _infer_locked(self, batch_np: np.ndarray) -> np.ndarray:
         if self._trt:
             assert self._max_batch is not None  # TRT 初始化时已设置
             outs = []

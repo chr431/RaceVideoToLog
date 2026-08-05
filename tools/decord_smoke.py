@@ -115,6 +115,29 @@ def run_smoke(use_roi: bool) -> None:
         assert fa.shape == (y2 - y1, x2 - x1, 3), fa.shape
         print(f"  post-seek CPU ROI shape: {fa.shape}")
 
+    # 6. 10-bit AV1 (P016): decord GPU decode vs FFmpeg software decode.
+    #    P016 stores 10-bit data left-aligned in 16-bit words; the improc
+    #    kernel's 8-bit semantics must produce near-identical RGB.
+    ten = "D:/Videos/racelog_test/test6_10bit.mp4"
+    if Path(ten).exists():
+        print("10-bit AV1 vs ffmpeg software decode ...", flush=True)
+        import subprocess
+        for k in (30, 120, 300, 450):
+            t = (k + 0.5) / 59.926
+            r = subprocess.run(
+                ["D:/Software/ffmpeg8/bin/ffmpeg.exe", "-v", "error",
+                 "-ss", f"{t:.6f}", "-i", ten, "-frames:v", "1",
+                 "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                capture_output=True, timeout=120)
+            ref = np.frombuffer(r.stdout, dtype=np.uint8).reshape(1080, 1920, 3)
+            got = VideoReader(ten, ctx=decord.gpu(0))[k].asnumpy()
+            diff = np.abs(ref.astype(np.int16) - got.astype(np.int16)).mean()
+            print(f"  fr {k}: mean diff {diff:.1f}")
+            assert diff < 15, f"10-bit frame {k} differs from software decode"
+        print("  OK")
+    else:
+        print("10-bit AV1 check skipped (test6_10bit.mp4 not present)")
+
 
 def hash_worker(frames: int) -> None:
     """Subprocess: print hashes of first K frames (uses DECORD_LIBRARY_PATH)."""

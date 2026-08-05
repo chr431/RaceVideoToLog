@@ -17,7 +17,11 @@
 关于test5_ref.csv:
 该视频加速非常平滑，画质非常清晰，但是数字格式比较扁（除“1”以外的数字高度和宽度近似相等），且会向右对齐（举例：“222”能完全填满ROI，“111”则全部挤在右三分之一处）。
 
+关于test6 ref.csv
+该视频和test5_ref来自相同的赛车游戏，字体完全一样。区别在于本视频非常长（识别区间约6.5min），且采用av1编码
+注意：本视频的OCR主模型必须使用v6_small（即small+small）。v6_tiny的raw错误率高达8.68%（test5仅1.41%），且错误集中在所有数字误读为"8"，调整max_width无法改善（162/0均无效），纠错阶段也无法挽救（tiny置信度失准，96帧false trusted不进入重OCR）。small的raw错误率仅0.01%。
 edit 1：添加test3_truth.csv、test2_truth.csv
 edit 2：添加test5_ref.csv
 edit 3：所有文件升级到2.7.0标准
 edit 4：更新了test5_ref，置信度比之前更高。
+edit 5：更新了test6.ref
