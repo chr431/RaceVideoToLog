@@ -439,55 +439,67 @@ class ProcessingPipeline:
                     pct = 3.0 + (done / max(est_total, 1)) * 87.0
                     _label = f"{self._video_backend_actual} + {get_gpu_backend()}"
                     self._emit(f"[{_label}] OCR: {done}/{est_total}", pct)
-                # ── re-OCR 预热提前启动（主 OCR ~70% 时）──
+                # ── re-OCR 预热提前启动（主 OCR ~60% 时）──
                 # 预热是 correction 的瓶颈（~4s，占 correction ~97%）。主 OCR
-                # 进行到 70% 时用近似 detect_errors（未完成尾部帧置 raw=-1）
-                # 启动后台预热，使中部帧推理在 correction 开始前完成；尾部
-                # 差集由 correction 前的接力入队补上。近似集合只取"中部稳定
-                # 帧"（fi 远离未完成区，时间窗 ±0.25s 邻居齐全），尾部帧信号
-                # 不全会被误标 → 跳过，接力时按 cache 增量补。
-                if (not _prewarm_started and done >= int(est_total * 0.70)
+                # 进行到 60% 时快照 observations，后台线程先跑近似
+                # detect_errors（未完成尾部帧置 raw=-1）再预热"中部稳定帧"
+                # （fi 远离未完成区，时间窗 ±0.25s 邻居齐全），使这批推理在
+                # correction 开始前完成；最终 correction_frames 由 correction
+                # 前的接力入队补上（线程按 cache 去重）。线程全程异常保护：
+                # 失败时 correction 内串行补预热（cache 机制兜底，功能正确）。
+                if (not _prewarm_started and done >= int(est_total * 0.50)
                         and self._reocr is not None):
                     _prewarm_started = True
                     try:
-                        from error_detection import detect_errors as _de
-                        _approx_rows = []
-                        for _o in observations:
-                            _approx_rows.append([_o.timestamp, 0.0,
-                                                 int(_o.raw_speed_kmh), Flag.RAW])
-                        while len(_approx_rows) < est_total:
-                            _approx_rows.append([len(_approx_rows), 0.0, -1, Flag.RAW])
-                        _approx_times = [r[0] / self._fps for r in _approx_rows]
-                        _rep = _de(_approx_rows, observations, _approx_times,
-                                   self._max_accel, self._max_speed, fps=self._fps)
-                        _win = max(15, int(0.25 * self._fps))  # ±0.25s 时间窗
-                        _frames = {c["index"] for c in _rep.confidence
-                                   if c["score"] < 70 and c["index"] < done - _win}
-                        if _frames:
-                            from queue import Queue as _Queue
-                            from correction import _prewarm_reocr
+                        _snap = list(observations)  # 快照供后台 detect_errors
+                        from queue import Queue as _Queue
+                        from correction import _prewarm_reocr
 
-                            def _prewarm_loop(fq: "_Queue",
-                                              rf: list, ocr, cache, ms, mw) -> None:
-                                """接力式预热：队列消费完中部帧后继续处理
-                                correction 阶段提交的尾部差集，收到 None 退出。"""
-                                while True:
-                                    batch = fq.get()
-                                    if batch is None:
-                                        break
+                        def _prewarm_loop(fq: "_Queue",
+                                          rf: list, obs_snap: list, ocr, cache,
+                                          ms, mw, fps: float, accel: float,
+                                          n_est: int) -> None:
+                            """后台预热：近似 detect_errors → 中部帧预热 →
+                            接力队列（correction 前提交的尾部差集）→ 退出。"""
+                            try:
+                                from error_detection import detect_errors as _de
+                                _rows = []
+                                for _o in obs_snap:
+                                    _rows.append([_o.timestamp, 0.0,
+                                                  int(_o.raw_speed_kmh), Flag.RAW])
+                                while len(_rows) < n_est:
+                                    _rows.append([len(_rows), 0.0, -1, Flag.RAW])
+                                _times = [r[0] / fps for r in _rows]
+                                _rep = _de(_rows, obs_snap, _times, accel, ms,
+                                           fps=fps)
+                                _win = max(15, int(0.25 * fps))
+                                _frames = {c["index"] for c in _rep.confidence
+                                           if c["score"] < 70
+                                           and c["index"] < len(obs_snap) - _win}
+                                if _frames:
+                                    _prewarm_reocr(_frames, rf, ocr, cache, ms, mw)
+                                    logger.info("后台 re-OCR 预热: %d 帧", len(_frames))
+                            except Exception as _e:
+                                logger.warning("后台 re-OCR 近似预热失败: %s", _e)
+                            while True:
+                                batch = fq.get()
+                                if batch is None:
+                                    break
+                                try:
                                     _prewarm_reocr(batch, rf, ocr, cache, ms, mw)
+                                except Exception as _e:
+                                    logger.warning("后台 re-OCR 接力失败: %s", _e)
 
-                            self._prewarm_queue = _Queue()
-                            _th = threading.Thread(
-                                target=_prewarm_loop,
-                                args=(self._prewarm_queue, self._raw_frames,
-                                      self._reocr, self._reocr_cache,
-                                      self._max_speed, self._max_width),
-                                daemon=True)
-                            _th.start()
-                            self._prewarm_queue.put(_frames)
-                            self._prewarm_thread = _th
-                            logger.info("后台 re-OCR 预热启动: %d 帧", len(_frames))
+                        self._prewarm_queue = _Queue()
+                        _th = threading.Thread(
+                            target=_prewarm_loop,
+                            args=(self._prewarm_queue, self._raw_frames, _snap,
+                                  self._reocr, self._reocr_cache,
+                                  self._max_speed, self._max_width,
+                                  self._fps, self._max_accel, est_total),
+                            daemon=True)
+                        _th.start()
+                        self._prewarm_thread = _th
                     except Exception as _e:
                         logger.warning("后台 re-OCR 预热启动失败: %s", _e)
 
