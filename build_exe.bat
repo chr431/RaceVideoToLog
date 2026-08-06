@@ -44,9 +44,20 @@ if errorlevel 1 (
     )
 )
 
-REM [3/4] Build
+REM [3/4] Version consistency check (single source: config.__version__)
 echo.
-echo [3/4] Building EXE ...
+echo [3/4] Checking version references ...
+%PY% tools/version.py
+if errorlevel 1 (
+    echo.
+    echo [ERROR] Version references inconsistent. Run: python tools/version.py bump X.Y.Z
+    pause
+    exit /b 1
+)
+
+REM [4/4] Build
+echo.
+echo [4/4] Building EXE ...
 if exist "build" rmdir /s /q "build"
 if exist "dist"  rmdir /s /q "dist"
 
@@ -58,9 +69,9 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM [4/4] Show result
+REM [5/4] Show result
 echo.
-echo [4/4] Build complete.
+echo [5/4] Build complete.
 for /d %%d in (dist\*) do (
     echo   Output: %%d
     dir "%%d\RaceVideoToLog.exe" 2>nul

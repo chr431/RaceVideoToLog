@@ -55,3 +55,45 @@ pip list --outdated
 3. 运行测试：`python -m pytest tests/ -v`
 4. 端到端验证：`python RaceVideoToLog.py test.mp4 --roi 862 945 957 1003 ...`
 5. 若通过则合并到 dev，更新本文件中的版本号
+
+## 版本与发布
+
+**单一事实源：`config.py` 的 `__version__`**（运行时写 CSV 头/控制台）。所有其它引用
+（pyproject.toml、CLI docstring、README 标题/CSV 示例/变更记录区间、本文件标题、
+EXE 版本资源）都由 `tools/version.py` 同步，不手工改。
+
+### 版本号规则（SemVer）
+
+- `MAJOR`：破坏性变更（CSV 格式不兼容、GUI 交互重做、删除用户功能）
+- `MINOR`：新功能（新增设置项、新算法、性能优化）—— 大部分迭代走这里
+- `PATCH`：纯修复（行为不变，只修 bug）
+- 当前发布只接受纯 `X.Y.Z`，不带 `-dev`/`-rc` 后缀（如需要请扩展
+  `tools/version.py` 的 `SEMVER_RE` 并同步 CI）
+
+### 发布流程（一次发布 = 一次 `bump`）
+
+```bash
+# 1. 在 dev 分支完成改动，确认测试通过
+python -m pytest tests/ -v
+
+# 2. 升版本：同步全部引用 + 在 release_notes.md 顶部插入新节
+#    （已是目标版本时只同步不一致的引用，不会重复插节）
+python tools/version.py bump 2.11.0 "标题"
+
+# 3. 填 release_notes.md 新节（bump 只生成骨架 "### 待补充"）
+
+# 4. 校验全部引用一致（CI 的 version-check job 也跑这个，退出码 1 = 不一致）
+python tools/version.py
+
+# 5. 回归：pytest + 基准（tools/bench_decoder.py 至少跑一次）
+python -m pytest tests/ -v
+
+# 6. 构建 EXE（build_exe.bat 内置版本一致性检查，失败即中止；
+#    版本号写入 EXE 文件属性 → 右键属性/详细信息可见）
+build_exe.bat
+
+# 7. 提交 + 合并到 master（master 是发布分支，不跑 tests/）
+git add -A && git commit -m "release: v2.11.0 ..."
+```
+
+发布后如需小修：继续 `bump` 到下一个 PATCH，不回改已发布的版本号。

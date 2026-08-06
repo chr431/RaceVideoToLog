@@ -157,6 +157,42 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 
+# ── EXE 版本资源（Windows 文件属性 → 属性/详细信息）──
+# 版本号来自 config.__version__（单一事实源，与 tools/version.py 一致）。
+# 生成失败不阻断构建（降级为无版本资源）。
+_VERSION_INFO = None
+try:
+    import config as _cfg
+    from PyInstaller.utils.win32.versioninfo import (
+        VSVersionInfo, FixedFileInfo, StringFileInfo, StringTable,
+        StringStruct, VarFileInfo, VarStruct,
+    )
+    _ver_parts = [int(x) for x in _cfg.__version__.split('.')[:3]]
+    while len(_ver_parts) < 3:
+        _ver_parts.append(0)
+    _VER_TUPLE = tuple(_ver_parts + [0])
+    _VERSION_INFO = VSVersionInfo(
+        ffi=FixedFileInfo(
+            filevers=_VER_TUPLE, prodvers=_VER_TUPLE,
+            mask=0x3F, flags=0x0, OS=0x40004, fileType=0x1, subtype=0x0,
+            date=(0, 0),
+        ),
+        kids=[
+            StringFileInfo([
+                StringTable('040904B0', [
+                    StringStruct('CompanyName', 'RaceVideoToLog'),
+                    StringStruct('FileDescription', 'RaceVideoToLog - 赛车视频速度 OCR 提取'),
+                    StringStruct('FileVersion', _cfg.__version__),
+                    StringStruct('ProductName', 'RaceVideoToLog'),
+                    StringStruct('ProductVersion', _cfg.__version__),
+                ]),
+            ]),
+            VarFileInfo([VarStruct('Translation', [1033, 1200])]),
+        ],
+    )
+except Exception as _e:  # 版本资源是附加信息，任何失败都不该阻断构建
+    _VERSION_INFO = None
+
 exe = EXE(
     pyz,
     a.scripts,
@@ -173,6 +209,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    version=_VERSION_INFO,
 )
 # Post-Analysis 精简：移除 Analysis 重新发现的 DLL
 _EXCLUDE_BINARIES = {

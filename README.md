@@ -1,4 +1,4 @@
-# RaceVideoToLog v2.9.0
+# RaceVideoToLog v2.10.0
 
 从赛车视频中提取速度数据，生成时间-速度-距离 CSV 文件。
 
@@ -65,7 +65,7 @@ _decord_build\
 ## 输出格式
 
 ```csv
-# RaceVideoToLog v2.9.0
+# RaceVideoToLog v2.10.0
 # video_hash=..., video=test5.mp4, fps=59.767, codec=h264
 # roi=843,993,948,1025, format=km/h, frame_start=362, frame_end=7585
 # max_speed=400.0, max_accel=40.0, div=1, target_h=48, pad=0, buffer=16
@@ -103,8 +103,7 @@ python RaceVideoToLog.py [video] [options]
   --pad N                        边缘填充 px (默认: 0)
   --buffer N                     缓冲队列大小 (默认: 16)
   --backend {auto,tensorrt,cpu}  OCR 后端 (默认: auto)
-  --ocr-model {v6_tiny,v6_small} 主 OCR 模型 (默认: v6_tiny)
-  --reocr-model {v6_tiny,v6_small} 重 OCR 模型 (默认: v6_small)
+  --ocr-model {v6_tiny,v6_small} 主 OCR 模型 (默认: v6_tiny)；重 OCR 自动推导：tiny→small / small→无
   --mode {auto,manual}           纠错模式 (默认: auto)
   --log-level {normal,detailed,debug} 日志级别 (默认: normal)
   --frame-start N                起始帧号
@@ -123,7 +122,7 @@ build_exe.bat
 
 ## 变更记录
 
-完整发布日志（v2.7.1 → v2.9.0）见 [release_notes.md](release_notes.md)。
+完整发布日志（v2.7.1 → v2.10.0）见 [release_notes.md](release_notes.md)。
 
 ## 运行时缓存（卸载时需删除）
 
