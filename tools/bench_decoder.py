@@ -40,13 +40,13 @@ def resolve(video_name: str) -> tuple[str, str]:
 
 
 def run(video: str, truth: str, backend: str, out_csv: str,
-        cpu_decord: bool = False, ocr_model: str = "v6_tiny",
-        reocr_model: str = "v6_small") -> dict:
+        cpu_decord: bool = False, ocr_model: str = "v6_tiny") -> dict:
     """Run headless pipeline, parse timing + actual backend from output CSV/stdout.
 
-    ocr_model/reocr_model 必须显式传给 CLI —— truth CSV 头的 model= 字段
-    可能是别的模型（如 test5_ref 记录 v6_small），不传时 from-csv 会覆盖
-    默认值，主 OCR 被静默换成 small（实测 infer 26.5s vs tiny 6.4s）。
+    ocr_model 必须显式传给 CLI —— truth CSV 头的 model= 字段可能是别的
+    模型（如 test5_ref 记录 v6_small），不传时 from-csv 会覆盖默认值，主
+    OCR 被静默换成 small（实测 infer 26.5s vs tiny 6.4s）。重 OCR 由
+    pipeline 自动推导（tiny→small / small→无），无需显式指定。
     """
     Path(out_csv).unlink(missing_ok=True)  # stale CSV from a prior run must not be parsed
     t0 = time.perf_counter()
@@ -71,7 +71,6 @@ def run(video: str, truth: str, backend: str, out_csv: str,
          video, "--from-csv", truth,
          "--backend", backend,
          "--ocr-model", ocr_model,
-         "--reocr-model", reocr_model,
          "--log-level", "detailed",
          "-o", out_csv],
         cwd=str(PROJECT), stdout=fo, stderr=fe, env=env,
@@ -129,8 +128,15 @@ def run(video: str, truth: str, backend: str, out_csv: str,
             if line.startswith("# timing:"):
                 for part in line.split(":", 1)[1].split(","):
                     k, _, v = part.strip().partition("=")
+                    key = k.strip()
+                    # 外部 RSS 采样已提供 peak_rss_mb（int，进程树口径），不覆盖
+                    if key in timing:
+                        continue
                     try:
-                        timing[k.strip() + "_s"] = float(v.rstrip("s"))
+                        # peak_*/gpu_* 前缀不带 _s 后缀（与 JSON record 键一致）；
+                        # gpu_name 字符串 float() 失败自然跳过。
+                        suffix = "" if (key.startswith("peak_") or key.startswith("gpu_")) else "_s"
+                        timing[key + suffix] = float(v.rstrip("s"))
                     except ValueError:
                         pass
                 break
@@ -179,9 +185,8 @@ def main() -> None:
                     help="force decord CPU decoder (DECORD_FORCE_CPU=1)")
     ap.add_argument("--ocr-model", default="v6_tiny", choices=["v6_tiny", "v6_small"],
                     help="main OCR model (explicit — otherwise from-csv may "
-                         "override with the truth CSV's model= value)")
-    ap.add_argument("--reocr-model", default="v6_small", choices=["v6_tiny", "v6_small"],
-                    help="re-OCR model (explicit, same reason)")
+                         "override with the truth CSV's model= value; re-OCR "
+                         "auto-derives: tiny→small / small→none)")
     ap.add_argument("--runs", type=int, default=2, help="runs (last one used for stats)")
     ap.add_argument("--json", type=str, default="", help="save record to JSON (default outputs/bench_<video>.json)")
     args = ap.parse_args()
@@ -196,14 +201,14 @@ def main() -> None:
 
     record: dict = {"video": args.video, "backend": args.backend,
                     "cpu_decord": args.cpu_decord,
-                    "ocr_model": args.ocr_model, "reocr_model": args.reocr_model,
+                    "ocr_model": args.ocr_model,
                     "runs": []}
     for run_i in range(args.runs):
         out_csv = str(OUT_DIR / f"bench_{args.video}_r{run_i + 1}.csv")
         label = f"run {run_i + 1}"
         print(f"  Running {label}...", end=" ", flush=True)
         t = run(video, truth, args.backend, out_csv, cpu_decord=args.cpu_decord,
-                ocr_model=args.ocr_model, reocr_model=args.reocr_model)
+                ocr_model=args.ocr_model)
         acc = accuracy(out_csv, truth) if "frames" in t else None
         if run_i == args.runs - 1:  # warm run -> report + record
             print_row(label, t, acc)
@@ -211,7 +216,12 @@ def main() -> None:
                                 ("frames", "actual_backend", "wall_s",
                                  "ocr_s", "decode_s", "inference_s",
                                  "correction_s", "total_pipeline_s",
-                                 "peak_rss_mb", "end_rss_mb")}
+                                 "engine_load_s", "video_open_s", "phase1_s",
+                                 "prewarm_s", "finalize_integrate_s",
+                                 "finalize_csv_s", "finalize_report_s",
+                                 "peak_rss_mb", "peak_cpu_pct",
+                                 "peak_gpu_util_pct", "peak_vram_mb",
+                                 "end_rss_mb")}
             record["accuracy"] = acc
         else:
             print_row(label, t)

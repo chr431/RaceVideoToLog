@@ -6,7 +6,7 @@ while keeping widget references for export/import operations.
 from __future__ import annotations
 
 from qfluentwidgets import (
-    CardWidget, ComboBox, LineEdit, RadioButton,
+    CardWidget, ComboBox, LineEdit, RadioButton, CheckBox,
     BodyLabel, StrongBodyLabel, CaptionLabel, PushButton,
 )
 
@@ -26,8 +26,9 @@ def build_settings_panel(parent) -> dict:
         max_speed_edit, max_accel_edit      -- LineEdit
         div_spin, buffer_spin, target_h_spin, pad_spin  -- CompactSpinBox
         backend_combo                       -- ComboBox
-        model_combo, reocr_model_combo      -- ComboBox
+        model_combo                         -- ComboBox (主 OCR 模型)
         log_level_combo                     -- ComboBox
+        monitor_checkbox                    -- CheckBox (资源监控开关)
         mode_auto, mode_baseline            -- RadioButton (correction mode)
         frame_start_edit, frame_end_edit    -- LineEdit
     """
@@ -94,18 +95,16 @@ def build_settings_panel(parent) -> dict:
     widgets["model_combo"].setCurrentIndex(0)
     widgets["model_combo"].setFixedWidth(95)
     pl.addWidget(widgets["model_combo"], 4, 1)
-    pl.addWidget(BodyLabel("重OCR"), 4, 2)
-    widgets["reocr_model_combo"] = ComboBox()
-    widgets["reocr_model_combo"].addItems(["同主模型", "v6_tiny", "v6_small"])
-    widgets["reocr_model_combo"].setCurrentIndex(2)
-    widgets["reocr_model_combo"].setFixedWidth(120)
-    pl.addWidget(widgets["reocr_model_combo"], 4, 3)
     pl.addWidget(BodyLabel("日志级别"), 5, 0)
     widgets["log_level_combo"] = ComboBox()
     widgets["log_level_combo"].addItems(["正常", "详细", "调试"])
     widgets["log_level_combo"].setCurrentIndex(0)
     widgets["log_level_combo"].setFixedWidth(120)
     pl.addWidget(widgets["log_level_combo"], 5, 1)
+    pl.addWidget(BodyLabel("资源监控"), 6, 0)
+    widgets["monitor_checkbox"] = CheckBox("内存 / CPU / GPU 采样")
+    widgets["monitor_checkbox"].setChecked(config.MONITOR_ENABLED)
+    pl.addWidget(widgets["monitor_checkbox"], 6, 1, 1, 2)
 
     # ── Correction mode card ──
     mode_card = make_static_card(parent)

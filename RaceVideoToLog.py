@@ -42,14 +42,16 @@ def main() -> None:
     parser.add_argument("--buffer", type=int, default=config.DEFAULT_BUFFER_SIZE)
     parser.add_argument("--backend", choices=config.BACKEND_KEYS, default=config.DEFAULT_BACKEND)
     parser.add_argument("--ocr-model", choices=["v6_tiny", "v6_small"], default=config.DEFAULT_OCR_MODEL,
-        help="主 OCR 模型 (默认 tiny)")
-    parser.add_argument("--reocr-model", choices=["v6_tiny", "v6_small"], default=config.DEFAULT_REOCR_MODEL,
-        help="重 OCR 模型 (默认 small，推荐 tiny+small 组合)")
+        help="主 OCR 模型 (默认 tiny)；重 OCR 自动推导：tiny→small / small→无")
     parser.add_argument("-o", "--output", type=str)
     parser.add_argument("--frame-start", type=int, metavar="N")
     parser.add_argument("--frame-end", type=int, metavar="N")
     parser.add_argument("--log-level", choices=["normal","detailed","debug"],
         default=config.DEFAULT_LOG_LEVEL, help="日志级别 (默认 normal)")
+    parser.add_argument("--no-monitor", action="store_true",
+        help="禁用资源监控（内存/CPU/GPU 采样；默认启用，RVTOL_MONITOR=0 等效）")
+    parser.add_argument("--monitor-interval", type=float, default=None,
+        metavar="SEC", help="资源采样间隔秒（默认 1.0，RVTOL_MONITOR_INTERVAL 等效）")
     parser.add_argument("--mode", choices=["auto","manual"], default="auto",
         help="纠错模式 (默认 auto)")
     parser.add_argument("--from-csv", type=str, metavar="PATH",

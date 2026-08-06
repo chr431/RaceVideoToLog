@@ -1,5 +1,23 @@
 # Release Notes
 
+## v2.10.0（2026-08-06）— 永久性能日志 + 资源监测
+
+> 本节面向使用者：只讲你能直接感知到的变化。技术细节见下方各节。
+
+### 📊 性能日志与资源监测（默认开启）
+
+- **阶段计时永久内置**：engine_load / video_open / decode / inference / phase1 / prewarm / correction / finalize 各步用时不再需要临时插桩 —— 每次导出自动写入 CSV 头 `# timing:`、`_summary.json` 与控制台汇总
+- **资源监测默认开启**：内存（RSS 峰值）、CPU%、GPU 利用率 / 显存 / 温度后台采样（1s 间隔），峰值与阶段边界快照自动落入 `_summary.json`，运行摘要追加到 `%LOCALAPPDATA%\RaceVideoToLog\monitor.log`
+- **可关闭**：命令行 `--no-monitor`、环境变量 `RVTOL_MONITOR=0`、GUI「资源监控」复选框 —— 关闭时零线程、零子进程
+- 纠错详细级报告新增 `correction_stages`：12 个纠错子阶段（重OCR预热/候选生成/粗筛/后过滤/参考值/锚定/Viterbi/填充/平滑/对齐/强制中值/置信融合）各步用时
+- `tools/bench_decoder.py` 基准 JSON 新增以上各阶段与资源峰值字段（旧键不变）
+
+### ⚡ OCR 提速 + 重OCR 简化
+
+- **每模型独立输入 pad 宽度**：速度数字（48 高后 78-160 宽）不再强制 pad 到 320，按内容实际宽度推理 —— 窄图推理最多 2~4 倍加速。tiny 与 small 各自最优下限（tiny=192、small=224，实测平衡精度）
+- **重OCR 自动推导**：移除「重OCR」设置项，系统按主模型自动选择 —— 主模型 tiny 时用 small 做跨模型二次校验（实测错误率降至 1/4），主模型 small 时不再重OCR（同引擎重OCR 实测净效果为零，纯浪费 GPU）
+- 精度实测：test6 small 错误率 0.83%→0.09%、tiny 0.47%→0.38%；test5 0.04%（保持）
+
 ## v2.9.0（2026-08-04）— v2.7.1 → v2.9.0 发布（2.7.2 / 2.8.0 未发布，合并记录）
 
 > 本节面向使用者：只讲你能直接感知到的变化。技术细节见下方各节。

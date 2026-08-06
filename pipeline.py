@@ -61,6 +61,7 @@ import config
 from error_detection import detect_errors
 from correction import correct_errors
 from gpu_setup import get_gpu_backend, get_engine_type
+from monitor import STAGE, peak_fields as _peak_fields, read_snapshot as _read_snapshot
 
 def _rss_mb() -> float:
     import os as _os
@@ -100,7 +101,6 @@ class ProcessingPipeline:
                     backend: str, ocr_model: str, speed_format: str,
                     frame_start: str = "", frame_end: str = "",
                     progress_cb: ProgressFn | None = None,
-                    reocr_model: str | None = None,
                     cancel_check: "Callable[[], None] | None" = None,
                     log_level: str = "normal",
                 final_check: bool = False,
@@ -117,10 +117,14 @@ class ProcessingPipeline:
         self._target_h = target_h
         self._pad = pad
         self._buffer_size = buffer_size
-        self._reocr_model = reocr_model  # None = 使用 ocr_model
         self._backend = backend
         self._log_level = log_level  # "normal" | "detailed" | "debug"
         self._ocr_model = ocr_model
+        # 重 OCR 自动推导（用户不可选）：主 tiny → small（跨模型第二意见，
+        # 实测 test5 0.29%→0.04%、test6 1.87%→0.47% 精度 4x）；主 small →
+        # None（同引擎重 OCR 净效果为零，实测 test6 0.16% 与无重 OCR 一致）。
+        self._reocr_model: str | None = (
+            config.DEFAULT_REOCR_MODEL if self._ocr_model == "v6_tiny" else None)
         self._speed_format = speed_format
         self._frame_start = frame_start
         self._cancel_check = cancel_check
@@ -153,6 +157,7 @@ class ProcessingPipeline:
         self._error_report: "object | None" = None
         self._detection_confidence: list[dict] = []
         self._confidences: list[dict] = []
+        self._prewarm_t0: float = 0.0  # 后台预热线程启动时刻（prewarm 计时）
         self.last_output_path: Path | None = None
 
     # ── 公开只读属性（消除跨模块私有访问）──
@@ -176,6 +181,28 @@ class ProcessingPipeline:
     def confidences(self) -> list:
         return self._confidences
 
+    def timing_flat(self) -> dict[str, float]:
+        """_timing 中仅含标量的子集（排除 correction_stages 嵌套 dict）。
+
+        CSV 头 / 控制台 / bench 解析只读标量键；嵌套 dict 只进 _summary.json。
+        """
+        return {k: v for k, v in self._timing.items()
+                if isinstance(v, (int, float))}
+
+    def _merge_stage_timing(self) -> None:
+        """把 STAGE 计时合并进 _timing（幂等，可多次调用）。
+
+        corr.* 平铺键重挂为嵌套 correction_stages（仅 _summary.json 序列化）。
+        """
+        res = STAGE.result()
+        corr_stages = {k[5:]: v for k, v in res.items() if k.startswith("corr.")}
+        if corr_stages:
+            self._timing["correction_stages"] = corr_stages
+        for k, v in res.items():
+            if k.startswith("corr.") or not isinstance(v, (int, float)):
+                continue
+            self._timing[k] = v
+
     # ═══════════════ 公开接口 ═══════════════
 
     def run_auto(self, output_path: str | Path, mode: str = "auto") -> None:
@@ -185,8 +212,10 @@ class ProcessingPipeline:
               \"manual\" → full pipeline (no force_smooth)
         """
         t_total = _time.perf_counter()
+        STAGE.reset()
         self._emit("加载 OCR 引擎...", 1.0)
-        self._ensure_ocr()
+        with STAGE.stage("engine_load"):
+            self._ensure_ocr()
         self._run_ocr()
 
         if not self._observations:
@@ -206,9 +235,10 @@ class ProcessingPipeline:
                 if row[2] > self._max_speed:
                     row[2] = -1
         self._timing["total"] = _time.perf_counter() - t_total
+        self._merge_stage_timing()
         logger.info("流水线完成: 总计 %.1fs (%s)",
                         self._timing["total"],
-                        ", ".join(f"{k}={v:.1f}s" for k, v in self._timing.items()))
+                        ", ".join(f"{k}={v:.1f}s" for k, v in self.timing_flat().items()))
         self._emit("完成", 100.0)
 
 
@@ -237,13 +267,11 @@ class ProcessingPipeline:
                 self._emit("加载 TensorRT 引擎...", 1.5)
             self._ocr = OcrEngine(self._ocr_model, _et,
                                   progress_cb=lambda m: self._emit(m, 2.0))
-            # 若指定了不同的重 OCR 模型，创建独立引擎
-            _reocr_model = self._reocr_model or self._ocr_model
-            if _reocr_model != self._ocr_model:
-                self._reocr = OcrEngine(_reocr_model, _et,
+            # 重 OCR 引擎由 __init__ 自动推导（tiny→small / small→None），
+            # 主/重模型必然不同 → 独立引擎（同引擎共享路径已无意义）。
+            if self._reocr_model:
+                self._reocr = OcrEngine(self._reocr_model, _et,
                                         progress_cb=lambda m: self._emit(m, 3.0))
-            else:
-                self._reocr = self._ocr
         return self._ocr
 
     def _correct(self, progress_base: float, progress_span: float,
@@ -282,12 +310,14 @@ class ProcessingPipeline:
             self._prewarm_thread.join()
             self._prewarm_thread = None
             self._prewarm_queue = None
+            if self._prewarm_t0:
+                STAGE.accumulate("prewarm", _time.perf_counter() - self._prewarm_t0)
+                self._prewarm_t0 = 0.0
         self._emit(f"Phase 2: correction ({mode})...", progress_base + 2.0)
         def _prog(done, total):
             if done % max(1, total // 5) != 0 and done != total: return
             self._emit(f"corr: {done}/{total}", progress_base + 2.0 + (done/max(total,1))*progress_span)
-        _reocr = self._reocr
-        assert _reocr is not None
+        _reocr = self._reocr  # None = 主模型 small 无重 OCR（correct_errors 处理）
         self._rows, self._detection_confidence = correct_errors(
             self._rows, self._observations, self._raw_frames, _reocr,
             self._detection_confidence, times,
@@ -305,10 +335,14 @@ class ProcessingPipeline:
     def finalize(self, output_path: str | Path) -> Path:
         """Write CSV, stage report, diagnostics."""
         out_path = Path(output_path)
-        self._integrate_distance()
-        self._write_csv(self._rows, out_path)
-        self._write_stage_report(out_path)
-        self._write_diagnostics(out_path)
+        with STAGE.stage("finalize_integrate"):
+            self._integrate_distance()
+        with STAGE.stage("finalize_csv"):
+            self._write_csv(self._rows, out_path)
+        with STAGE.stage("finalize_report"):
+            self._write_stage_report(out_path)
+        with STAGE.stage("finalize_diag"):
+            self._write_diagnostics(out_path)
         # Note: _raw_frames NOT cleared here — GUI review dialog
         # needs them after finalize. Cleanup happens in GUI's
         # _finish_export() or when pipeline goes out of scope.
@@ -320,7 +354,8 @@ class ProcessingPipeline:
 
     def _run_correction(self, output_path: Path, mode: str = "auto") -> None:
         """纠错 + 写 CSV（调用 _correct 后继续）。"""
-        self._correct(91.0, 6.0, mode=mode)
+        with STAGE.stage("correction"):
+            self._correct(91.0, 6.0, mode=mode)
         if not self._final_check:
             self.finalize(output_path)
 
@@ -343,17 +378,18 @@ class ProcessingPipeline:
         t_start = _time.perf_counter()
 
         # ── 视频源：decord GPU 优先 → CPU 回退 ──
-        _vr, _gpu_label = open_decord_vr(self._video_path)
-        try:
-            self._codec = _vr.get_codec() or ""
-        except Exception:
-            pass
-        total_video_frames = len(_vr)
-        fps = _vr.get_avg_fps(); self._fps = fps
-        _first = _vr[0].asnumpy()
-        h, w = _first.shape[:2]
-        self._video_backend_actual = f"decord/{_gpu_label}"
-        logger.info("Video source: decord (%s)", _gpu_label)
+        with STAGE.stage("video_open"):
+            _vr, _gpu_label = open_decord_vr(self._video_path)
+            try:
+                self._codec = _vr.get_codec() or ""
+            except Exception:
+                pass
+            total_video_frames = len(_vr)
+            fps = _vr.get_avg_fps(); self._fps = fps
+            _first = _vr[0].asnumpy()
+            h, w = _first.shape[:2]
+            self._video_backend_actual = f"decord/{_gpu_label}"
+            logger.info("Video source: decord (%s)", _gpu_label)
 
         x1, y1, x2, y2 = clamp_region(*self._roi, w, h)
         f_start = _parse_int_or_none(self._frame_start)
@@ -376,17 +412,17 @@ class ProcessingPipeline:
                 while _fi < _limit:
                     if self._cancel_check and _fi % 10 == 0:
                         self._cancel_check()
-                    _t0 = _time.perf_counter()
-                    try:
-                        # next_roi：GPU 上只拷 ROI 到主机（免全帧 D2H + crop）；
-                        # 老 DLL / CPU 回退 next() + 裁切
-                        _crop = video_utils.next_frame_roi(
-                            _vr, x1, y1, x2 + 1, y2 + 1)
-                    except StopIteration:
-                        break
-                    self._raw_frames.append((_fi, _crop))
-                    _proc = _preprocess_standard(_crop, target_h, pad, max_width=_max_width)
-                    _decode_ms += (_time.perf_counter() - _t0) * 1000.0
+                    with STAGE.stage("decode", accumulate=True) as _st:
+                        try:
+                            # next_roi：GPU 上只拷 ROI 到主机（免全帧 D2H + crop）；
+                            # 老 DLL / CPU 回退 next() + 裁切
+                            _crop = video_utils.next_frame_roi(
+                                _vr, x1, y1, x2 + 1, y2 + 1)
+                        except StopIteration:
+                            break
+                        self._raw_frames.append((_fi, _crop))
+                        _proc = _preprocess_standard(_crop, target_h, pad, max_width=_max_width)
+                        _decode_ms += _st.elapsed * 1000.0
                     q.put((_fi, _proc))
                     skip = frame_step - 1
                     if skip > 0:
@@ -426,9 +462,9 @@ class ProcessingPipeline:
                 return
             items = _batch[:]
             _batch.clear()
-            t_ocr0 = _time.perf_counter()
-            results = ocr_rec_batch(ocr, [proc for _, proc in items])
-            t_ocr = (_time.perf_counter() - t_ocr0) * 1000.0
+            with STAGE.stage("inference", accumulate=True) as _st:
+                results = ocr_rec_batch(ocr, [proc for _, proc in items])
+            t_ocr = _st.elapsed * 1000.0
             _inference_ms += t_ocr
             t_ocr_each = t_ocr / len(items)
             for (fi, _proc), ocr_result in zip(items, results):
@@ -441,7 +477,9 @@ class ProcessingPipeline:
                         confidence=conf))
                 else:
                     observations.append(SpeedObservation(fi, -1, ""))
+                _t_p1 = _time.perf_counter()
                 _detector.add(fi / fps, observations[-1].raw_speed_kmh)
+                STAGE.accumulate("phase1", _time.perf_counter() - _t_p1)
                 if _collect_diag:
                     diag.append({
                         "frame": fi,
@@ -455,7 +493,9 @@ class ProcessingPipeline:
                     pct = 3.0 + (done / max(est_total, 1)) * 87.0
                     _label = f"{self._video_backend_actual} + {get_gpu_backend()}"
                     self._emit(f"[{_label}] OCR: {done}/{est_total}", pct)
+                _t_p1 = _time.perf_counter()
                 _detector.advance(observations)
+                STAGE.accumulate("phase1", _time.perf_counter() - _t_p1)
                 # ── re-OCR 预热提前启动（流式 Phase1 信号就绪区 ~50% 时）──
                 # 预热是 correction 的瓶颈（~4s，占 correction ~97%）。Phase 1
                 # 的局部信号随主 OCR 批处理增量计算（IncrementalDetector），
@@ -496,6 +536,7 @@ class ProcessingPipeline:
                                       self._reocr, self._reocr_cache,
                                       self._max_speed, self._max_width),
                                 daemon=True)
+                            self._prewarm_t0 = _time.perf_counter()
                             _th.start()
                             self._prewarm_queue.put(_frames)
                             self._prewarm_thread = _th
@@ -547,6 +588,7 @@ class ProcessingPipeline:
             r[1] = dist
 
     def _write_csv(self, rows: list, output_path: Path) -> None:
+        self._merge_stage_timing()
         vhash = compute_video_hash(self._video_path)
         r = self._roi
         # ── 统计信息 ──
@@ -554,7 +596,14 @@ class ProcessingPipeline:
         n_trusted = sum(1 for row in rows if Flag.is_trusted(row[3]))
         n_pinned = sum(1 for row in rows if row[3] == Flag.PINNED)
         n_corrected = sum(1 for row in rows if Flag.is_corrected(row[3]))
-        timing_str = ", ".join(f"{k}={v:.1f}s" for k, v in self._timing.items())
+        timing_str = ", ".join(f"{k}={v:.1f}s" for k, v in self.timing_flat().items())
+        # 资源峰值字段（monitor 开启且有样本时追加；gpu_name 为字符串）
+        _peak = _peak_fields()
+        if _peak:
+            _peak_str = ", ".join(
+                f"{k}={v:.2f}" if isinstance(v, float) else f"{k}={v}"
+                for k, v in _peak.items())
+            timing_str = f"{timing_str}, {_peak_str}"
         _codec = self._codec or ""
         with output_path.open("w", newline="", encoding="utf-8-sig") as fh:
             fh.write(f"# RaceVideoToLog v{config.__version__}\n")
@@ -603,6 +652,7 @@ class ProcessingPipeline:
             return
         if self._log_level not in ("detailed", "debug"):
             return
+        self._merge_stage_timing()
         import json as _json
         report_path = output_path.with_suffix("")
         report_path = report_path.with_name(report_path.name + "_stage_report.csv")
@@ -644,6 +694,9 @@ class ProcessingPipeline:
             "stats": {"total_frames": len(self._rows), "corrected": n_corr, "trusted": n_trust},
             "confidence_distribution": {"low": n_low, "medium": n_med, "high": n_high},
             "timing": self._timing}
+        _mon = _read_snapshot()
+        if _mon:
+            summary["monitor"] = _mon
         with summary_path.open("w", encoding="utf-8") as fh:
             _json.dump(summary, fh, indent=2, ensure_ascii=False)
         logger.info("Stage report saved: %s", report_path)

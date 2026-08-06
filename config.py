@@ -1,7 +1,7 @@
 """RaceVideoToLog 集中配置 — 常量、颜色、公共 API。"""
 from __future__ import annotations
 
-__version__ = "2.9.0"
+__version__ = "2.10.0"
 
 # ═══════════════════ 物理常量 ═══════════════════
 MPS_TO_KMH: float = 3.6          # m/s → km/h 转换因子
@@ -9,7 +9,7 @@ MPS_TO_KMH: float = 3.6          # m/s → km/h 转换因子
 # ═══════════════════ 用户可配置默认值 ═══════════════════
 DEFAULT_BACKEND: str = "auto"           # GPU 后端 (auto / tensorrt / cpu)
 DEFAULT_OCR_MODEL: str = "v6_tiny"     # 主 OCR 模型
-DEFAULT_REOCR_MODEL: str = "v6_small"  # 重 OCR 模型
+DEFAULT_REOCR_MODEL: str = "v6_small"  # 重 OCR 模型（自动推导：主 tiny → 用此模型；主 small → 无重 OCR）
 DEFAULT_SPEED_FORMAT: str = "km/h"     # 速度单位 (km/h / m/s / mile/h)
 DEFAULT_FRAME_DIV: int = 2             # 采样间隔 (1=每帧, 2=隔帧)
 DEFAULT_MAX_SPEED: float = 400.0       # 最大速度 (km/h)
@@ -20,11 +20,36 @@ DEFAULT_MAX_WIDTH: int = 0              # 预处理最大宽度 px（0=不限）
 DEFAULT_BUFFER_SIZE: int = 16          # 生产者-消费者队列缓冲大小
 DEFAULT_LOG_LEVEL: str = "normal"      # 日志级别 (normal / detailed / debug)
 DEFAULT_CORRECTION_MODE: str = "auto"  # 纠错模式 (auto / manual)
+MONITOR_ENABLED: bool = True           # 默认启用资源监控（--no-monitor / GUI 复选框 / RVTOL_MONITOR=0 关闭）
+MONITOR_INTERVAL_S: float = 1.0        # 资源采样间隔（秒）
+MONITOR_GPU: bool = True               # 是否采样 GPU 利用率/显存/温度
 
 # ═══════════════════ 枚举值（CLI/GUI 单点定义） ═══════════════════
 BACKEND_KEYS: list[str] = ["auto", "tensorrt", "cpu"]
 BACKEND_LABELS: dict[str, str] = {"auto": "自动", "tensorrt": "TensorRT", "cpu": "CPU"}
 OCR_FRAME_BATCH: int = 6               # 帧批处理大小（≤6 兼容 TRT profile 上限）
+# OCR 输入 pad 宽度下限（px）：实际内容宽 × 高比超出该值时用实际宽。
+# 速度数字是窄图（48 高后 78-160 宽），旧代码强制 pad 到 320 让 GPU 白算
+# 2~4 倍。但 v6 tiny 对输入宽度敏感 —— test5(max_width=72) 在 72 宽下
+# 精度 0.07%→0.54%（模型依赖 padding 的时序上下文）；small 在窄宽下反而
+# 更好（test6 0.83%→0.33%）。默认 192 平衡：test4/5 精度不变，test6
+# small 仍有 ~1.5x 推理加速。
+#
+# 两模型可独立设下限（精确优化实测值）。测试可用环境变量覆盖单模型：
+# RVTOL_PAD_TINY / RVTOL_PAD_SMALL（像素，指定即优先于本表）。
+#
+# 实测（bench_decoder, TRT, 2026-08）：
+# - tiny=192：test4 err 2.18%/falseT 5（224 时 falseT 翻倍到 10）、
+#   test5(max_width=72) err 0.04%。192 是 tiny 的精度甜点（144 时 test4
+#   2.45%，96 时 0.19%/2.42%，256 时 test5 0.14%）。
+# - small=224：test6 err 0.09%（192 时 0.16%，48~96 时 0.69~1.19% —— small
+#   并不窄宽鲁棒，宽 pad 更准；256 与 224 精度相同但更慢）。
+# 跨模型 tiny+small 时 re-OCR(small@224) 让 test6 err 0.47%→0.38%。
+OCR_PAD_WIDTH_MIN: int = 192
+OCR_PAD_WIDTH_MIN_BY_MODEL: dict[str, int] = {
+    "v6_tiny": 192,
+    "v6_small": 224,
+}
 
 # ═══════════════════ 图表颜色 ═══════════════════
 COLOR_BLUE: str = "#2196F3"

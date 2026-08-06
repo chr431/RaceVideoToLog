@@ -44,15 +44,8 @@ from qfluentwidgets import (setTheme, Theme, isDarkTheme,
 
 def _t(mark: str) -> None:
     """GUI 计时打点：写 %LOCALAPPDATA%/RaceVideoToLog/gui_timing.log（排查 EXE 卡顿）。"""
-    import os as _os
-    import time as _time
-    try:
-        _d = _os.path.join(_os.environ.get("LOCALAPPDATA", "."), "RaceVideoToLog")
-        _os.makedirs(_d, exist_ok=True)
-        with open(_os.path.join(_d, "gui_timing.log"), "a", encoding="utf-8") as _f:
-            _f.write(f"{_time.perf_counter():.3f} {mark}\n")
-    except Exception:
-        pass
+    from monitor import gui_mark
+    gui_mark(mark)
 
 
 class RaceVideoToLogApp(QMainWindow):
@@ -424,11 +417,6 @@ class RaceVideoToLogApp(QMainWindow):
         _backend_labels = {"TensorRT": "TensorRT (GPU)", "CUDA": "CUDA (GPU)", "CPU": "CPU"}
         self._status_label.setText(f"OCR 后端: {_backend_labels.get(actual, actual)}")
 
-    def _reocr_model(self) -> str | None:
-        """解析重 OCR 模型选择：'同主模型' → None，否则返回模型名。"""
-        text = self._settings["reocr_model_combo"].currentText()
-        return None if text == "同主模型" else text
-
     def _create_ocr(self) -> "OcrEngine":
         from ocr_native import OcrEngine
         _reset_backend()
@@ -506,7 +494,6 @@ class RaceVideoToLogApp(QMainWindow):
         _combo_map = {
             "backend":      (s["backend_combo"],      {k: i for i, k in enumerate(config.BACKEND_KEYS)}),
             "model":        (s["model_combo"],         {"v6_tiny": 0, "v6_small": 1}),
-            "reocr_model":  (s["reocr_model_combo"],   {"v6_tiny": 1, "v6_small": 2}),
         }
         for key, (combo, mapping) in _combo_map.items():
             val = parse_csv_setting(key, settings.get(key, ""))
@@ -549,6 +536,7 @@ class RaceVideoToLogApp(QMainWindow):
             pp = s["pad_spin"].value(); nw = s["buffer_spin"].value()
             be = config.BACKEND_KEYS[s["backend_combo"].currentIndex()]
             log_level = ["normal", "detailed", "debug"][s["log_level_combo"].currentIndex()]
+            monitor_enabled = s["monitor_checkbox"].isChecked()
         except ValueError:
             QMessageBox.warning(self, "参数错误", "请检查数值参数。"); return
 
@@ -583,12 +571,12 @@ class RaceVideoToLogApp(QMainWindow):
             max_width=mw,
             backend=be,
             ocr_model=s["model_combo"].currentText(),
-            reocr_model=self._reocr_model(),
             speed_format=self.speed_format,
             frame_start=s["frame_start_edit"].text(),
             frame_end=s["frame_end_edit"].text(),
             log_level=log_level,
             correction_mode=self.correction_mode,
+            monitor_enabled=monitor_enabled,
             output_path=Path(out),
             parent=self,
         )

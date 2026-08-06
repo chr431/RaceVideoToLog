@@ -43,7 +43,6 @@ class ExportThread(QThread):
             buffer_size: int,
             backend: str,
             ocr_model: str,
-            reocr_model: str | None,
             speed_format: str,
             frame_start: str,
             frame_end: str,
@@ -51,6 +50,7 @@ class ExportThread(QThread):
             max_width: int,
             correction_mode: str,
             output_path: Path,
+            monitor_enabled: bool = True,
             parent: QWidget | None = None,
         ) -> None:
         super().__init__(parent)
@@ -64,13 +64,13 @@ class ExportThread(QThread):
         self._buffer_size = buffer_size
         self._backend = backend
         self._ocr_model = ocr_model
-        self._reocr_model = reocr_model
         self._speed_format = speed_format
         self._frame_start = frame_start
         self._frame_end = frame_end
         self._log_level = log_level
         self._max_width = max_width
         self._correction_mode = correction_mode
+        self._monitor_enabled = monitor_enabled
         self._output_path = output_path
         self._cancel_flag = False
 
@@ -83,7 +83,12 @@ class ExportThread(QThread):
         result_container: dict = {}
 
         def _worker() -> None:
+            import config
+            import monitor as _monitor
             try:
+                if self._monitor_enabled:
+                    _monitor.start(interval_s=config.MONITOR_INTERVAL_S,
+                                   with_gpu=config.MONITOR_GPU)
                 self._check_cancel()
                 pipeline = ProcessingPipeline(
                     video_path=self._video_path,
@@ -96,7 +101,6 @@ class ExportThread(QThread):
                     buffer_size=self._buffer_size,
                     backend=self._backend,
                     ocr_model=self._ocr_model,
-                    reocr_model=self._reocr_model,
                     speed_format=self._speed_format,
                     frame_start=self._frame_start,
                     frame_end=self._frame_end,
@@ -112,6 +116,7 @@ class ExportThread(QThread):
                 else:
                     pipeline.run_auto(self._output_path, mode="manual")
                     result_container["mode"] = "review"
+                result_container["timing"] = pipeline.timing_flat()
                 self.pipeline_ready.emit(pipeline, self._output_path)
             except _CancelExport:
                 result_container["cancelled"] = True
@@ -120,6 +125,12 @@ class ExportThread(QThread):
                 traceback.print_exc()
                 error_container.append(exc)
             finally:
+                # 取消/异常路径也必须停止监测（finally 兜底，幂等）
+                if self._monitor_enabled:
+                    _stats = _monitor.stop()
+                    if _stats:
+                        _monitor.log_run(self._video_path.name, _stats,
+                                         result_container.get("timing"))
                 done.set()
 
         t = threading.Thread(target=_worker, daemon=True)

@@ -102,14 +102,13 @@ def run_pipeline(video_path: str, truth_csv: str, output_path: str) -> None:
     buffer_size = int(settings.get("buffer", "16"))
     backend = settings.get("backend", "auto")
     ocr_model = settings.get("model", "v6_tiny")
-    reocr_model = settings.get("reocr_model", ocr_model)
     speed_format = settings.get("format", "km/h")
     frame_start = settings.get("frame_start", "")
     frame_end = settings.get("frame_end", "")
 
     print(f"Video: {video_path}")
     print(f"ROI: {roi}, div={div}, target_h={target_h}, pad={pad}")
-    print(f"Model: {ocr_model}, reocr: {reocr_model}, backend: {backend}")
+    print(f"Model: {ocr_model}, backend: {backend}")
     print(f"max_speed={max_speed}, max_accel={max_accel}")
     print(f"frame_start={frame_start}, frame_end={frame_end}")
 
@@ -127,7 +126,6 @@ def run_pipeline(video_path: str, truth_csv: str, output_path: str) -> None:
         buffer_size=buffer_size,
         backend=backend,
         ocr_model=ocr_model,
-        reocr_model=reocr_model,
         speed_format=speed_format,
         frame_start=frame_start,
         frame_end=frame_end,

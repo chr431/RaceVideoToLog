@@ -30,7 +30,7 @@ hiddenimports = [
     'headless', 'analysis', 'gui_analysis', 'gui_review',
     'gui_export', 'gui_settings', 'gui_preview', 'viterbi', 'error_detection',
     'widget_utils', 'theme_manager', 'csv_io', 'ocr_text', 'signals',
-    'video_utils', 'tensorrt', 'ocr_native',
+    'video_utils', 'tensorrt', 'ocr_native', 'monitor',
 ]
 
 # onnxruntime（CPU provider；TensorRT 由 tensorrt_bindings 直接调用）

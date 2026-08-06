@@ -19,6 +19,8 @@ from pathlib import Path
 
 import numpy as np
 
+import config
+
 
 def _models_dir() -> Path:
     """模型资产目录（源码: 项目 assets/ocr_models；frozen: _internal/ocr_models）。"""
@@ -51,10 +53,11 @@ class OcrEngine:
         """progress_cb: 构建引擎等耗时阶段的进度消息回调 (str)。"""
         self._variant = variant
         self._progress_cb = progress_cb
-        # 推理锁：pipeline 在 ocr_model == reocr_model 时共享同一实例
-        # （主 OCR 线程 + 后台预热线程并发调用）。TRT IExecutionContext
-        # 非线程安全 —— 并发 execute_v2 报 Myelin "already loaded binary
-        # graph" 并级联 CUDA illegal access（实测 test6 首轮 OCR 50% 崩溃）。
+        # 推理锁：主 OCR 线程 + 后台重 OCR 预热线程并发调用同一引擎。
+        # 注：重 OCR 自动推导（tiny→small / small→无）后主/重引擎必不同，
+        # 但保留此锁以防未来同引擎并发路径复现 Myelin 崩溃
+        # （TRT IExecutionContext 非线程安全 —— execute_v2 报 "already
+        # loaded binary graph" 并级联 CUDA illegal access）。
         self._lock = threading.Lock()
         size = variant.replace("v6_", "")
         models = _models_dir()
@@ -343,9 +346,18 @@ class OcrEngine:
         h0 = heights[0]
         # 按宽度排序（rapidocr 的加速策略；结果映射回原顺序）
         order = np.argsort([im.shape[1] for im in img_list])
-        # 与 rapidocr 对齐：max_wh_ratio 起点为 rec_image_shape 的 imgW/imgH
-        # （v6 配置 [3, 48, 320] → 320/48），取批内最大宽高比
-        max_wh = max(320.0 / 48.0,
+        # pad 宽度 = max(批内最大宽高比, 本模型下限/48)。旧代码强制 320/48
+        # 下限：速度数字是窄图（48 高后 78-160 宽），pad 到 320 让 GPU 白算
+        # 2~4 倍宽度；但 v6 tiny 对输入宽度敏感（test5 max_width=72 在 72 宽
+        # 下精度 0.07%→0.54%），不能无下限。每模型下限查 OCR_PAD_WIDTH_MIN_
+        # BY_MODEL（实测平衡点），测试可用 RVTOL_PAD_TINY/SMALL 覆盖。
+        _floor = config.OCR_PAD_WIDTH_MIN_BY_MODEL.get(
+            self._variant, config.OCR_PAD_WIDTH_MIN)
+        _env = os.environ.get("RVTOL_PAD_TINY" if "tiny" in self._variant
+                              else "RVTOL_PAD_SMALL")
+        if _env and _env.isdigit():
+            _floor = int(_env)
+        max_wh = max(_floor / 48.0,
                      *(float(im.shape[1]) / im.shape[0] for im in img_list))
         batch_np = np.stack([self._resize_norm(img_list[i], max_wh, h0)
                              for i in order])

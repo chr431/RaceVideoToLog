@@ -1,4 +1,4 @@
-# 上游依赖跟踪（v2.9.0）
+# 上游依赖跟踪（v2.10.0）
 
 ## 核心依赖
 
@@ -11,6 +11,7 @@
 | pyqtgraph | 0.14 | PyPI | 分析/检查图表（替代 matplotlib） |
 | cuda-python | — | PyPI | CUDA Python 绑定（TRT 执行 + decord GPU DLL 注册） |
 | tensorrt_cu13_bindings | 10 | PyPI | TensorRT Python 绑定（~1MB） |
+| psutil | 6 | PyPI | 资源监测 RSS / CPU%（可选：缺失时降级为 None，GPU 采样不受影响） |
 | decord | 自建 | 自建仓库 chr431/decord（feat/perf-deep） | NVDEC 硬解 + CPU 软件解码；FFmpeg 8.x DLL。**PyPI 版不支持 next_roi / CPU ROI 优化**，见 setup_venv.bat |
 
 ## GPU 加速（运行时，不打包）

@@ -2,11 +2,39 @@
 from __future__ import annotations
 import argparse
 import logging
+import os as _os
 import sys
 import time
 from pathlib import Path
 
+import config
+import monitor as _monitor
 from pipeline import ProcessingPipeline
+
+
+def _monitor_settings(args: argparse.Namespace) -> tuple[bool, float]:
+    """解析资源监测开关与间隔。
+
+    优先级：--no-monitor > RVTOL_MONITOR env > config.MONITOR_ENABLED；
+    间隔：--monitor-interval > RVTOL_MONITOR_INTERVAL env > config.MONITOR_INTERVAL_S。
+    """
+    enabled = config.MONITOR_ENABLED
+    _env = _os.environ.get("RVTOL_MONITOR", "").strip().lower()
+    if _env in ("0", "off", "false", "no"):
+        enabled = False
+    elif _env in ("1", "on", "true", "yes"):
+        enabled = True
+    if getattr(args, "no_monitor", False):
+        enabled = False
+    interval = config.MONITOR_INTERVAL_S
+    if getattr(args, "monitor_interval", None):
+        interval = float(args.monitor_interval)
+    elif _os.environ.get("RVTOL_MONITOR_INTERVAL"):
+        try:
+            interval = float(_os.environ["RVTOL_MONITOR_INTERVAL"])
+        except ValueError:
+            pass
+    return enabled, interval
 
 
 def run_headless(args: argparse.Namespace) -> None:
@@ -52,7 +80,6 @@ def run_headless(args: argparse.Namespace) -> None:
         buffer_size=args.buffer,
         backend=args.backend,
         ocr_model=args.ocr_model,
-        reocr_model=getattr(args, 'reocr_model', None),
         speed_format=args.format,
         frame_start=str(args.frame_start or ""),
         frame_end=str(args.frame_end or ""),
@@ -62,16 +89,23 @@ def run_headless(args: argparse.Namespace) -> None:
     )
 
     t0 = time.perf_counter()
+    _mon_enabled, _mon_interval = _monitor_settings(args)
+    if _mon_enabled:
+        _monitor.start(interval_s=_mon_interval, with_gpu=config.MONITOR_GPU)
     try:
         pipeline.run_auto(output_path, mode=getattr(args, 'mode', 'auto'))
     except Exception as e:
         print(f"\n错误: {e}")
         sys.exit(1)
+    finally:
+        _stats = _monitor.stop()
 
     t_total = time.perf_counter() - t0
     print(f"总耗时: {t_total:.1f}s")
-    # 输出详细的阶段计时
-    if pipeline.timing:
-        for stage, elapsed in pipeline.timing.items():
-            print(f"  {stage}: {elapsed:.1f}s")
+    # 输出详细的阶段计时（标量键；correction_stages 嵌套 dict 只在 _summary.json）
+    for stage, elapsed in pipeline.timing_flat().items():
+        print(f"  {stage}: {elapsed:.1f}s")
+    if _stats:
+        _monitor.log_run(video_path.name, _stats, pipeline.timing_flat())
+        print("资源: " + _monitor.format_stats(_stats))
     print(f"导出: {output_path}")
