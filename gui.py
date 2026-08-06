@@ -553,7 +553,7 @@ class RaceVideoToLogApp(QMainWindow):
                 QMessageBox.warning(self, "TensorRT 未安装",
                     "你选择了 TensorRT 后端，但 venv 中未安装 tensorrt。\n"
                     "将自动回退到 CPU 推理。\n\n"
-                    "启用 GPU 加速（需先安装 CUDA Toolkit 12.x + TensorRT 10.x）：\n"
+                    "启用 GPU 加速（需先安装 CUDA Toolkit 13.x + TensorRT 10.x）：\n"
                     "  .venv\\Scripts\\pip install cuda-python tensorrt")
         try:
             import decord  # noqa: F401

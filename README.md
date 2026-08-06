@@ -6,7 +6,7 @@
 
 - Python 3.11+
 - NVIDIA 显卡 + 最新驱动（GPU 视频解码；无 GPU 自动使用 CPU 软件解码，性能差异约 15%）
-- （可选）CUDA Toolkit + TensorRT 10.x（GPU OCR 推理；无则自动使用 CPU）
+- （可选）CUDA Toolkit 13.x + TensorRT 10.x（GPU OCR 推理；无则自动使用 CPU）
 
 ## 一键安装
 

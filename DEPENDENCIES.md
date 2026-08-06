@@ -18,7 +18,7 @@
 
 | 组件 | 来源 | 备注 |
 | --- | --- | --- |
-| CUDA Toolkit | NVIDIA 官网 | cudart/cublas 等 DLL，需在 PATH |
+| CUDA Toolkit 13.x | NVIDIA 官网 | cudart/cublas 等 DLL，需在 PATH；与 tensorrt_cu13_bindings / decord（全栈统一 CUDA 13）一致 |
 | TensorRT | NVIDIA 官网 | nvinfer DLL，需在 PATH；首次运行自动构建引擎缓存到 `%LOCALAPPDATA%/RaceVideoToLog/ocr_engines/` |
 
 `tensorrt` 元包与 `tensorrt_cu13_libs`（~2.2GB DLL）被有意排除 —— 运行时 DLL 从系统 PATH 加载。

@@ -66,7 +66,7 @@ def get_setup_advice() -> str | None:
         return "未检测到 NVIDIA 显卡，OCR 将使用 CPU 推理。"
     return (
         "检测到 NVIDIA 显卡，但 PATH 中未找到 TensorRT DLL。\n"
-        "将 CUDA Toolkit 12.x 和 TensorRT 10.x 的 bin 目录加入 PATH 即可。\n"
+        "将 CUDA Toolkit 13.x 和 TensorRT 10.x 的 bin 目录加入 PATH 即可。\n"
         "详见 README 的「GPU 加速配置」章节。"
     )
 
