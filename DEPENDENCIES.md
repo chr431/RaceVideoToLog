@@ -94,6 +94,18 @@ build_exe.bat
 
 # 7. 提交 + 合并到 master（master 是发布分支，不跑 tests/）
 git add -A && git commit -m "release: v2.11.0 ..."
+git checkout master && git merge dev && git push
 ```
+
+### 一键发布（GitHub Action）
+
+合并到 master 后，Actions → **Release** → Run workflow（默认 `ref: master`），自动完成：
+
+1. 校验版本引用一致性（`tools/version.py`，不一致即中止）
+2. 读取 `config.__version__`，确认 tag `v<版本>` 不存在
+3. 下载 decord fork 发布产物 `decord-<ver>-win64-gpu.zip`（`decord-version` 输入，默认 `0.7.0`）到 `_decord_build\`
+4. `setup_venv.bat --ci` + `build_exe.bat --ci` 构建 EXE（跳过 pause）
+5. 打包 `RaceVideoToLog.<版本>.zip`（dist 布局与现有 release 一致）
+6. 打 tag `v<版本>` + push，创建 GitHub Release（notes 取自 `release_notes.md` 对应节）
 
 发布后如需小修：继续 `bump` 到下一个 PATCH，不回改已发布的版本号。

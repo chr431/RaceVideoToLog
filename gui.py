@@ -559,8 +559,8 @@ class RaceVideoToLogApp(QMainWindow):
             import decord  # noqa: F401
         except ImportError:
             QMessageBox.critical(self, "decord 加载失败",
-                "视频解码需要 decord（GPU API 已动态加载，无需 NVIDIA 驱动）。\n\n"
-                "安装方法：pip install decord")
+                "视频解码需要自建 decord fork（PyPI 版不支持）。\n\n"
+                "修复：运行 setup_venv.bat，或从 chr431/decord 获取发布产物到 _decord_build\\")
             self._finish_export()
             return
         self._export_thread = ExportThread(

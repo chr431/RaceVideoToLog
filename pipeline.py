@@ -44,7 +44,9 @@ def open_decord_vr(video_path, force_cpu: bool = False):
             from decord import cpu as _decord_cpu
             _vr = _VR(str(video_path), ctx=_decord_cpu(0))
         except ModuleNotFoundError:
-            raise RuntimeError("decord 未安装。请运行: pip install decord")
+            raise RuntimeError(
+                "decord 未安装（需要自建 fork，PyPI 版不支持）。"
+                "请运行 setup_venv.bat 或从 chr431/decord 获取发布产物到 _decord_build\\")
         except Exception as _e:
             raise RuntimeError(f"decord 无法打开视频: {_e}")
 

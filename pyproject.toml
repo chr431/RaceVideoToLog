@@ -11,7 +11,9 @@ dependencies = [
     "PySide6-Fluent-Widgets>=1.11",
     "cuda-python",
     "tensorrt_cu13_bindings>=10,<11",
-    "decord",
+    # decord 已从 PyPI 依赖中移除：本仓库依赖自建 fork（chr431/decord）
+    # 的 next_roi / get_codec / GPU 动态加载 / CPU 内存修复，PyPI 版无法满足。
+    # 由 setup_venv.bat 从 _decord_build/（decord 发布产物）安装，见 README。
     "psutil>=6",
 ]
 

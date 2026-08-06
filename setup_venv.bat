@@ -1,6 +1,11 @@
 @echo off
 cd /d "%~dp0"
 chcp 65001 >nul
+setlocal
+rem --ci 模式（CI/自动化）：跳过所有 pause（GitHub Actions / 脚本调用）
+set _NOPAUSE=0
+if /i "%~1"=="--ci" set _NOPAUSE=1
+
 echo ========================================
 echo   RaceVideoToLog - Setup venv
 echo ========================================
@@ -10,7 +15,7 @@ python --version >nul 2>&1
 if errorlevel 1 (
     echo [ERROR] Python not found on PATH.
     echo   Install Python 3.11+ from https://python.org
-    pause
+    if not "%_NOPAUSE%"=="1" pause
     exit /b 1
 )
 
@@ -18,7 +23,7 @@ if exist ".venv\Scripts\python.exe" (
     echo Existing .venv found. To rebuild: rmdir /s /q .venv ^&^& setup_venv.bat
     echo.
     echo Run .venv\Scripts\activate to enter the venv.
-    pause
+    if not "%_NOPAUSE%"=="1" pause
     exit /b 0
 )
 
@@ -26,7 +31,7 @@ echo Creating .venv ...
 python -m venv .venv
 if errorlevel 1 (
     echo [ERROR] Failed to create .venv
-    pause
+    if not "%_NOPAUSE%"=="1" pause
     exit /b 1
 )
 
@@ -38,17 +43,18 @@ echo Installing project dependencies ...
 .venv\Scripts\python -m pip install -e .
 if errorlevel 1 (
     echo [ERROR] Dependency installation failed.
-    pause
+    if not "%_NOPAUSE%"=="1" pause
     exit /b 1
 )
 
 echo.
 echo ========================================
-echo   decord (self-built, GPU + memory fix)
+echo   decord (self-built fork, GPU + memory fix)
 echo ========================================
 echo.
-echo This project uses a self-built decord with NVDEC support and CPU
-echo memory fixes.  PyPI decord is CPU-only and uses ~10 GB RAM.
+echo This project requires the self-built decord fork (chr431/decord) with
+echo NVDEC support, CPU memory fixes, and next_roi/get_codec APIs.
+echo PyPI decord is NOT supported (CPU-only, ~10 GB RAM, no next_roi).
 echo.
 
 set _DECORD_DIR=.venv\Lib\site-packages\decord
@@ -56,22 +62,39 @@ set _COPIED=0
 
 rem 用 goto 分支替代 if 括号块内的 for 循环（cmd 的括号解析 bug
 rem 会使嵌套 for 报 ". was unexpected at this time."）。
+rem 无 PyPI 回退：decord 必须来自自建 fork（_decord_build\ 或本地 decord 仓库构建）。
 if exist "_decord_build\decord.dll" goto :use_decord_build
 if exist "..\decord\build\Release\decord.dll" goto :use_decord_sibling
-goto :decord_missing
+echo [ERROR] Self-built decord not found.
+echo   Expected _decord_build\decord.dll or ..\decord\build\Release\decord.dll
+echo   To obtain it:
+echo     1. 运行 decord 仓库（chr431/decord）的 Release workflow，或本地 GPU 构建
+echo     2. 将产物解压/复制为 _decord_build\（decord.dll + FFmpeg 8 DLLs
+echo        + ffprobe.exe + python\decord\），setup_venv.bat 直接拷贝
+echo   PyPI decord 不再支持（无 next_roi / get_codec、CPU 解码内存溢出）。
+if not "%_NOPAUSE%"=="1" pause
+exit /b 1
 
 :use_decord_build
 echo Found _decord_build\ - installing self-built decord ...
-rem 先清理 PyPI decord 自带的 FFmpeg 4.x DLL（避免与 FFmpeg 8 DLL 混杂）
-del /q "%_DECORD_DIR%\avcodec-58.dll" "%_DECORD_DIR%\avformat-58.dll" "%_DECORD_DIR%\avutil-56.dll" 2>nul
-del /q "%_DECORD_DIR%\avfilter-7.dll" "%_DECORD_DIR%\avdevice-58.dll" "%_DECORD_DIR%\swresample-3.dll" "%_DECORD_DIR%\swscale-5.dll" "%_DECORD_DIR%\postproc-55.dll" 2>nul
-for %%f in (_decord_build\*.dll _decord_build\ffprobe.exe) do copy /Y "%%f" "%_DECORD_DIR%\" >nul
-rem Fork Python 层（next_roi / get_codec）：PyPI decord 0.6.0 没有这两个
-rem API，只拷 DLL 会导致编码显示 "?" 且解码退回全帧路径（ROI 优化失效）。
+if not exist "%_DECORD_DIR%" mkdir "%_DECORD_DIR%"
+for %%f in (_decord_build\*.dll _decord_build\ffprobe.exe) do (
+    if exist "%%f" copy /Y "%%f" "%_DECORD_DIR%\" >nul
+)
 if exist "_decord_build\python\decord\video_reader.py" goto :py_layer_build
 if exist "..\decord\python\decord\video_reader.py" goto :py_layer_sibling
-echo [WARNING] Fork decord Python 层未找到 - next_roi/get_codec 不可用
-goto :decord_done
+echo [ERROR] decord Python 层未找到（_decord_build\python\decord\ 缺失）
+echo   next_roi / get_codec 不可用。请重新获取完整 decord 发布产物。
+if not "%_NOPAUSE%"=="1" pause
+exit /b 1
+
+:use_decord_sibling
+echo Found ..\decord\build\Release\ - installing from sibling repo ...
+if not exist "%_DECORD_DIR%" mkdir "%_DECORD_DIR%"
+for %%f in (..\decord\build\Release\*.dll ..\decord\build\Release\ffprobe.exe) do (
+    if exist "%%f" copy /Y "%%f" "%_DECORD_DIR%\" >nul
+)
+goto :py_layer_sibling
 
 :py_layer_build
 xcopy /E /Y /I "_decord_build\python\decord\*" "%_DECORD_DIR%\" >nul
@@ -85,21 +108,13 @@ echo   Fork decord Python layer installed (from sibling repo).
 set _COPIED=1
 goto :decord_done
 
-:decord_missing
-echo [WARNING] Self-built decord not found.
-echo   Falling back to PyPI decord (CPU-only, high memory).
-echo.
-echo   To enable GPU decode:
-echo     1. Build decord with -DUSE_CUDA=ON (see repo wiki)
-echo     2. Copy decord.dll + FFmpeg 5.x DLLs + ffprobe.exe to _decord_build\
-echo     3. Re-run this script
-goto :decord_done
-
 :decord_done
 if %_COPIED%==1 (
     echo   Self-built decord installed - GPU decode ready.
 ) else (
-    echo [WARNING] Self-built decord not found - using PyPI CPU version.
+    echo [ERROR] decord 安装失败
+    if not "%_NOPAUSE%"=="1" pause
+    exit /b 1
 )
 
 echo.
@@ -122,4 +137,4 @@ echo ========================================
 echo   Setup complete.
 echo   Run: .venv\Scripts\python RaceVideoToLog.py
 echo ========================================
-pause
+if not "%_NOPAUSE%"=="1" pause

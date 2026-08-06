@@ -18,15 +18,14 @@ setup_venv.bat
 
 1. 创建 `.venv` 虚拟环境
 2. `pip install -e .` 安装所有 Python 依赖
-3. 检测 `_decord_build\` 目录，若存在则安装自建 decord（GPU 解码 + 内存修复）
+3. 从 `_decord_build\` 安装自建 decord（必需，GPU 解码 + 内存修复；缺失则报错退出）
 4. 安装 TensorRT / cuda-python Python 绑定
 
-### 自建 decord（推荐）
+### 自建 decord（必需）
 
-PyPI 版 decord 是 CPU-only 且没有 `next_roi` / `get_codec`。自建版本支持 NVDEC GPU 硬解码 + CPU 软件解码，且只传输识别 ROI（解码提速 ~45%，编码信息直接来自 decord）。
+本项目**不依赖 PyPI decord**（CPU-only、无 `next_roi` / `get_codec`、CPU 解码内存溢出）。自建 fork（chr431/decord）支持 NVDEC GPU 硬解码 + CPU 软件解码，只传输识别 ROI（解码提速 ~45%，编码信息直接来自 decord），且 GPU API 运行时动态加载 —— 无 NVIDIA 设备自动回退 CPU 解码。
 
-1. 按 [decord wiki](https://github.com/chr431/decord)（feat/perf-deep 分支）构建 decord
-2. 将构建产物放入 `_decord_build\`：
+获取 decord 发布产物（推荐）：运行 [chr431/decord](https://github.com/chr431/decord) 的 **Release workflow**（Actions → Release → Run workflow，输入版本号如 `0.7.0`），它会构建并发布 `decord-<ver>-win64-gpu.zip`。解压到本仓库 `_decord_build\`：
 
 ```text
 _decord_build\
@@ -44,9 +43,9 @@ _decord_build\
 └── python\decord\          （fork 的 Python 层：next_roi / get_codec）
 ```
 
-3. 重新运行 `setup_venv.bat`
+然后重新运行 `setup_venv.bat`。
 
-如无 `_decord_build\`，安装脚本会使用 PyPI decord（无 GPU 解码、无 ROI 优化，功能正常但较慢）。
+> 没有 `_decord_build\` 时 `setup_venv.bat` 会报错退出（**无 PyPI 回退**）—— 必须先获取自建 decord 产物。
 
 ## 使用
 

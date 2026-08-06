@@ -1,0 +1,182 @@
+# RaceVideoToLog 发布工作流 — 从 master 最新提交一键构建并发布 GitHub Release
+#
+# 手动触发（Actions → Release → Run workflow，默认 ref: master）即完成：
+#   1. 校验版本引用一致性（tools/version.py，退出码 1 = 不一致即中止）
+#   2. 读取 config.__version__（单一事实源），确认 tag v<版本> 不存在
+#   3. 下载 decord fork 发布产物 decord-<ver>-win64-gpu.zip（chr431/decord，
+#      decord-version 输入，默认 0.7.0）解压到 _decord_build\
+#   4. setup_venv.bat --ci + build_exe.bat --ci 构建 EXE（--ci 跳过 pause）
+#   5. 打包 RaceVideoToLog.<版本>.zip —— 布局与现有 release 一致
+#      （RaceVideoToLog.exe 在 zip 根 + _internal/，无文件夹包裹）
+#   6. 打 tag v<版本> + push，创建 GitHub Release（notes 取自 release_notes.md 对应节）
+#
+# 版本号不通过输入指定 —— 始终发布当前 ref 的 config.__version__（tools/version.py
+# 已强制所有引用一致 + release_notes.md 有对应节）。发布流程：dev 上 bump → 填
+# release_notes → 合并到 master → 运行本 workflow。
+#
+# 只监听 workflow_dispatch（push/tag 不会二次触发）。构建失败时不会产生任何
+# commit / tag / release（tag 在构建成功后才创建）。
+
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch to release from'
+        required: false
+        default: 'master'
+        type: string
+      decord-version:
+        description: 'decord fork release version to consume (chr431/decord)'
+        required: false
+        default: '0.7.0'
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0  # 全历史：release notes / tag 检查需要
+          token: ${{ github.token }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Validate version references
+        shell: pwsh
+        run: |
+          python tools/version.py
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "版本引用不一致（可能缺 release_notes.md 对应节）。先在 dev 上: python tools/version.py bump X.Y.Z"
+            exit 1
+          }
+
+      - name: Read version + check tag
+        id: ver
+        shell: pwsh
+        run: |
+          $ver = (python -c "import config; print(config.__version__)").Trim()
+          if ($LASTEXITCODE -ne 0 -or -not $ver) {
+            Write-Error "读取 config.__version__ 失败"
+            exit 1
+          }
+          Write-Host "Releasing version: $ver"
+          if (git tag -l "v$ver" | Select-String -Quiet "v$ver") {
+            Write-Error "tag v$ver 已存在。如需重新发布先删 tag，或先在 dev 升版本后合并到 master"
+            exit 1
+          }
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "version=$ver"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "tag=v$ver"
+
+      - name: Download decord fork release
+        shell: pwsh
+        run: |
+          $ver = "${{ inputs.decord-version }}"
+          $url = "https://github.com/chr431/decord/releases/download/v$ver/decord-$ver-win64-gpu.zip"
+          Write-Host "Downloading $url"
+          curl.exe -L -f -o decord.zip $url
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "decord v$ver 发布产物下载失败。请先运行 chr431/decord 的 Release workflow 发布 decord-$ver-win64-gpu.zip"
+            exit 1
+          }
+          Expand-Archive -Path decord.zip -DestinationPath .
+          if (-not (Test-Path "_decord_build/decord.dll")) {
+            Write-Error "_decord_build/decord.dll 缺失（zip 布局不符）"
+            exit 1
+          }
+          if (-not (Test-Path "_decord_build/python/decord/video_reader.py")) {
+            Write-Error "decord Python 层缺失（next_roi/get_codec 不可用）"
+            exit 1
+          }
+          Write-Host "decord $ver extracted to _decord_build/"
+
+      - name: Setup venv + install deps
+        shell: pwsh
+        run: |
+          cmd /c "setup_venv.bat --ci"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build EXE
+        shell: pwsh
+        run: |
+          cmd /c "build_exe.bat --ci"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "EXE 构建失败"
+            exit 1
+          }
+          if (-not (Test-Path "dist/RaceVideoToLog/RaceVideoToLog.exe")) {
+            Write-Error "dist/RaceVideoToLog/RaceVideoToLog.exe 未生成"
+            exit 1
+          }
+
+      - name: Package release zip
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.ver.outputs.version }}"
+          Compress-Archive -Path "dist/RaceVideoToLog/*" -DestinationPath "RaceVideoToLog.$ver.zip" -CompressionLevel Optimal
+          # 校验布局与现有 release（v2.9.0）一致：exe 在 zip 根 + _internal/ 子目录
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path "RaceVideoToLog.$ver.zip"))
+          $rootExe = $zip.Entries | Where-Object { $_.FullName -eq "RaceVideoToLog.exe" }
+          $hasInternal = $zip.Entries | Where-Object { $_.FullName -like "_internal/*" }
+          $zip.Dispose()
+          if (-not $rootExe -or -not $hasInternal) {
+            Write-Error "zip 布局不符：需 RaceVideoToLog.exe（根）+ _internal/（与现有 release 一致）"
+            exit 1
+          }
+          Write-Host "zip ready: RaceVideoToLog.$ver.zip"
+
+      - name: Create tag + push
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.ver.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "v$ver"
+          git push origin "v$ver"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Host "tag v$ver pushed"
+
+      - name: Generate release notes
+        id: notes
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.ver.outputs.version }}"
+          $escaped = $ver -replace '\.', '\.'
+          $notes = [System.IO.File]::ReadAllText((Resolve-Path "release_notes.md"))
+          $m = [regex]::Match($notes, "(?ms)^## v$escaped(.*?)(?=^## v\d|\z)")
+          if (-not $m.Success) {
+            Write-Error "release_notes.md 中未找到 v$ver 节"
+            exit 1
+          }
+          $body = ("## v$ver" + $m.Groups[1].Value).TrimEnd()
+          if ($body -match "### 待补充") {
+            Write-Error "release_notes.md 的 v$ver 节还是骨架（### 待补充）。请先在 dev 填写后重新合并到 master"
+            exit 1
+          }
+          $sha = (git rev-parse --short HEAD).Trim()
+          $body += "`n`n---`n构建源: ${{ inputs.ref }} @ $sha（GitHub Actions 自动构建，工具链 decord ${{ inputs.decord-version }}）"
+          [System.IO.File]::WriteAllText("notes.md", $body, (New-Object System.Text.UTF8Encoding($false)))
+
+      - name: Create GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ steps.ver.outputs.version }}" "RaceVideoToLog.${{ steps.ver.outputs.version }}.zip" `
+            --title "v${{ steps.ver.outputs.version }}" `
+            --notes-file notes.md
