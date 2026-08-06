@@ -1,4 +1,4 @@
-# 上游依赖跟踪（v2.10.0）
+# 上游依赖跟踪（v2.11.0）
 
 ## 核心依赖
 
@@ -10,7 +10,7 @@
 | PySide6-Fluent-Widgets | 1.11 | PyPI | Fluent Design 组件库 |
 | pyqtgraph | 0.14 | PyPI | 分析/检查图表（替代 matplotlib） |
 | cuda-python | — | PyPI | CUDA Python 绑定（TRT 执行 + decord GPU DLL 注册） |
-| tensorrt_cu13_bindings | 10 | PyPI | TensorRT Python 绑定（~1MB） |
+| tensorrt_cu13_bindings | 11 | PyPI | TensorRT Python 绑定（~1MB） |
 | psutil | 6 | PyPI | 资源监测 RSS / CPU%（可选：缺失时降级为 None，GPU 采样不受影响） |
 | decord | 自建 | 自建仓库 chr431/decord（feat/perf-deep） | NVDEC 硬解 + CPU 软件解码；FFmpeg 8.x DLL。**PyPI 版不支持 next_roi / CPU ROI 优化**，见 setup_venv.bat |
 
@@ -38,9 +38,14 @@
 ### onnxruntime
 - TRT/CUDA provider DLL 已从 EXE 排除（TRT 由 OcrEngine 直接调用，不走 ORT provider）
 
-### tensorrt 10.x
+### tensorrt 11.x
 - `find_lib()` 只搜 `os.environ["PATH"]`，不认 `os.add_dll_directory()` —— `gpu_setup` 已同时更新 PATH
-- 首次构建引擎 FP32 ~80s，缓存于用户目录；FP16 构建 2.2x 慢且推理无提升，不推荐
+- 首次构建引擎 FP32 ~1min，缓存于用户目录；FP16 构建 2.2x 慢且推理无提升，不推荐
+- TRT 引擎与**构建版本不兼容**（10 产物无法被 11 加载）—— 升级后旧缓存自动重建
+  （`_init_trt` 反序列化失败即删除重建，不会静默回退 ONNX）
+- **GPTuner（Global Performance Tuner）Windows 不可用**：`--tuneBuildRoutes` /
+  `--setBuildRoute` 报 "not supported on Windows (no fork())"，Python
+  `config.all_build_routes` 返回空 —— 调优路线只能走 Linux 或默认路线
 
 ## 检查更新
 

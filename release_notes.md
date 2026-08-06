@@ -1,5 +1,21 @@
 # Release Notes
 
+## v2.11.0（2026-08-06）— TRT 11 采纳 + 陈旧引擎自动重建
+
+> 本节面向使用者：只讲你能直接感知到的变化。技术细节见下方各节。
+
+### ⚡ TensorRT 11 采纳（更快）
+
+- **默认构建路线实测更快**：tiny 模型推理快 17-53%（宽度 160: 0.398 vs 0.847ms；320: 0.598 vs 0.720ms；640: 0.971 vs 1.179ms，trtexec 中位数），small 模型快 2-10%；引擎构建也更快（tiny 55s vs 73s）
+- **依赖升级**：`tensorrt_cu13_bindings` 10.x → 11.x。需 TensorRT 11.x + CUDA 13.x 全栈（详见 README「GPU 加速配置」）；TRT 10 的旧引擎缓存会自动重建
+- 修复 2 处 TRT 11 API 兼容问题，代码向后兼容 TRT 10
+- **GPTuner（Global Performance Tuner）结论**：经源码 + 实验证实 Windows 上不可用 —— Windows DLL 的 API 面存在（`getAllBuildRoutes()` 可调用）但 knob 数据库为空（实测文档真实 knob 全部被丢弃），trtexec 调优循环被 `#if defined(_WIN32)` 编译期禁用（依赖 fork()）。官方文档未提平台限制，但所有官方 Windows 分发（安装器/ZIP/pip）均无此功能。TRT 11 默认路线的收益即是 Windows 能拿到的全部
+
+### 🔧 陈旧引擎自动重建（不再静默回退 ONNX）
+
+- TRT 升级后序列化版本不匹配、或换显卡后 GPU 架构不匹配的缓存引擎：自动删除并重建，不再静默回退 ONNX 后端
+- 升级到本版本后首次运行会自动重建缓存引擎（约 2 分钟），之后照常复用
+
 ## v2.10.0（2026-08-06）— 永久性能日志 + 资源监测
 
 > 本节面向使用者：只讲你能直接感知到的变化。技术细节见下方各节。

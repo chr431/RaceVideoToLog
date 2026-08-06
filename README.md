@@ -1,4 +1,4 @@
-# RaceVideoToLog v2.10.0
+# RaceVideoToLog v2.11.0
 
 从赛车视频中提取速度数据，生成时间-速度-距离 CSV 文件。
 
@@ -6,7 +6,7 @@
 
 - Python 3.11+
 - NVIDIA 显卡 + 最新驱动（GPU 视频解码；无 GPU 自动使用 CPU 软件解码，性能差异约 15%）
-- （可选）CUDA Toolkit 13.x + TensorRT 10.x（GPU OCR 推理；无则自动使用 CPU）
+- （可选）CUDA Toolkit 13.x + TensorRT 11.x（GPU OCR 推理；无则自动使用 CPU）
 
 ## 一键安装
 
@@ -64,7 +64,7 @@ _decord_build\
 ## 输出格式
 
 ```csv
-# RaceVideoToLog v2.10.0
+# RaceVideoToLog v2.11.0
 # video_hash=..., video=test5.mp4, fps=59.767, codec=h264
 # roi=843,993,948,1025, format=km/h, frame_start=362, frame_end=7585
 # max_speed=400.0, max_accel=40.0, div=1, target_h=48, pad=0, buffer=16
@@ -121,7 +121,7 @@ build_exe.bat
 
 ## 变更记录
 
-完整发布日志（v2.7.1 → v2.10.0）见 [release_notes.md](release_notes.md)。
+完整发布日志（v2.7.1 → v2.11.0）见 [release_notes.md](release_notes.md)。
 
 ## 运行时缓存（卸载时需删除）
 

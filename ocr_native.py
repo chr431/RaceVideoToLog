@@ -119,16 +119,31 @@ class OcrEngine:
         """加载或构建 TRT 引擎；任何失败回退 ONNX。
 
         - engine 不存在 → 本地自动构建（首次运行，几分钟）并缓存到用户目录
-        - 引擎与 GPU 架构绑定（如 sm89 = RTX 40 系）—— 架构不匹配时
-          deserialize 失败 → 回退 ONNX 并提示
+        - 版本不兼容的陈旧引擎（TRT 升级后旧产物，序列化版本号不匹配）或
+          GPU 架构不匹配的引擎 → 删除并自动重建，避免静默回退 ONNX
         """
         import logging
         log = logging.getLogger(__name__)
+
+        # 逐个候选尝试加载：已存在的引擎可能是 TRT 版本/GPU 架构不匹配的
+        # 陈旧产物。加载失败 → 删除（可写目录），尝试下一个候选；
+        # 全部失败才进入重建（构建到可写的用户缓存目录）。
         engine_path: Path | None = None
         for cand in self._engine_candidates(size):
-            if cand.exists():
+            if not cand.exists():
+                continue
+            try:
+                self._load_trt_engine(cand)
                 engine_path = cand
+                log.info("TensorRT 引擎已加载: %s", engine_path)
                 break
+            except Exception as e:
+                log.warning("TensorRT 引擎 %s 加载失败 (%s)，删除并尝试下一个候选",
+                            cand.name, e)
+                try:
+                    cand.unlink(missing_ok=True)
+                except OSError:
+                    pass  # 只读目录（打包 EXE 内）删不掉，保留无害
         try:
             if engine_path is None:
                 engine_path = self._engine_candidates(size)[-1]  # 缓存目录
@@ -139,27 +154,41 @@ class OcrEngine:
                 log.info("TensorRT 引擎已构建: %s", engine_path)
                 if self._progress_cb:
                     self._progress_cb("TensorRT 引擎构建完成")
-            import tensorrt as trt
-            logger = trt.Logger(trt.Logger.WARNING)  # type: ignore[attr-defined]
-            with open(engine_path, "rb") as f, trt.Runtime(logger) as rt:  # type: ignore[attr-defined]
-                self._trt_engine = rt.deserialize_cuda_engine(f.read())
-            self._trt_ctx = self._trt_engine.create_execution_context()  # type: ignore[attr-defined]
-            in_name = self._trt_engine.get_tensor_name(0)
-            out_name = self._trt_engine.get_tensor_name(1)
-            prof_in = self._trt_engine.get_tensor_profile_shape(in_name, 0)
-            prof_out = self._trt_engine.get_tensor_profile_shape(out_name, 0)
-            self._trt_in_name = in_name
-            self._trt_out_name = out_name
-            self._max_batch = int(prof_in[2][0])  # profile 的 batch 上限（如 6）
-            self._max_in_shape = tuple(int(v) for v in prof_in[2])
-            self._max_out_shape = tuple(int(v) for v in prof_out[2])
-            self._buffers: tuple | None = None  # (dev_in, dev_out, host_in, host_out)
-            self._last_in_shape: tuple | None = None
-            self._out_shape: tuple | None = None
+                self._load_trt_engine(engine_path)
             self._trt = True
         except Exception as e:
             log.warning("TensorRT 引擎不可用 (%s)，回退 ONNX 后端。", e)
             self._init_onnx(models, size)
+
+    def _load_trt_engine(self, engine_path: Path) -> None:
+        """反序列化引擎并读取 profile 元数据；失败抛异常（由调用方决定重建/回退）。
+
+        反序列化失败场景：TRT 版本升级后旧产物（序列化版本号不匹配）、
+        GPU 架构不匹配（如 sm89 引擎换到 sm80 卡）。
+        """
+        import tensorrt as trt
+        logger = trt.Logger(trt.Logger.WARNING)  # type: ignore[attr-defined]
+        with open(engine_path, "rb") as f, trt.Runtime(logger) as rt:  # type: ignore[attr-defined]
+            self._trt_engine = rt.deserialize_cuda_engine(f.read())
+        self._trt_ctx = self._trt_engine.create_execution_context()  # type: ignore[attr-defined]
+        in_name = self._trt_engine.get_tensor_name(0)
+        out_name = self._trt_engine.get_tensor_name(1)
+        prof_in = self._trt_engine.get_tensor_profile_shape(in_name, 0)
+        self._trt_in_name = in_name
+        self._trt_out_name = out_name
+        self._max_batch = int(prof_in[2][0])  # profile 的 batch 上限（如 6）
+        self._max_in_shape = tuple(int(v) for v in prof_in[2])
+        # 输出张量 profile 查询仅 TRT 10 支持（TRT 11 只接受输入张量名，
+        # 对输出张量抛异常）。_max_out_shape 为死代码（从未被读取），
+        # TRT 11 下置 None 即可，不影响推理路径。
+        try:
+            prof_out = self._trt_engine.get_tensor_profile_shape(out_name, 0)
+            self._max_out_shape = tuple(int(v) for v in prof_out[2])
+        except Exception:
+            self._max_out_shape = None
+        self._buffers: tuple | None = None  # (dev_in, dev_out, host_in, host_out)
+        self._last_in_shape: tuple | None = None
+        self._out_shape: tuple | None = None
 
     @staticmethod
     def _build_engine(models: Path, size: str, engine_path: Path) -> None:
@@ -167,7 +196,12 @@ class OcrEngine:
         import tensorrt as trt
         logger = trt.Logger(trt.Logger.WARNING)  # type: ignore[attr-defined]
         builder = trt.Builder(logger)  # type: ignore[attr-defined]
-        flags = 1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)  # type: ignore[attr-defined]
+        # TRT 11 移除了 EXPLICIT_BATCH（隐式 batch 自 10 起已删，显式为默认），
+        # getattr 回退保持 10/11 双兼容；TRT 11 下 flags=0 语义即显式 batch。
+        try:
+            flags = 1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)  # type: ignore[attr-defined]
+        except AttributeError:
+            flags = 0
         network = builder.create_network(flags)
         parser = trt.OnnxParser(network, logger)  # type: ignore[attr-defined]
         onnx_path = models / f"PP-OCRv6_rec_{size}.onnx"

@@ -66,7 +66,7 @@ def get_setup_advice() -> str | None:
         return "未检测到 NVIDIA 显卡，OCR 将使用 CPU 推理。"
     return (
         "检测到 NVIDIA 显卡，但 PATH 中未找到 TensorRT DLL。\n"
-        "将 CUDA Toolkit 13.x 和 TensorRT 10.x 的 bin 目录加入 PATH 即可。\n"
+        "将 CUDA Toolkit 13.x 和 TensorRT 11.x 的 bin 目录加入 PATH 即可。\n"
         "详见 README 的「GPU 加速配置」章节。"
     )
 
@@ -83,7 +83,7 @@ def _register_gpu_dlls() -> None:
     """扫描 PATH 中的 CUDA / cuDNN / TensorRT DLL 目录并注册到搜索路径。
 
     用户只需将对应 bin 目录加入 PATH，无需特定安装位置。
-    例如：C:\\Program Files\\NVIDIA\\TensorRT-10.x\\bin
+    例如：C:\\Program Files\\NVIDIA\\TensorRT-11.x\\bin
     """
     # DLL 特征文件名（用于识别目录类型）
     _TRT_MARKERS = ("nvinfer",)

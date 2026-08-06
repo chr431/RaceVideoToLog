@@ -1,6 +1,6 @@
 [project]
 name = "RaceVideoToLog"
-version = "2.10.0"
+version = "2.11.0"
 description = "从赛车视频中 OCR 提取速度数据，生成时间-速度-距离 CSV（TensorRT + CPU 双后端）"
 requires-python = ">=3.11"
 dependencies = [
@@ -10,7 +10,7 @@ dependencies = [
     "pyqtgraph>=0.14",  # 只装核心模块，省 Addons (~300MB: QtWebEngine 等)
     "PySide6-Fluent-Widgets>=1.11",
     "cuda-python",
-    "tensorrt_cu13_bindings>=10,<11",
+    "tensorrt_cu13_bindings>=11,<12",
     # decord 已从 PyPI 依赖中移除：本仓库依赖自建 fork（chr431/decord）
     # 的 next_roi / get_codec / GPU 动态加载 / CPU 内存修复，PyPI 版无法满足。
     # 由 setup_venv.bat 从 _decord_build/（decord 发布产物）安装，见 README。
