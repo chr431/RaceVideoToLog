@@ -1,6 +1,6 @@
 [project]
 name = "RaceVideoToLog"
-version = "2.12.1"
+version = "2.12.2"
 description = "从赛车视频中 OCR 提取速度数据，生成时间-速度-距离 CSV（TensorRT + CPU 双后端）"
 requires-python = ">=3.11"
 dependencies = [

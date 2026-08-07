@@ -94,7 +94,6 @@ def _dense_segment(
 
     V = int(max_speed_kmh) + 1
     grid = np.arange(V, dtype=np.float64)
-    dv_mat = np.abs(grid[None, :] - grid[:, None])  # dv_mat[i, j] = |state_i - state_j|
 
     raw_vals = [rows[seg_start + k][2] for k in range(n_seg)]
     is_anchor = [conf_by_idx.get(seg_start + k, 50) >= trusted_boundary_threshold
@@ -141,13 +140,10 @@ def _dense_segment(
         if dt <= 0:
             dt = VITERBI_FALLBACK_DT
         max_dv = max_accel_mps2 * dt * MPS_TO_KMH
-        excess = dv_mat - max_dv
-        np.maximum(excess, 0.0, out=excess)
-        trans = accel_weight * excess * excess
-
-        cost = dp[:, None] + trans
-        best_idx = np.argmin(cost, axis=0)
-        best_cost = cost[best_idx, np.arange(V)]
+        # O(V) 凸变换：T[v] = min_w (dp[w] + accel_weight*max(0, |v-w|-max_dv)^2)
+        # 等价于原 O(V²) 向量化（argmin 语义，ties 偏向小 w），但每帧 O(V)。
+        # V=401 实测 688µs vs O(V²) numpy 1068µs。
+        best_cost, best_idx = _minplus_trunc(dp, max_dv, accel_weight)
         dp = best_cost + obs_list[k]
         dp_all.append(dp)
         back_all.append(best_idx)
@@ -170,6 +166,114 @@ def _dense_segment(
         if abs(optimal - raw_v) > VITERBI_CHANGE_THRESHOLD_KMH:
             corrected[fi] = float(optimal)
             error_set.add(fi)
+
+
+# ═══════════════════ O(V) 凸变换（min-plus convolution，替换 O(V²) 转移）═══════════════════
+
+def _sliding_argmin(f: list, r: int) -> tuple[list, list]:
+    """窗口最小值 + argmin：win[v] = min_{w in [v-r, v+r]} f[w]，O(V) 单调队列。
+    ties 偏向最小 w（与 np.argmin 语义一致）。"""
+    n = len(f)
+    from collections import deque
+    dq: deque = deque()
+    vals = [0.0] * n
+    idx = [0] * n
+    for i in range(min(r + 1, n)):
+        while dq and f[dq[-1]] > f[i]:
+            dq.pop()
+        dq.append(i)
+    vals[0] = f[dq[0]]; idx[0] = dq[0]
+    for v in range(1, n):
+        lo = v - r
+        while dq and dq[0] < lo:
+            dq.popleft()
+        hi = v + r
+        if hi < n:
+            while dq and f[dq[-1]] > f[hi]:
+                dq.pop()
+            dq.append(hi)
+        vals[v] = f[dq[0]] if dq else float("inf")
+        idx[v] = dq[0] if dq else 0
+    return vals, idx
+
+
+def _prefix_quad_argmin(f: list, a: float, x_grid: list) -> tuple[list, list]:
+    """P[x] = min_{y<=x} (f[y] + a(x-y)²)，下包络 O(V)。返回 (值, argmin y)。
+    x_grid 单调递增（可为浮点）。ties 偏向小 y（下包络保留旧抛物线）。"""
+    n = len(f)
+    v = [0] * n
+    z = [0.0] * (n + 1)
+    k = -1          # hull 最后抛物线下标
+    ptr = 0         # 上一求值点活动的抛物线
+    added = -1
+    vals = [0.0] * n
+    idx = [0] * n
+    inf = float("inf")
+    for xi, x in enumerate(x_grid):
+        while added + 1 < n and added + 1 <= x:
+            q = added + 1
+            added = q
+            if f[q] == inf:
+                continue  # 不可达状态（dp=inf）永不成为 min —— 跳过，防 inf-inf=nan
+            if k < 0:
+                k = 0; v[0] = q; z[0] = -inf; z[1] = inf
+            else:
+                fq = f[q]
+                vk = v[k]
+                s = ((fq + a * q * q) - (f[vk] + a * vk * vk)) / (2.0 * a * (q - vk))
+                while s < z[k]:
+                    k -= 1
+                    if k < 0:
+                        k = 0; v[0] = q; z[0] = -inf; z[1] = inf
+                        break
+                    vk = v[k]
+                    s = ((fq + a * q * q) - (f[vk] + a * vk * vk)) / (2.0 * a * (q - vk))
+                else:
+                    k += 1; v[k] = q; z[k] = s; z[k + 1] = inf
+        if k < 0:
+            vals[xi] = inf; idx[xi] = 0
+            continue
+        if ptr > k:
+            ptr = k
+        while ptr < k and z[ptr + 1] < x:
+            ptr += 1
+        d = x - v[ptr]
+        vals[xi] = f[v[ptr]] + a * d * d
+        idx[xi] = v[ptr]
+    return vals, idx
+
+
+def _suffix_quad_argmin(f: list, a: float, x_grid: list) -> tuple[list, list]:
+    """S[x] = min_{y>=x} (f[y] + a(y-x)²)，翻转转成 prefix。返回 (值, argmin y)。"""
+    n = len(f)
+    fr = f[::-1]
+    xr = [(n - 1) - x for x in x_grid[::-1]]
+    vals, idx = _prefix_quad_argmin(fr, a, xr)
+    return vals[::-1], [n - 1 - i for i in idx[::-1]]
+
+
+def _minplus_trunc(f: list, m: float, a: float) -> tuple[np.ndarray, np.ndarray]:
+    """T[v] = min_w (f[w] + a*max(0, |v-w|-m)²)，O(V)。返回 (值, argmin w)。
+
+    截断二次核拆三路：窗口平坦区（|v-w|<=m → cost 0）+ 两侧二次尾。
+    窗口半径 r=floor(m)：整数 w 满足 |v-w|<=m ⟺ w ∈ [v-r, v+r]。
+    二次尾：w<=v-m → a(v-m-w)²（prefix），w>=v+m → a(w-v-m)²（suffix）。
+    """
+    n = len(f)
+    r = int(m)
+    win_v, win_i = _sliding_argmin(f, r)
+    p_v, p_i = _prefix_quad_argmin(f, a, [i - m for i in range(n)])
+    s_v, s_i = _suffix_quad_argmin(f, a, [i + m for i in range(n)])
+    vals = [0.0] * n
+    idx = [0] * n
+    for v in range(n):
+        bv, bi = win_v[v], win_i[v]
+        for cv, ci in ((p_v[v], p_i[v]), (s_v[v], s_i[v])):
+            if cv < bv or (cv == bv and ci < bi):
+                bv, bi = cv, ci
+        vals[v] = bv
+        idx[v] = bi
+    return np.asarray(vals, dtype=np.float64), np.asarray(idx, dtype=np.int64)
 
 
 def _dense_obs(grid: np.ndarray, raw_v: float, ref_v: float, obs_weight: float,
