@@ -36,7 +36,7 @@ from config import (
     CANDIDATE_POSTFILTER_ABS_MIN,
     CANDIDATE_HUNDREDS_MAX_DIFF,
     ACCEL_SCORE_ISLAND_INTERIOR,
-    REF_GUARD_ABS_MIN,
+    REF_GUARD_ABS_MIN, INTERP_ANCHOR_CONF_MIN,
     DISTANT_INTERP_MIN_TIME, DISTANT_INTERP_ISLAND_THRESHOLD,
     FORCE_MEDIAN_WINDOW_TIME,
     REF_INTERP_MAX_KMH_DIFF, REF_MIN_DIFF,
@@ -122,7 +122,8 @@ def _local_interp(i: int, rows: list, observations: list, times: list,
                   max_speed_kmh: float, fps: float = 1.0,
                   min_distance: int = 0,
                   exclude_flags: set[int] | None = None,
-                  max_accel_mps2: float = 0.0) -> float | None:
+                  max_accel_mps2: float = 0.0,
+                  conf_by_idx: dict[int, float] | None = None) -> float | None:
     """Interpolation using nearest valid neighbors.
 
     Anchors are always physically validated: a candidate anchor must be
@@ -130,7 +131,17 @@ def _local_interp(i: int, rows: list, observations: list, times: list,
     a single wrong OCR value (e.g. 2744=17 vs neighbors 170) must not
     become an interpolation anchor.  exclude_flags additionally skips
     anchors carrying those flag values (e.g. auto-corrected frames whose
-    values are guesses, not observations)."""
+    values are guesses, not observations).
+
+    conf_by_idx (Phase-1 confidence): when provided, anchors must ALSO be
+    high-confidence (>= INTERP_ANCHOR_CONF_MIN) or already trusted.  The
+    physics-only check is insufficient: a cluster of consecutive misreads
+    is internally "physically consistent" and passes it, then poisons the
+    interpolation (test5 1600: misread 1601=7 became the right anchor,
+    local ref collapsed to garbage; distant ref then crossed a real
+    speed curve and landed 6 km/h off).  Confidence catches these — the
+    abs signal has wider context than ±2 frames, so a wrong cluster is
+    low-confidence even when locally smooth."""
     n = len(rows)
     dv_frame = 0.0
     if n >= 2:
@@ -142,6 +153,10 @@ def _local_interp(i: int, rows: list, observations: list, times: list,
             return False
         if exclude_flags and rows[j][3] in exclude_flags:
             return False
+        if conf_by_idx is not None:
+            if not (conf_by_idx.get(j, 0) >= INTERP_ANCHOR_CONF_MIN
+                    or Flag.is_trusted(rows[j][3])):
+                return False
         if dv_frame > 0:
             # 锚点与其紧邻有效帧（±2 帧）的差必须在物理范围内
             for k in (j - 1, j + 1):
@@ -793,6 +808,7 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
     # pulled off a correct raw by a ±1-2 off interpolation).
     with STAGE.stage("corr.reference"):
         reference_values: dict[int, float] = {}
+        conf_by_idx_ref = {c['index']: c['score'] for c in confidence_scores}
         for i in range(n):
             if i in pinned_set or Flag.is_trusted(rows[i][3]): continue
             sigs = confidence_scores[i].get('signals', {}) if i < len(confidence_scores) else {}
@@ -802,18 +818,26 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
                 # abs 自洽 + accel 正常 → trust OCR, skip interpolation
                 continue
             raw_v = rows[i][2]
-            ref = _local_interp(i, rows, observations, times, max_speed_kmh, fps=fps, max_accel_mps2=max_accel_mps2)
-            # For suspected island interiors (accel <= 15), the nearest
-            # neighbors may also be wrong. Try distant interpolation
-            # that skips past the island to reach correct anchor frames.
+            # 本地插值锚点必须高置信/可信（INTERP_ANCHOR_CONF_MIN）：
+            # 物理自洽的误读簇（如 test5 1601=7 相对 ±2 邻居一致）不能当锚点，
+            # 否则本地插值塌成垃圾、distant 跳岛又跨过真实速度曲线（错 6 km/h）。
+            ref = _local_interp(i, rows, observations, times, max_speed_kmh, fps=fps,
+                                max_accel_mps2=max_accel_mps2, conf_by_idx=conf_by_idx_ref)
+            # For suspected island interiors (accel <= 15) where the conf-gated
+            # local search finds NO reliable anchors, the nearest neighbors may
+            # all be wrong. Try distant interpolation that skips past the island
+            # to reach correct anchor frames. Only when local is None: if local
+            # found good anchors, its interpolation is the better estimate and
+            # must not be overridden (distant spans real accel/decel curves).
             # Auto mode only: manual mode measured regressions (893/1708/1709
             # pulled to wrong distant refs even with anchor validity).
-            if profile.distant_ref and a <= ACCEL_SCORE_ISLAND_INTERIOR + 5 and raw_v > 0:
+            if ref is None and profile.distant_ref and a <= ACCEL_SCORE_ISLAND_INTERIOR + 5 and raw_v > 0:
                 dt_frame = (times[1] - times[0]) if n >= 2 else 1/60
                 min_frames = max(1, int(DISTANT_INTERP_MIN_TIME / dt_frame))
                 distant = _local_interp(i, rows, observations, times, max_speed_kmh,
                                         fps=fps, min_distance=min_frames,
-                                        max_accel_mps2=max_accel_mps2)
+                                        max_accel_mps2=max_accel_mps2,
+                                        conf_by_idx=conf_by_idx_ref)
                 if distant is not None and abs(distant - raw_v) > DISTANT_INTERP_ISLAND_THRESHOLD:
                     # Island detected: local cluster differs from distant anchors
                     ref = distant

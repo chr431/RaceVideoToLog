@@ -38,7 +38,7 @@ from config import (
     VITERBI_OBS_WEIGHT, VITERBI_ACCEL_WEIGHT,
     VITERBI_TRUSTED_BOUNDARY_CONFIDENCE, VITERBI_FALLBACK_DT,
     VITERBI_ANCHOR_COST, VITERBI_CHANGE_THRESHOLD_KMH,
-    VITERBI_OBS_COST_FALLBACK_MULT,
+    VITERBI_OBS_COST_FALLBACK_MULT, DENSE_PIN_REF_MAX_DIFF,
 )
 from viterbi import _split_segments, _compute_confidence_scores
 
@@ -111,14 +111,22 @@ def _dense_segment(
             if 0 <= v_raw < V:
                 o[int(round(v_raw))] = VITERBI_ANCHOR_COST
         elif len(candidates_by_frame.get(fi, [])) == 1:
-            # 单候选钉死（守卫 1）：correction 的 anchor 阶段把「raw 与插值
-            # 自洽」的帧设成单候选。离散 trellis 只能选该值；稠密若不钉死，
-            # 401 状态格点会找到近等代价路径，把正确 raw 抖动 ±1-2
-            # （实测无此守卫 test6 -354 帧）。
-            o = np.full(V, np.inf, dtype=np.float64)
             v_pin = candidates_by_frame[fi][0]
-            if 0 <= v_pin < V:
-                o[int(round(v_pin))] = VITERBI_ANCHOR_COST
+            ref = eff_ref[k]
+            if ref > 0 and abs(ref - v_pin) > DENSE_PIN_REF_MAX_DIFF:
+                # 钉死守卫 2：conf-gated 参考与钉死值严重矛盾（>30）→ 该帧
+                # 是物理自洽的误读簇被 anchor 阶段误钉死（test5 5265/5267
+                # raw=11 钉死，DP 被迫穿过 11 拖垮整簇 118 坡）。解除钉死
+                # 交给 DP 修正；test4 阶梯坡正确帧 ref 偏 ≤18 不受影响。
+                o = _dense_obs(grid, raw_vals[k], eff_ref[k], obs_weight, V)
+            else:
+                # 单候选钉死（守卫 1）：correction 的 anchor 阶段把「raw 与
+                # 插值自洽」的帧设成单候选。离散 trellis 只能选该值；稠密若
+                # 不钉死，401 状态格点会找到近等代价路径，把正确 raw 抖动
+                # ±1-2（实测无此守卫 test6 -354 帧）。
+                o = np.full(V, np.inf, dtype=np.float64)
+                if 0 <= v_pin < V:
+                    o[int(round(v_pin))] = VITERBI_ANCHOR_COST
         else:
             o = _dense_obs(grid, raw_vals[k], eff_ref[k], obs_weight, V)
         obs_list.append(o)

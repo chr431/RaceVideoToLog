@@ -154,6 +154,12 @@ CANDIDATE_HUNDREDS_MAX_DIFF: int = 100         # 百位变体最大允许差值 
 
 # ═══════════════════ 参考值构建保护 ═══════════════════
 REF_GUARD_ABS_MIN: int = 85          # 跳过插值参考值的 abs 阈值
+INTERP_ANCHOR_CONF_MIN: int = 85     # _local_interp 锚点最低 Phase-1 置信度：
+                                     # 低置信误读簇（物理自洽但错误）不得当插值锚点
+                                     # （test5 1600/3998/5263 等 d>5 离群的根源）
+DENSE_PIN_REF_MAX_DIFF: float = 30.0  # 单候选钉死值与 conf-gated 参考严重矛盾（>30）
+                                     # 时解除钉死 —— 物理自洽的误读簇被钉死成错误值
+                                     # （test5 5265/5267 raw=11 钉死拖垮 118 坡）
 DISTANT_INTERP_MIN_TIME: float = 1.0      # 远距离插值最小时间距离 (秒)
 FORCE_MEDIAN_WINDOW_TIME: float = 0.1      # force-median 中值窗口时间 (秒)
 TRUST_WINDOW_TIME: float = 0.15            # 信任传播验证时间窗 (秒)
