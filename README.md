@@ -103,7 +103,6 @@ python RaceVideoToLog.py [video] [options]
   --buffer N                     缓冲队列大小 (默认: 16)
   --backend {auto,tensorrt,cpu}  OCR 后端 (默认: auto)
   --ocr-model {v6_tiny,v6_small} 主 OCR 模型 (默认: v6_tiny)；重 OCR 自动推导：tiny→small / small→无
-  --mode {auto,manual}           纠错模式 (默认: auto)
   --log-level {normal,detailed,debug} 日志级别 (默认: normal)
   --frame-start N                起始帧号
   --frame-end N                  结束帧号

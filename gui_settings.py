@@ -29,7 +29,6 @@ def build_settings_panel(parent) -> dict:
         model_combo                         -- ComboBox (主 OCR 模型)
         log_level_combo                     -- ComboBox
         monitor_checkbox                    -- CheckBox (资源监控开关)
-        mode_auto, mode_baseline            -- RadioButton (correction mode)
         frame_start_edit, frame_end_edit    -- LineEdit
     """
     widgets: dict = {}
@@ -106,16 +105,6 @@ def build_settings_panel(parent) -> dict:
     widgets["monitor_checkbox"].setChecked(config.MONITOR_ENABLED)
     pl.addWidget(widgets["monitor_checkbox"], 6, 1, 1, 2)
 
-    # ── Correction mode card ──
-    mode_card = make_static_card(parent)
-    ml = QVBoxLayout(mode_card)
-    ml.addWidget(StrongBodyLabel("纠错模式"))
-    widgets["mode_auto"] = RadioButton("自动纠错（全自动，推荐）")
-    widgets["mode_auto"].setChecked(True)
-    widgets["mode_baseline"] = RadioButton("人工辅助纠错")
-    ml.addWidget(widgets["mode_auto"])
-    ml.addWidget(widgets["mode_baseline"])
-
     # ── Timeline range card ──
     time_card = make_static_card(parent)
     tl = QGridLayout(time_card)
@@ -143,7 +132,6 @@ def build_settings_panel(parent) -> dict:
     ll.setSpacing(6)
     ll.addWidget(fmt_card)
     ll.addWidget(perf_card)
-    ll.addWidget(mode_card)
     ll.addWidget(time_card)
     ll.addStretch()
 

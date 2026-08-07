@@ -1,7 +1,7 @@
 """RaceVideoToLog 集中配置 — 常量、颜色、公共 API。"""
 from __future__ import annotations
 
-__version__ = "2.12.0"
+__version__ = "2.12.1"
 
 # ═══════════════════ 物理常量 ═══════════════════
 MPS_TO_KMH: float = 3.6          # m/s → km/h 转换因子
@@ -19,7 +19,6 @@ DEFAULT_PAD: int = 0                   # OCR 预处理 padding (px)
 DEFAULT_MAX_WIDTH: int = 0              # 预处理最大宽度 px（0=不限）
 DEFAULT_BUFFER_SIZE: int = 16          # 生产者-消费者队列缓冲大小
 DEFAULT_LOG_LEVEL: str = "normal"      # 日志级别 (normal / detailed / debug)
-DEFAULT_CORRECTION_MODE: str = "auto"  # 纠错模式 (auto / manual)
 MONITOR_ENABLED: bool = True           # 默认启用资源监控（--no-monitor / GUI 复选框 / RVTOL_MONITOR=0 关闭）
 MONITOR_INTERVAL_S: float = 1.0        # 资源采样间隔（秒）
 MONITOR_GPU: bool = True               # 是否采样 GPU 利用率/显存/温度
@@ -126,12 +125,10 @@ VITERBI_TRUSTED_BOUNDARY_CONFIDENCE: int = 85
 VITERBI_MAX_CANDIDATES: int = 40
 
 # ═══════════════════ 纠错参数 ═══════════════════
-MANUAL_CORRECT_THRESHOLD: int = 40
 AUTO_CORRECT_THRESHOLD: int = 70
 CORRECTION_MAX_ROUNDS: int = 10        # Viterbi 多轮迭代
 FILL_MAX_PASSES: int = 50
 CORRECTION_MIN_DIFF: float = 0.5
-MANUAL_CORRECTION_MIN_DIFF: float = 2.0  # 手动模式 Viterbi 最小提交差值（±1 微调视为噪声保留 raw）
 AUTO_SMOOTH_CLUSTER_MAX: int = 5
 AUTO_SMOOTH_DEVIATION_MULT: float = 5.0
 

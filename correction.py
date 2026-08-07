@@ -1,16 +1,16 @@
 """Correction — Phase 2: error correction based on confidence scores.
 
 Receives per-frame confidence from Phase 1 (error_detection), interprets
-the scores, and applies corrections using Viterbi DP + fill + smoothness.
+the scores, and applies corrections using dense-lattice Viterbi + fill +
+smoothness.
 
-Both modes share the same full pipeline (fill, smoothness, auto-align).
-Mode differences are expressed by ModeProfile (auto: smoothness-first,
-manual: precision-first d=0 protection).
+Single correction mode (auto, smoothness-first).  The manual mode was
+removed in v2.12.1 — auto accuracy is high and two-mode maintenance was
+not worth the cost.
 """
 from __future__ import annotations
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -23,8 +23,8 @@ from viterbi_dense import dense_viterbi as viterbi_correct
 from monitor import STAGE
 from config import (
     MPS_TO_KMH,
-    FILL_MAX_PASSES, CORRECTION_MIN_DIFF, MANUAL_CORRECTION_MIN_DIFF,
-    MANUAL_CORRECT_THRESHOLD, AUTO_CORRECT_THRESHOLD,
+    FILL_MAX_PASSES, CORRECTION_MIN_DIFF,
+    AUTO_CORRECT_THRESHOLD,
     AUTO_SMOOTH_CLUSTER_MAX, AUTO_SMOOTH_DEVIATION_MULT,
     VITERBI_TRUSTED_BOUNDARY_CONFIDENCE, CORRECTION_MAX_ROUNDS,
     MAX_PARTIAL_WILDCARDS, VITERBI_MAX_CANDIDATES,
@@ -49,44 +49,6 @@ if TYPE_CHECKING:
     from ocr_native import OcrEngine
 
 logger = logging.getLogger("RaceVideoToLog.correction")
-
-
-# ═══════════════════ 模式策略 ═══════════════════
-
-@dataclass(frozen=True)
-class ModeProfile:
-    """模式策略：集中表达自动/手动模式的全部差异。
-
-    auto   — 平滑优先：修正阈值宽（conf<70）、Viterbi 多轮、允许小步长
-             微调、distant 参考、最终全帧中值平滑。
-    manual — 精确优先（d=0）：只修 conf<40 的帧、单轮 Viterbi、
-             拒绝 ±1 噪声微调、不用 distant 参考、只清理修正帧斜坡。
-    """
-    correct_threshold: int      # 进入纠正的置信度阈值
-    viterbi_min_diff: float     # Viterbi 最小提交差值（噪声微调保护）
-    max_rounds: int             # Viterbi 轮数上限
-    distant_ref: bool           # 是否使用远距离插值参考
-    force_sg_corrected: bool    # forceSG 只处理自动修正帧（True=手动）
-    force_smooth: bool          # 是否执行最终中值平滑
-
-
-_AUTO_PROFILE = ModeProfile(
-    correct_threshold=AUTO_CORRECT_THRESHOLD,
-    viterbi_min_diff=CORRECTION_MIN_DIFF,
-    max_rounds=CORRECTION_MAX_ROUNDS,
-    distant_ref=True,
-    force_sg_corrected=False,
-    force_smooth=True,
-)
-
-_MANUAL_PROFILE = ModeProfile(
-    correct_threshold=MANUAL_CORRECT_THRESHOLD,
-    viterbi_min_diff=MANUAL_CORRECTION_MIN_DIFF,
-    max_rounds=1,
-    distant_ref=False,
-    force_sg_corrected=True,
-    force_smooth=False,
-)
 
 
 # ═══════════════════ Helpers ═══════════════════
@@ -575,20 +537,18 @@ def _auto_align_pass(rows: list, observations: list, times: list,
     return corrected
 
 
-# ═══════════════════ Force-SG smoothing (auto-mode final pass) ═══════════════════
+# ═══════════════════ Force-SG smoothing (final pass) ═══════════════════
 
 def _force_median_smooth(rows: list, times: list, max_speed_kmh: float,
                      max_accel_mps2: float, fps: float = 1.0,
-                     notes: dict[int, str] | None = None,
-                     corrected_only: bool = False) -> int:
+                     notes: dict[int, str] | None = None) -> int:
     """Median-filter smoothing pass.
 
-    Auto mode: on ALL frames regardless of flags — goal is to minimize
-    max_dv (frame-to-frame speed change), not to match truth values.
-    Manual mode (corrected_only=True): only on auto-corrected frames
-    (REOCR_AUTO/FILL), with the window restricted to RAW/trusted values —
-    pulls Viterbi/fill ramps back to correct neighbors without touching
-    correct raw frames.
+    Goal: minimize max_dv (frame-to-frame speed change), not to match truth.
+    自动模式：不处理已修正帧 —— 强阶段（Viterbi/fill/re-OCR）输出已是
+    最终值；median 窗口排除 FILL 值（避免互相确认）后，在阶梯坡岛上 median
+    被拉到非岛 RAW 锚点，反而把正确的 fill 值重新拉偏（实测 test4 0修7毁、
+    test6 0修9毁）。
 
     Uses iterative time-window sliding median: if the center value deviates
     from the local median by more than max_dv_per_frame * threshold_mult, it gets
@@ -601,11 +561,8 @@ def _force_median_smooth(rows: list, times: list, max_speed_kmh: float,
     total_smoothed = 0
     dry_passes = 0  # consecutive passes with very few changes
 
-    # 窗口值来源：手动（corrected_only）只留原始/信任锚点（清理斜坡时
-    # 排除自动修正值，避免互相确认）；自动全帧平滑（排除 FILL 猜测值）。
-    window_ok = ((lambda r: r[3] == Flag.RAW or Flag.is_trusted(r[3]))
-                 if corrected_only else
-                 (lambda r: r[3] != Flag.FILL_INTERP))
+    # 窗口值来源：全帧平滑（排除 FILL 猜测值，避免互相确认）
+    window_ok = (lambda r: r[3] != Flag.FILL_INTERP)
 
     for _pass in range(FORCE_MEDIAN_MAX_ITERATIONS):
         changed = 0
@@ -613,14 +570,8 @@ def _force_median_smooth(rows: list, times: list, max_speed_kmh: float,
             v = rows[i][2]
             if v < 0:
                 continue
-            if corrected_only and not Flag.is_corrected(rows[i][3]):
-                continue  # 手动模式：只处理 Viterbi/fill 修正过的帧
-            # 自动模式：不处理已修正帧 —— 强阶段（Viterbi/fill/re-OCR）输出
-            # 已是最终值；而 median 窗口排除 FILL 值（避免互相确认）后，在
-            # 阶梯坡岛上 median 被拉到非岛 RAW 锚点，反而把正确的 fill 值
-            # 重新拉偏（实测 test4 0修7毁、test6 0修9毁）。修正值只在
-            # corrected_only 手动模式下用 RAW/trusted 窗口安全清理。
-            if not corrected_only and Flag.is_corrected(rows[i][3]):
+            # 不处理已修正帧（见函数 docstring）
+            if Flag.is_corrected(rows[i][3]):
                 continue
             # Time-based median window
             med_look = max(1, int(FORCE_MEDIAN_WINDOW_TIME / max((times[1] - times[0]) if n >= 2 else 1/30, 1e-3)))
@@ -682,7 +633,7 @@ def _force_median_smooth(rows: list, times: list, max_speed_kmh: float,
 def correct_errors(rows: list, observations: list, raw_frames: list,
                    ocr: "OcrEngine", confidence_scores: list[dict],
                    times: list[float], max_speed_kmh: float, max_accel_mps2: float,
-                   mode: str = "auto", pinned: set[int] | None = None,
+                   pinned: set[int] | None = None,
                    reocr_cache: dict | None = None,
                    split_results: dict[int, str] | None = None,
                    fps: float = 1.0, log_fn: "Callable | None" = None,
@@ -696,14 +647,13 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
         if rows[pi][3] < Flag.HIGH_TRUST: rows[pi][3] = Flag.PINNED
     pinned_set = pinned
     cache: dict = reocr_cache if reocr_cache is not None else {}
-    profile = _MANUAL_PROFILE if mode == "manual" else _AUTO_PROFILE
-    correct_threshold = profile.correct_threshold
+    correct_threshold = AUTO_CORRECT_THRESHOLD
 
     conf_by_idx: dict[int, float] = {}
     for c in confidence_scores: conf_by_idx[c['index']] = c['score']
 
     if log_fn:
-        log_fn(f"Correction (Phase 2, {mode} mode): threshold={correct_threshold}, "
+        log_fn(f"Correction (Phase 2, auto): threshold={correct_threshold}, "
                f"{n} rows, {len(pinned_set)} pinned")
 
     correction_frames: set[int] = set()
@@ -796,10 +746,9 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
     if log_fn and n_filtered > 0:
         log_fn(f"  Filtered hundreds variants from {n_filtered} consistent 3-digit frames")
 
-    # Build reference values for ALL non-trusted frames (both modes).
-    # Manual mode previously limited this to conf<40, which left conf 40-70
-    # frames without reference protection — Viterbi's transition cost then
-    # pulled them into wrong ramps (measured 2731-cluster / 1115-cluster).
+    # Build reference values for ALL non-trusted frames.
+    # (历史：手动模式曾限定 conf<40，遗留 conf 40-70 帧无参考保护，Viterbi
+    # 转移代价把它们拉进错误斜坡 —— 2731-cluster / 1115-cluster。已统一覆盖。)
     #
     # Guard 1: skip internally consistent frames (abs>=85 AND accel>=70) —
     # raw OCR almost certainly correct.
@@ -829,9 +778,9 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
             # to reach correct anchor frames. Only when local is None: if local
             # found good anchors, its interpolation is the better estimate and
             # must not be overridden (distant spans real accel/decel curves).
-            # Auto mode only: manual mode measured regressions (893/1708/1709
-            # pulled to wrong distant refs even with anchor validity).
-            if ref is None and profile.distant_ref and a <= ACCEL_SCORE_ISLAND_INTERIOR + 5 and raw_v > 0:
+            # （历史：手动模式曾禁用 distant —— 893/1708/1709 被拉到错误
+            # distant ref。自动模式实测无此回归。）
+            if ref is None and a <= ACCEL_SCORE_ISLAND_INTERIOR + 5 and raw_v > 0:
                 dt_frame = (times[1] - times[0]) if n >= 2 else 1/60
                 min_frames = max(1, int(DISTANT_INTERP_MIN_TIME / dt_frame))
                 distant = _local_interp(i, rows, observations, times, max_speed_kmh,
@@ -874,12 +823,10 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
     # ── When island candidates are present, limit to 1 round ──
     # Multi-round Viterbi can undo island corrections (r1 fixes 113→213,
     # r2 sees transition tension with uncorrected neighbors & reverts).
-    # Manual mode: single round only — round 2+ trust propagation lets
-    # wrong ramps confirm each other (r1 2747→11, r2 marks 2748 HT=11,
-    # then r2 ramps 2749-2758 toward it).
-    max_rounds = 1 if n_island_cands > 0 else profile.max_rounds
+    # （历史：手动模式单轮 —— r1 2747→11 后 r2 信任传播把错误斜坡互相确认。）
+    max_rounds = 1 if n_island_cands > 0 else CORRECTION_MAX_ROUNDS
     if log_fn and max_rounds == 1:
-        log_fn(f"  Island/manual mode: max 1 Viterbi round")
+        log_fn(f"  Island mode: max 1 Viterbi round")
 
     # ── 自洽帧锚定 raw（单候选）— 两种模式统一 ──
     # raw 与物理插值一致（差 < REF_MIN_DIFF）说明该帧 raw 高可信；
@@ -909,10 +856,8 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
             for fi, new_val in sorted(viterbi_result['corrected'].items()):
                 if fi in pinned_set or Flag.is_trusted(rows[fi][3]): continue
                 old_val = rows[fi][2]
-                # 手动模式：±1 微调视为噪声（Viterbi 转移代价偏好平滑，会把
-                # 正确的 raw 微调 1-2）。手动模式只提交 ≥2 km/h 的实质修正；
-                # 自动模式保留小步长（平滑优先）。
-                min_diff = profile.viterbi_min_diff
+                # 自动模式保留小步长（平滑优先）；±1 噪声微调由阈值保护
+                min_diff = CORRECTION_MIN_DIFF
                 if abs(new_val - old_val) <= min_diff: continue
                 rows[fi][2] = new_val
                 if rows[fi][3] == Flag.RAW: rows[fi][3] = Flag.REOCR_AUTO
@@ -974,23 +919,18 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
         n_smoothed = _smoothness_pass(rows, times, max_speed_kmh, max_accel_mps2, fps, notes)
     if log_fn and n_smoothed > 0: log_fn(f"  Smoothness: {n_smoothed} spikes smoothed")
 
-    # ── SG-guided alignment (both modes; reference excludes FILL frames) ──
+    # ── SG-guided alignment（参考排除 FILL 帧）──
     with STAGE.stage("corr.align"):
         n_aligned = _auto_align_pass(rows, observations, times, max_speed_kmh,
                                      max_accel_mps2, fps, confidence_scores, notes)
     if log_fn and n_aligned > 0:
         log_fn(f"  Auto-align: {n_aligned} frames nudged")
 
-    # ── Median smoothing ──
-    # Auto mode: aggressive, ALL frames (minimize max_dv).
-    # Manual mode: conservative, only auto-corrected frames (clean up
-    # Viterbi/fill ramps against RAW/trusted neighbors — protects d=0).
-    if profile.force_smooth:
-        with STAGE.stage("corr.force_median"):
-            n_forced = _force_median_smooth(rows, times, max_speed_kmh, max_accel_mps2, fps, notes,
-                                            corrected_only=profile.force_sg_corrected)
-        if log_fn and n_forced > 0:
-            log_fn(f"  Force-SG: {n_forced} frame-nudges applied")
+    # ── Median smoothing（全帧，最小化 max_dv）──
+    with STAGE.stage("corr.force_median"):
+        n_forced = _force_median_smooth(rows, times, max_speed_kmh, max_accel_mps2, fps, notes)
+    if log_fn and n_forced > 0:
+        log_fn(f"  Force-SG: {n_forced} frame-nudges applied")
 
     with STAGE.stage("corr.conf_blend"):
         for c in confidence_scores:

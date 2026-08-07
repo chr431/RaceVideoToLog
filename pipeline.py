@@ -207,12 +207,8 @@ class ProcessingPipeline:
 
     # ═══════════════ 公开接口 ═══════════════
 
-    def run_auto(self, output_path: str | Path, mode: str = "auto") -> None:
-        """纠错流水线 → 写 CSV。
-
-        mode: \"auto\" → full pipeline + force_smooth
-              \"manual\" → full pipeline (no force_smooth)
-        """
+    def run_auto(self, output_path: str | Path) -> None:
+        """纠错流水线 → 写 CSV（唯一纠错模式：自动，含最终中值平滑）。"""
         t_total = _time.perf_counter()
         STAGE.reset()
         self._emit("加载 OCR 引擎...", 1.0)
@@ -232,7 +228,7 @@ class ProcessingPipeline:
             self._write_csv(self._rows, Path(output_path))
             self._write_diagnostics(Path(output_path))
         else:
-            self._run_correction(Path(output_path), mode=mode)
+            self._run_correction(Path(output_path))
             for row in self._rows:
                 if row[2] > self._max_speed:
                     row[2] = -1
@@ -276,8 +272,7 @@ class ProcessingPipeline:
                                         progress_cb=lambda m: self._emit(m, 3.0))
         return self._ocr
 
-    def _correct(self, progress_base: float, progress_span: float,
-                 mode: str = "auto") -> None:
+    def _correct(self, progress_base: float, progress_span: float) -> None:
         """Two-phase correction: Phase 1 detect, Phase 2 correct."""
         self._rows = self._build_initial_rows()
         t0 = _time.perf_counter()
@@ -315,7 +310,7 @@ class ProcessingPipeline:
             if self._prewarm_t0:
                 STAGE.accumulate("prewarm", _time.perf_counter() - self._prewarm_t0)
                 self._prewarm_t0 = 0.0
-        self._emit(f"Phase 2: correction ({mode})...", progress_base + 2.0)
+        self._emit("Phase 2: correction...", progress_base + 2.0)
         def _prog(done, total):
             if done % max(1, total // 5) != 0 and done != total: return
             self._emit(f"corr: {done}/{total}", progress_base + 2.0 + (done/max(total,1))*progress_span)
@@ -323,7 +318,7 @@ class ProcessingPipeline:
         self._rows, self._detection_confidence = correct_errors(
             self._rows, self._observations, self._raw_frames, _reocr,
             self._detection_confidence, times,
-            self._max_speed, self._max_accel, mode=mode,
+            self._max_speed, self._max_accel,
             pinned=self._pinned if self._pinned else None,
             reocr_cache=self._reocr_cache,
             split_results=self._split_results if self._split_results else None,
@@ -354,10 +349,10 @@ class ProcessingPipeline:
         self.last_output_path = out_path
         return out_path
 
-    def _run_correction(self, output_path: Path, mode: str = "auto") -> None:
+    def _run_correction(self, output_path: Path) -> None:
         """纠错 + 写 CSV（调用 _correct 后继续）。"""
         with STAGE.stage("correction"):
-            self._correct(91.0, 6.0, mode=mode)
+            self._correct(91.0, 6.0)
         if not self._final_check:
             self.finalize(output_path)
 

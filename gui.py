@@ -70,7 +70,6 @@ class RaceVideoToLogApp(QMainWindow):
         self.ocr_engine: "OcrEngine | None" = None
 
         self._export_thread: ExportThread | None = None
-        self.correction_mode: str = config.DEFAULT_CORRECTION_MODE
         self.speed_format: str = config.DEFAULT_SPEED_FORMAT
 
         self._review_output_path: Path | None = None
@@ -232,8 +231,6 @@ class RaceVideoToLogApp(QMainWindow):
         s["format_ms"].clicked.connect(lambda: self._on_fmt("m/s"))
         s["format_kmh"].clicked.connect(lambda: self._on_fmt("km/h"))
         s["format_mph"].clicked.connect(lambda: self._on_fmt("mile/h"))
-        s["mode_auto"].toggled.connect(lambda checked: checked and self._on_mode("auto"))
-        s["mode_baseline"].toggled.connect(lambda checked: checked and self._on_mode("baseline"))
         s["backend_combo"].currentIndexChanged.connect(self._on_backend)
         # Timeline set-to-current buttons
         s["_set_start_btn"].clicked.connect(lambda: s["frame_start_edit"].setText(str(self._slider.value())))
@@ -246,7 +243,6 @@ class RaceVideoToLogApp(QMainWindow):
         QShortcut(QKeySequence(Qt.Key.Key_Down), self, lambda: self._step(-10))
 
     def _on_fmt(self, fmt: str) -> None: self.speed_format = fmt
-    def _on_mode(self, mode: str) -> None: self.correction_mode = mode
 
     # ═══════════════════ 主题切换 ═══════════════════
 
@@ -506,12 +502,6 @@ class RaceVideoToLogApp(QMainWindow):
                             (s["format_mph"], "mile/h")]:
                 if key == fmt:
                     rb.setChecked(True); break
-        if "pinned" in settings or "manual_anchor" in settings or "manual_correction" in settings:
-            s["mode_auto"].setChecked(False)
-            s["mode_baseline"].setChecked(True)
-        elif "auto_anchor" in settings or "auto_correction" in settings:
-            s["mode_baseline"].setChecked(False)
-            s["mode_auto"].setChecked(True)
         self._status_label.setText(f"已导入设置: {Path(path).name}")
 
     def _export_csv(self) -> None:
@@ -575,7 +565,6 @@ class RaceVideoToLogApp(QMainWindow):
             frame_start=s["frame_start_edit"].text(),
             frame_end=s["frame_end_edit"].text(),
             log_level=log_level,
-            correction_mode=self.correction_mode,
             monitor_enabled=monitor_enabled,
             output_path=Path(out),
             parent=self,

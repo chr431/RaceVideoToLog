@@ -52,8 +52,6 @@ def main() -> None:
         help="禁用资源监控（内存/CPU/GPU 采样；默认启用，RVTOL_MONITOR=0 等效）")
     parser.add_argument("--monitor-interval", type=float, default=None,
         metavar="SEC", help="资源采样间隔秒（默认 1.0，RVTOL_MONITOR_INTERVAL 等效）")
-    parser.add_argument("--mode", choices=["auto","manual"], default="auto",
-        help="纠错模式 (默认 auto)")
     parser.add_argument("--from-csv", type=str, metavar="PATH",
         help="从已有 CSV 文件头导入设置（可被显式参数覆盖）")
     args = parser.parse_args()

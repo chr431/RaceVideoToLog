@@ -48,7 +48,6 @@ class ExportThread(QThread):
             frame_end: str,
             log_level: str,
             max_width: int,
-            correction_mode: str,
             output_path: Path,
             monitor_enabled: bool = True,
             parent: QWidget | None = None,
@@ -69,7 +68,6 @@ class ExportThread(QThread):
         self._frame_end = frame_end
         self._log_level = log_level
         self._max_width = max_width
-        self._correction_mode = correction_mode
         self._monitor_enabled = monitor_enabled
         self._output_path = output_path
         self._cancel_flag = False
@@ -109,13 +107,8 @@ class ExportThread(QThread):
                     log_level=self._log_level,
                     max_width=self._max_width,
                 )
-                mode = self._correction_mode
-                if mode == "auto":
-                    pipeline.run_auto(self._output_path, mode="auto")
-                    result_container["mode"] = "auto"
-                else:
-                    pipeline.run_auto(self._output_path, mode="manual")
-                    result_container["mode"] = "review"
+                pipeline.run_auto(self._output_path)
+                result_container["mode"] = "auto"
                 result_container["timing"] = pipeline.timing_flat()
                 self.pipeline_ready.emit(pipeline, self._output_path)
             except _CancelExport:

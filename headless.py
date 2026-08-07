@@ -93,7 +93,7 @@ def run_headless(args: argparse.Namespace) -> None:
     if _mon_enabled:
         _monitor.start(interval_s=_mon_interval, with_gpu=config.MONITOR_GPU)
     try:
-        pipeline.run_auto(output_path, mode=getattr(args, 'mode', 'auto'))
+        pipeline.run_auto(output_path)
     except Exception as e:
         print(f"\n错误: {e}")
         sys.exit(1)
