@@ -16,7 +16,10 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from ocr_engine import extract_speed_value, build_speed_candidates, Flag
-from viterbi import viterbi_correct
+# v2.12: 稠密格点连续 DP 替换离散候选 trellis —— 候选缺真值是旧 Viterbi
+# 97% 的失败模式（只能挑最不坏的错误候选）；稠密能合成任意整数。同签名
+# 换核，调用点不变。守卫见 viterbi_dense.py（单候选钉死 + min-obs）。
+from viterbi_dense import dense_viterbi as viterbi_correct
 from monitor import STAGE
 from config import (
     MPS_TO_KMH,

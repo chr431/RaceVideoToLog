@@ -1,5 +1,10 @@
 """Viterbi global optimal path selection — DP on per-frame candidate trellis.
 
+NOTE (v2.12): superseded as the production corrector by viterbi_dense.py
+(dense-lattice continuous DP).  viterbi_correct lives on here only as the
+historical reference and because viterbi_dense reuses _split_segments and
+_compute_confidence_scores from this module.
+
 Finds the globally optimal sequence of speed values through per-frame
 candidate sets using dynamic programming with soft constraints.
 

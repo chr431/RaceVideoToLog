@@ -1,7 +1,7 @@
 """RaceVideoToLog 集中配置 — 常量、颜色、公共 API。"""
 from __future__ import annotations
 
-__version__ = "2.11.0"
+__version__ = "2.12.0"
 
 # ═══════════════════ 物理常量 ═══════════════════
 MPS_TO_KMH: float = 3.6          # m/s → km/h 转换因子
@@ -159,7 +159,9 @@ FORCE_MEDIAN_WINDOW_TIME: float = 0.1      # force-median 中值窗口时间 (�
 TRUST_WINDOW_TIME: float = 0.15            # 信任传播验证时间窗 (秒)
 DISTANT_INTERP_ISLAND_THRESHOLD: int = 30  # 孤岛检测距离阈值 (km/h)
 REF_INTERP_MAX_KMH_DIFF: int = 50    # 插值参考值最大允许偏差 (km/h)
-REF_MIN_DIFF: float = 3.0            # 参考值最小偏差：raw 与插值差 < 此值时不设参考（raw 自洽）
+REF_MIN_DIFF: float = 6.0            # 参考值最小偏差：raw 与插值差 < 此值时不设参考（raw 自洽）
+                                     # 3.0→6.0：拦截阶梯显示上 ref 滞后 3-5 km/h 拖拽正确 raw
+                                     # （test4 dense 回归根源）；真误读帧 ref 差巨大不受影响
 
 # ═══════════════════ Viterbi 后处理 ═══════════════════
 VITERBI_POST_TRUST_THRESHOLD: int = 70     # Viterbi 后信任判定最低分数
