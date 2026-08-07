@@ -30,10 +30,10 @@ from config import (
     AUTO_ALIGN_NUDGE_FACTOR, AUTO_ALIGN_MIN_CHANGE_KMH,
     FORCE_MEDIAN_MAX_ITERATIONS, FORCE_MEDIAN_NUDGE_FACTOR,
     FORCE_MEDIAN_THRESHOLD_MULT, FORCE_MEDIAN_MIN_CHANGE_KMH,
-    CANDIDATE_POSTFILTER_PHYSICS_MIN, CANDIDATE_POSTFILTER_LINEARITY_MIN,
+    CANDIDATE_POSTFILTER_ABS_MIN,
     CANDIDATE_HUNDREDS_MAX_DIFF,
     ACCEL_SCORE_ISLAND_INTERIOR,
-    REF_GUARD_PHYSICS_MIN, REF_GUARD_LINEARITY_MIN,
+    REF_GUARD_ABS_MIN,
     DISTANT_INTERP_MIN_TIME, DISTANT_INTERP_ISLAND_THRESHOLD,
     FORCE_MEDIAN_WINDOW_TIME,
     REF_INTERP_MAX_KMH_DIFF, REF_MIN_DIFF,
@@ -732,23 +732,21 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
         log_fn(f"  Candidates: {n_with} frames ({n_cheap} cheap), {total_c} total")
 
     # ── Post-filter: remove dangerous hundreds-digit variants ──
-    # For frames that are internally consistent (physics>=90 AND
-    # linearity>=90), a hundreds-digit variant that differs by >=100
-    # from the raw value is almost certainly wrong. Removing it
-    # prevents Viterbi from choosing a path that looks "cheaper"
-    # due to lower transition cost from nearby wrong frames.
-    # Example: raw=168 (3-digit), physics=100, linearity=100 →
-    #   remove candidate 68 (168-100) to prevent false correction.
+    # For frames that are internally consistent (abs>=85), a hundreds-digit
+    # variant that differs by >=100 from the raw value is almost certainly
+    # wrong. Removing it prevents Viterbi from choosing a path that looks
+    # "cheaper" due to lower transition cost from nearby wrong frames.
+    # Example: raw=168 (3-digit), abs=100 → remove candidate 68 (168-100)
+    #   to prevent false correction.
     n_filtered = 0
     n_island_cands = 0  # Track frames with distant-interp candidates
     with STAGE.stage("corr.postfilter"):
         for fi in list(candidates_by_frame.keys()):
             sigs = confidence_scores[fi].get('signals', {}) if fi < len(confidence_scores) else {}
-            p = sigs.get('physics', 50)
-            l = sigs.get('linearity', 50)
+            abs_s = sigs.get('abs', 50)
             raw_v = rows[fi][2]
             if raw_v <= 0: continue
-            if p >= CANDIDATE_POSTFILTER_PHYSICS_MIN and l >= CANDIDATE_POSTFILTER_LINEARITY_MIN:
+            if abs_s >= CANDIDATE_POSTFILTER_ABS_MIN:
                 old_cands = candidates_by_frame[fi]
                 new_cands = [c for c in old_cands if abs(c - raw_v) < CANDIDATE_HUNDREDS_MAX_DIFF]
                 if len(new_cands) < len(old_cands):
@@ -756,7 +754,7 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
                     candidates_by_frame[fi] = new_cands if len(new_cands) >= 1 else [raw_v]
             # Track frames where distant interpolation was added
             a = sigs.get('accel', 100)
-            if a <= ACCEL_SCORE_ISLAND_INTERIOR + 5 and p >= CANDIDATE_POSTFILTER_PHYSICS_MIN:
+            if a <= ACCEL_SCORE_ISLAND_INTERIOR + 5 and abs_s >= CANDIDATE_POSTFILTER_ABS_MIN:
                 n_island_cands += 1
     if log_fn and n_filtered > 0:
         log_fn(f"  Filtered hundreds variants from {n_filtered} consistent 3-digit frames")
@@ -766,8 +764,8 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
     # frames without reference protection — Viterbi's transition cost then
     # pulled them into wrong ramps (measured 2731-cluster / 1115-cluster).
     #
-    # Guard 1: skip internally consistent frames (physics>=90 AND linearity>=90
-    # AND accel>=70) — raw OCR almost certainly correct.
+    # Guard 1: skip internally consistent frames (abs>=85 AND accel>=70) —
+    # raw OCR almost certainly correct.
     # Guard 2 (REF_MIN_DIFF): if raw already agrees with interpolation (<3),
     # the frame is self-consistent — no reference (else Viterbi would be
     # pulled off a correct raw by a ±1-2 off interpolation).
@@ -776,11 +774,10 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
         for i in range(n):
             if i in pinned_set or Flag.is_trusted(rows[i][3]): continue
             sigs = confidence_scores[i].get('signals', {}) if i < len(confidence_scores) else {}
-            p = sigs.get('physics', 50)
-            l = sigs.get('linearity', 50)
+            abs_s = sigs.get('abs', 50)
             a = sigs.get('accel', 100)
-            if p >= REF_GUARD_PHYSICS_MIN and l >= REF_GUARD_LINEARITY_MIN and a >= 70:
-                # All signals healthy → trust OCR, skip interpolation
+            if abs_s >= REF_GUARD_ABS_MIN and a >= 70:
+                # abs 自洽 + accel 正常 → trust OCR, skip interpolation
                 continue
             raw_v = rows[i][2]
             ref = _local_interp(i, rows, observations, times, max_speed_kmh, fps=fps, max_accel_mps2=max_accel_mps2)

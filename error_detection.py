@@ -4,13 +4,13 @@ Computes continuous confidence scores [0, 100] for every frame using 4
 independent signals. READ-ONLY: does not modify any values or flags.
 
 Signals:
-  1. OCR model confidence — from OcrEngine output
-  2. Physics reachability  — both-neighbor check
-  3. Local linearity       — median-of-pairs robust interpolation
-  4. Acceleration spikes   — opposing spike pairs = consistency island
+  1. OCR model confidence         — from OcrEngine output
+  2. Bandwidth-norm abs residual  — median-of-pairs interpolation; absolute
+     residual normalised by local bandwidth (replaces physics + linearity)
+  3. Acceleration spikes          — opposing spike pairs = consistency island
+  4. Frequency-domain residual    — Gaussian low-pass residual (high-freq = non-physical)
 """
 from __future__ import annotations
-import math
 import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -21,16 +21,18 @@ import numpy as np
 from config import (
     MPS_TO_KMH,
     ERROR_DETECT_OCR_CONF_WEIGHT,
-    ERROR_DETECT_PHYSICS_WEIGHT,
-    ERROR_DETECT_LINEARITY_WEIGHT,
+    ERROR_DETECT_ABS_WEIGHT,
     ERROR_DETECT_ACCEL_SPIKE_WEIGHT,
+    ERROR_DETECT_FREQ_WEIGHT,
     ERROR_DETECT_FLOOR_CAP,
-    PHYSICS_TIME_WINDOW, PHYSICS_DECAY_FACTOR,
-    LINEARITY_DECAY_FACTOR, LINEARITY_TIME_WINDOW, LINEARITY_MAX_NEIGHBORS,
+    FREQ_FLOOR_THRESHOLD, FREQ_FLOOR_CAP, FREQ_CORROBORATE_THRESHOLD,
+    LINEARITY_TIME_WINDOW, LINEARITY_MAX_NEIGHBORS,
+    ABS_RESID_FLOOR, ABS_RESID_WINDOW,
     ACCEL_SPIKE_VIOLATION_MULT, ACCEL_SPIKE_SEARCH_WINDOW,
     CONF_TIER_LOW_MAX, CONF_TIER_MEDIUM_MAX,
     ACCEL_SCORE_NORMAL, ACCEL_SCORE_NEAR_ONE, ACCEL_SCORE_SAME_DIR,
     ACCEL_SCORE_VIOLATION, ACCEL_SCORE_ISLAND_INTERIOR,
+    FREQ_RESID_SIGMA, FREQ_RESID_SCALE,
 )
 
 if TYPE_CHECKING:
@@ -60,102 +62,25 @@ def _signal_ocr_conf(observations: list, start: int = 0,
     return scores
 
 
-# ═══════════════════ Helper: nearest valid frame within time window ═══════════════════
+# ═══════════════════ Signal 2: bandwidth-normalised absolute residual ═══════════════════
 
-def _find_nearest_valid(vals: list, times: list[float], i: int, direction: int,
-                        time_window: float) -> int | None:
-    """Return the nearest frame in *direction* with speed >= 0 within time_window seconds."""
-    step = 1 if direction > 0 else -1
-    j = i + step
-    t_i = times[i]
-    while 0 <= j < len(vals):
-        if abs(times[j] - t_i) > time_window:
-            break
-        if vals[j] >= 0:
-            return j
-        j += step
-    return None
+def _median_pairs_expected(vals: list, times: list[float], start: int, end: int,
+                           time_window: float = LINEARITY_TIME_WINDOW,
+                           max_neighbors: int = LINEARITY_MAX_NEIGHBORS) -> list[float]:
+    """median-of-pairs 插值期望值（robust interpolation）。
 
-
-# ═══════════════════ Signal 2: Physics reachability ═══════════════════
-
-def _signal_physics(vals: list, times: list[float], max_accel_mps2: float,
-                    start: int = 0, end: int | None = None,
-                    time_window: float = PHYSICS_TIME_WINDOW) -> list[float]:
-    """Physics reachability — continuous scoring, no text-length dependency.
-
-    vals: 每帧 raw 速度值列表（原 rows 的第 2 列）。可增量计算 [start, end)
-    区间（邻居搜索用全局 vals/times，区间内帧的邻居必然就绪）。
-
-    v < 0      →   0.0  (invalid measurement)
-    no neighbour →  50.0  (neutral — insufficient context)
-    reachable  → 100.0  (perfect)
-    excess     → 100 * exp(-excess_ratio * decay)  (continuous drop)
+    对 [start, end) 内每帧，取两侧 time_window 秒内最多 max_neighbors 个有效帧，
+    所有左×右对线性插值后取中位数。无插值（单侧无邻居 / 无效值）→ NaN
+    （score 50 中性）。可增量计算：邻居搜索用全局 vals/times。
     """
     n = len(vals)
-    end = n if end is None else min(end, n)
-    scores = []
+    exp: list[float] = []
     for i in range(start, end):
-        v = vals[i]
-        if v < 0:
-            scores.append(0.0)
+        if vals[i] < 0:
+            exp.append(float("nan"))
             continue
-
-        side_scores: list[float] = []
-        for direction in (-1, 1):
-            ni = _find_nearest_valid(vals, times, i, direction, time_window)
-            if ni is None:
-                continue
-            nv = vals[ni]
-            dt = abs(times[i] - times[ni])
-            if dt <= 0:
-                continue
-            max_dv = max_accel_mps2 * dt * MPS_TO_KMH
-            dv = abs(v - nv)
-            if dv <= max_dv:
-                side_scores.append(100.0)
-            else:
-                excess = (dv - max_dv) / max_dv
-                side_scores.append(100.0 * math.exp(-excess * PHYSICS_DECAY_FACTOR))
-
-        if not side_scores:
-            scores.append(50.0)
-        else:
-            scores.append(round(min(side_scores), 1))
-
-    return scores
-
-
-# ═══════════════════ Signal 3: Local linearity (median-of-pairs) ═══════════════════
-
-def _signal_linearity(vals: list, times: list[float],
-                      start: int = 0, end: int | None = None,
-                      time_window: float = LINEARITY_TIME_WINDOW,
-                      max_neighbors: int = LINEARITY_MAX_NEIGHBORS) -> list[float]:
-    """Robust linearity check using median-of-pairs interpolation.
-
-    vals: 每帧 raw 速度值列表（原 rows 的第 2 列）。可增量计算 [start, end)。
-
-    For each frame, finds valid-speed neighbours on each side within
-    *time_window* seconds (capped at *max_neighbors* per side), linearly
-    interpolates from all left×right pairs, takes the median expected
-    value, and scores based on relative deviation.
-
-    No reliability gate — the median naturally rejects outlier anchors.
-    Works equally well at all speed ranges (no text-length dependency).
-    """
-    n = len(vals)
-    end = n if end is None else min(end, n)
-    scores = []
-    for i in range(start, end):
-        v = vals[i]
-        if v < 0:
-            scores.append(0.0)
-            continue
-
         t_i = times[i]
 
-        # Collect valid frames on each side within time_window
         left_frames: list[int] = []
         j = i - 1
         while j >= 0 and len(left_frames) < max_neighbors:
@@ -175,43 +100,79 @@ def _signal_linearity(vals: list, times: list[float],
             j += 1
 
         if not left_frames or not right_frames:
-            scores.append(50.0)
+            exp.append(float("nan"))
             continue
 
-        # Expected values from all left-right pairs, median for robustness
-        # （配对部分向量化：集合语义与原双层循环相同 —— span 过滤 +
-        # expected>0 过滤 → 排序后中位数一致）
-        lv = np.fromiter((vals[li] for li in left_frames),
-                         dtype=np.float64, count=len(left_frames))
-        lt = np.fromiter((times[li] for li in left_frames),
-                         dtype=np.float64, count=len(left_frames))
-        rv = np.fromiter((vals[ri] for ri in right_frames),
-                         dtype=np.float64, count=len(right_frames))
-        rt = np.fromiter((times[ri] for ri in right_frames),
-                         dtype=np.float64, count=len(right_frames))
+        lv = np.fromiter((vals[li] for li in left_frames), dtype=np.float64,
+                         count=len(left_frames))
+        lt = np.fromiter((times[li] for li in left_frames), dtype=np.float64,
+                         count=len(left_frames))
+        rv = np.fromiter((vals[ri] for ri in right_frames), dtype=np.float64,
+                         count=len(right_frames))
+        rt = np.fromiter((times[ri] for ri in right_frames), dtype=np.float64,
+                         count=len(right_frames))
         span = rt[None, :] - lt[:, None]
         mask = span >= 1e-6
-        with np.errstate(divide='ignore', invalid='ignore'):
+        with np.errstate(divide="ignore", invalid="ignore"):
             frac = (t_i - lt[:, None]) / span  # span==0 → nan，被 mask 排除
         expected = lv[:, None] + (rv[None, :] - lv[:, None]) * frac
         exp_flat = expected[mask]
         exp_flat = exp_flat[exp_flat > 0]
-
         if exp_flat.size == 0:
-            scores.append(50.0)
+            exp.append(float("nan"))
             continue
-
         exp_flat.sort()
-        expected = float(exp_flat[exp_flat.size // 2])  # median
-
-        deviation = abs(v - expected) / expected
-        score = 100.0 * math.exp(-deviation * LINEARITY_DECAY_FACTOR)
-        scores.append(round(max(0.0, min(100.0, score)), 1))
-
-    return scores
+        exp.append(float(exp_flat[exp_flat.size // 2]))  # median
+    return exp
 
 
-# ═══════════════════ Signal 4: Acceleration spike pairs ═══════════════════
+def _signal_abs_residual(vals: list, times: list[float],
+                         start: int = 0, end: int | None = None,
+                         floor: float = ABS_RESID_FLOOR,
+                         window: int = ABS_RESID_WINDOW,
+                         time_window: float = LINEARITY_TIME_WINDOW,
+                         max_neighbors: int = LINEARITY_MAX_NEIGHBORS) -> list[float]:
+    """带宽归一化绝对残差信号（Signal 2，取代 physics + linearity）。
+
+    expected = 中位数插值期望值（与 linearity 同引擎）；
+    resid = |raw − expected|（绝对残差，修正 linearity 相对归一化的高速漏检）；
+    bandwidth = |raw 一阶差分| 滑动均值 + floor（真实变速时带宽大 → 大偏差不罚，
+    修正 physics 的起步/刹车误报；巡航时带宽小 → 小偏差即可疑）。
+
+    score = 100 * exp(−resid / max(bw, floor))。巡航帧插值噪声 ~0.5-1.5 km/h，
+    故 floor 须 ≥3 防误报。NaN 期望 → 50 中性；raw<0 → 0。
+    """
+    n = len(vals)
+    end = n if end is None else min(end, n)
+    if end <= start:
+        return []
+    expected = _median_pairs_expected(vals, times, start, end,
+                                      time_window, max_neighbors)
+    exp_arr = np.asarray(expected, dtype=np.float64)
+    # 局部带宽：|diff| 滑动均值，外扩 k 帧（边缘扩展）保证边界帧上下文。
+    # prepend 用 vals[lo-1]（而非 seg[0]）→ 段首 diff 与全局数组逐位一致，
+    # 增量路径与整段路径的带宽相同（段边界不引入 0 伪 diff）。
+    k = window // 2
+    lo = max(0, start - k)
+    hi = min(n, end + k)
+    seg = np.asarray(vals[lo:hi], dtype=np.float64)
+    prepend = vals[lo - 1] if lo > 0 else seg[0]
+    rd = np.abs(np.diff(seg, prepend=prepend))
+    pad = np.pad(rd, (k, k), mode="edge")
+    kernel = np.ones(window) / window
+    bw_all = np.convolve(pad, kernel, mode="valid")  # 长度 = hi - lo
+    i0, i1 = start - lo, end - lo
+    bw = np.maximum(bw_all[i0:i1], floor)
+    raw = np.asarray(vals[start:end], dtype=np.float64)
+    resid = np.abs(raw - exp_arr)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        scores = 100.0 * np.exp(-resid / bw)
+    scores = np.where(np.isnan(exp_arr), 50.0, scores)
+    scores = np.where(raw < 0, 0.0, scores)
+    return [round(float(s), 1) for s in scores]
+
+
+# ═══════════════════ Signal 3: Acceleration spike pairs ═══════════════════
 
 def _build_accel_state(vals: list, times: list[float], fps: float,
                        max_accel_mps2: float) -> tuple[list, list, list]:
@@ -286,6 +247,47 @@ def _signal_accel_spikes(rows: list, times: list[float], fps: float,
     return _accel_scores_range(violation, violation_sign, start, end)
 
 
+# ═══════════════════ Signal 4: 频域残差（高频内容 = 非物理） ═══════════════════
+
+def _signal_frequency(vals: list, times: list[float],
+                      start: int = 0, end: int | None = None,
+                      sigma: float = FREQ_RESID_SIGMA,
+                      scale: float = FREQ_RESID_SCALE) -> list[float]:
+    """频域残差信号 — 中心高斯低通后取高频残差，指数衰减评分。
+
+    真实速度信号是低带宽的（实测 99% 频谱能量 ≤ 2.5Hz，即变化至少 ~0.4s
+    尺度）。对逐帧速度做短窗高斯低通（sigma=3 帧），残差 = 被滤除的高频
+    内容 —— 单帧/短时的 3-9 km/h 尖峰残差大（score 低），而真实变速是
+    平滑 ramp（残差小，score 高）。补 accel 尖峰信号（阈值 3×max_dv≈9
+    km/h 才触发）漏掉的 3-9 km/h 中间区间。
+
+    v < 0 → 0.0；边界帧用边缘扩展补足窗口（与增量 WINDOW 约束一致）。
+    """
+    n = len(vals)
+    end = n if end is None else min(end, n)
+    k = int(4 * sigma)
+    if end <= start:
+        return []
+    # 区间窗口外扩 k 帧（边缘扩展），保证区间内每帧有完整 ±k 上下文
+    lo = max(0, start - k)
+    hi = min(n, end + k)
+    seg = np.asarray(vals[lo:hi], dtype=np.float64)
+    pad_seg = np.pad(seg, (k, k), mode="edge")
+    x = np.arange(-k, k + 1, dtype=np.float64)
+    kernel = np.exp(-0.5 * (x / sigma) ** 2)
+    kernel /= kernel.sum()
+    # valid 卷积：out[j] = 以 pad_seg[j+k] 为中心的低通 → 对应全局帧 lo+j
+    smooth = np.convolve(pad_seg, kernel, mode="valid")
+    # 区间 [start, end) 对应 seg 下标 [start-lo, end-lo)
+    i0, i1 = start - lo, end - lo
+    raw = np.asarray(vals[start:end], dtype=np.float64)
+    resid = np.abs(raw - smooth[i0:i1])
+    with np.errstate(divide="ignore", invalid="ignore"):
+        scores = 100.0 * np.exp(-resid / scale)
+    scores = np.where(raw < 0, 0.0, scores)
+    return [round(float(s), 1) for s in scores]
+
+
 # ═══════════════════ Main entry point ═══════════════════
 
 def detect_errors(rows: list, observations: list, times: list[float],
@@ -297,12 +299,13 @@ def detect_errors(rows: list, observations: list, times: list[float],
 
     ocr_conf_scores = _signal_ocr_conf(observations, 0, n)
     vals = [r[2] for r in rows]
-    physics_scores = _signal_physics(vals, times, max_accel_mps2)
-    linearity_scores = _signal_linearity(vals, times)
+    abs_scores = _signal_abs_residual(vals, times)
     accel_scores = _signal_accel_spikes(vals, times, fps, max_accel_mps2)
+    freq_scores = _signal_frequency(vals, times)
     confidence = _combine_confidence(vals, max_speed_kmh,
-                                     ocr_conf_scores, physics_scores,
-                                     linearity_scores, accel_scores, 0)
+                                     ocr_conf_scores, abs_scores,
+                                     accel_scores, 0,
+                                     freq_scores=freq_scores)
     return ErrorReport(confidence=confidence)
 
 
@@ -311,7 +314,7 @@ def detect_errors(rows: list, observations: list, times: list[float],
 class IncrementalDetector:
     """Phase 1 流式计算器：随主 OCR 批处理增量计算局部信号。
 
-    所有信号都是 ±WINDOW 帧的局部计算（physics/linearity ±0.25s 时间窗、
+    所有信号都是 ±WINDOW 帧的局部计算（abs 期望 ±0.25s + 带宽 ±7 帧、
     accel 尖峰搜索 15 帧）→ 帧 i 在 i+WINDOW 帧就绪后可精确计算，
     与整段 detect_errors 数值一致（同公式同输入，仅遍历区间不同）。
 
@@ -319,10 +322,10 @@ class IncrementalDetector:
     —— Phase 1 的墙钟时间全部并进主 OCR 阶段。
     """
 
-    # accel 搜索 15 帧 + 差分 1 帧；physics/linearity ±0.25s（按 fps 换算）
+    # accel 搜索 15 帧 + 差分 1 帧；abs 期望 ±0.25s + 带宽 ±7 帧（按 fps 换算）
     WINDOW = max(ACCEL_SPIKE_SEARCH_WINDOW + 1,
                  int(LINEARITY_TIME_WINDOW * 60.0) + 1,
-                 int(PHYSICS_TIME_WINDOW * 60.0) + 1)
+                 ABS_RESID_WINDOW // 2 + 1)
 
     def __init__(self, fps: float, max_accel_mps2: float,
                  max_speed_kmh: float) -> None:
@@ -370,13 +373,13 @@ class IncrementalDetector:
             return
         start, end = self._sig_end, can
         ocr_s = _signal_ocr_conf(observations, start, end)
-        phy_s = _signal_physics(self._vals, self._times, self._max_accel,
-                                start, end)
-        lin_s = _signal_linearity(self._vals, self._times, start, end)
+        abs_s = _signal_abs_residual(self._vals, self._times, start, end)
         acc_s = _accel_scores_range(self._violation, self._vsign, start, end)
+        freq_s = _signal_frequency(self._vals, self._times, start, end)
         self._conf_cache.extend(
             _combine_confidence(self._vals, self._max_speed,
-                                ocr_s, phy_s, lin_s, acc_s, start))
+                                ocr_s, abs_s, acc_s, start,
+                                freq_scores=freq_s))
         self._sig_end = end
 
     def finalize(self, observations: list) -> list[dict]:
@@ -388,54 +391,62 @@ class IncrementalDetector:
         start = self._sig_end
         if start < n:
             ocr_s = _signal_ocr_conf(observations, start, n)
-            phy_s = _signal_physics(self._vals, self._times, self._max_accel,
-                                    start, n)
-            lin_s = _signal_linearity(self._vals, self._times, start, n)
+            abs_s = _signal_abs_residual(self._vals, self._times, start, n)
             acc_s = _accel_scores_range(self._violation, self._vsign,
                                         start, n)
+            freq_s = _signal_frequency(self._vals, self._times, start, n)
             self._conf_cache.extend(
                 _combine_confidence(self._vals, self._max_speed,
-                                    ocr_s, phy_s, lin_s, acc_s, start))
+                                    ocr_s, abs_s, acc_s, start,
+                                    freq_scores=freq_s))
             self._sig_end = n
         return self._conf_cache
 
 
 def _combine_confidence(vals: list, max_speed_kmh: float,
-                        ocr_conf_scores: list, physics_scores: list,
-                        linearity_scores: list, accel_scores: list,
-                        base_index: int) -> list[dict]:
+                        ocr_conf_scores: list, abs_scores: list,
+                        accel_scores: list,
+                        base_index: int,
+                        freq_scores: list | None = None) -> list[dict]:
     """多信号加权组合 → 单帧置信度（逐帧独立，可增量）。
 
     vals 为全局速度数组，base_index 为信号区间起始帧号（对应返回值的
-    index 字段）。
+    index 字段）。freq_scores 缺省时按 50（中性）处理。
     """
-    total_w = (ERROR_DETECT_OCR_CONF_WEIGHT + ERROR_DETECT_PHYSICS_WEIGHT +
-               ERROR_DETECT_LINEARITY_WEIGHT + ERROR_DETECT_ACCEL_SPIKE_WEIGHT)
+    if freq_scores is None:
+        freq_scores = [50.0] * len(ocr_conf_scores)
+    total_w = (ERROR_DETECT_OCR_CONF_WEIGHT + ERROR_DETECT_ABS_WEIGHT +
+               ERROR_DETECT_ACCEL_SPIKE_WEIGHT + ERROR_DETECT_FREQ_WEIGHT)
     w_ocr = ERROR_DETECT_OCR_CONF_WEIGHT / total_w
-    w_phy = ERROR_DETECT_PHYSICS_WEIGHT / total_w
-    w_lin = ERROR_DETECT_LINEARITY_WEIGHT / total_w
+    w_abs = ERROR_DETECT_ABS_WEIGHT / total_w
     w_acc = ERROR_DETECT_ACCEL_SPIKE_WEIGHT / total_w
+    w_freq = ERROR_DETECT_FREQ_WEIGHT / total_w
 
     confidence: list[dict] = []
     for k, i in enumerate(range(base_index, base_index + len(ocr_conf_scores))):
-        score = (w_ocr * ocr_conf_scores[k] + w_phy * physics_scores[k] +
-                 w_lin * linearity_scores[k] + w_acc * accel_scores[k])
+        score = (w_ocr * ocr_conf_scores[k] + w_abs * abs_scores[k] +
+                 w_acc * accel_scores[k] + w_freq * freq_scores[k])
         score = round(max(0.0, min(100.0, score)), 1)
 
-        min_sig = min(physics_scores[k], linearity_scores[k], accel_scores[k])
+        min_sig = min(abs_scores[k], accel_scores[k])
         for threshold, cap in sorted(ERROR_DETECT_FLOOR_CAP.items()):
             if min_sig < threshold:
                 score = min(score, cap)
                 break
+
+        # 协同频域 floor：freq 分数低仅当 min(abs,accel) 也低（确实可疑）
+        # 才压顶 —— 避免真实高频变速（起步/刹车）被 freq 误伤。
+        if freq_scores[k] < FREQ_FLOOR_THRESHOLD and min_sig < FREQ_CORROBORATE_THRESHOLD:
+            score = min(score, FREQ_FLOOR_CAP)
 
         if score < CONF_TIER_LOW_MAX: tier = "low"
         elif score < CONF_TIER_MEDIUM_MAX: tier = "medium"
         else: tier = "high"
 
         signals_sorted = sorted(
-            [("ocr_conf", ocr_conf_scores[k]), ("physics", physics_scores[k]),
-             ("linearity", linearity_scores[k]),
-             ("accel", accel_scores[k])], key=lambda x: x[1])
+            [("ocr_conf", ocr_conf_scores[k]), ("abs", abs_scores[k]),
+             ("accel", accel_scores[k]), ("freq", freq_scores[k])],
+            key=lambda x: x[1])
         lowest_signal, lowest_val = signals_sorted[0]
         if score >= 70: reason = "正常"
         elif score < 30: reason = f"错误({lowest_signal}={lowest_val:.0f})"
@@ -447,9 +458,9 @@ def _combine_confidence(vals: list, max_speed_kmh: float,
             "speed": cur_v, "reason": reason,
             "signals": {
                 "ocr_conf": round(ocr_conf_scores[k], 1),
-                "physics": round(physics_scores[k], 1),
-                "linearity": round(linearity_scores[k], 1),
+                "abs": round(abs_scores[k], 1),
                 "accel": round(accel_scores[k], 1),
+                "freq": round(freq_scores[k], 1),
             },
             "is_corrected": False,
         })

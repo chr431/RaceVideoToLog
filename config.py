@@ -104,11 +104,20 @@ MANUAL_EDIT_ACCEL_WARNING: float = 0.5  # 人工修正加速度警告阈值
 
 # ═══════════════════ 错误检测：多信号置信度评分 ═══════════════════
 ERROR_DETECT_OCR_CONF_WEIGHT: float = 0.01   # OCR 模型内部置信度
-ERROR_DETECT_PHYSICS_WEIGHT: float = 0.15     # 物理可达性
-ERROR_DETECT_LINEARITY_WEIGHT: float = 0.15   # 局部线性度（中位数鲁棒插值）
+ERROR_DETECT_ABS_WEIGHT: float = 0.15        # 带宽归一化绝对残差（取代 physics+linearity）
 ERROR_DETECT_ACCEL_SPIKE_WEIGHT: float = 0.50 # 加速度尖峰对检测
+ERROR_DETECT_FREQ_WEIGHT: float = 0.10        # 频域残差（高频内容 = 非物理）
 # 最差信号地板：任一信号低于阈值时，组合分数上限
 ERROR_DETECT_FLOOR_CAP: dict[float, float] = {30.0: 25.0, 50.0: 50.0, 70.0: 69.0}
+# 带宽归一化绝对残差（Signal 2）参数
+ABS_RESID_FLOOR: float = 3.0       # 带宽下限 (km/h)：巡航帧插值噪声 0.5-1.5，须 ≥3 防误报
+ABS_RESID_WINDOW: int = 15         # 局部带宽滑动均值窗口（帧）
+# 频域残差信号参数：真实速度低带宽（99% ≤2.5Hz）；高频残差 = 疑似误差
+FREQ_RESID_SIGMA: float = 3.0        # 中心高斯低通标准差（帧）；短窗 → 捕捉单帧/短时 3-9 km/h 错误
+FREQ_RESID_SCALE: float = 5.0        # 残差→分数衰减尺度：score=100*exp(-resid/scale)
+FREQ_FLOOR_THRESHOLD: float = 50.0   # 频域专用 floor：freq 分数低于此 → 组合分压顶到 FREQ_FLOOR_CAP
+FREQ_FLOOR_CAP: float = 50.0         # 频域 floor 的压顶值（< AUTO_CORRECT_THRESHOLD=70 才进入纠错）
+FREQ_CORROBORATE_THRESHOLD: float = 80.0  # 协同 floor：freq 低仅当 min(abs,accel)<此值才压顶（避免真实变速被误伤）
 
 # ═══════════════════ Viterbi DP ═══════════════════
 VITERBI_OBS_WEIGHT: float = 0.3
@@ -140,13 +149,11 @@ FORCE_MEDIAN_THRESHOLD_MULT: float = 3.0  # max_dv 阈值倍率（3×：只改�
 FORCE_MEDIAN_MIN_CHANGE_KMH: int = 1      # 最小变化量 (km/h)
 
 # ═══════════════════ 候选值后过滤 ═══════════════════
-CANDIDATE_POSTFILTER_PHYSICS_MIN: int = 90    # 自洽帧 physics 最低阈值
-CANDIDATE_POSTFILTER_LINEARITY_MIN: int = 90  # 自洽帧 linearity 最低阈值
+CANDIDATE_POSTFILTER_ABS_MIN: int = 85        # 自洽帧 abs 最低阈值（绝对残差信号）
 CANDIDATE_HUNDREDS_MAX_DIFF: int = 100         # 百位变体最大允许差值 (km/h)
 
 # ═══════════════════ 参考值构建保护 ═══════════════════
-REF_GUARD_PHYSICS_MIN: int = 90      # 跳过插值参考值的 physics 阈值
-REF_GUARD_LINEARITY_MIN: int = 90    # 跳过插值参考值的 linearity 阈值
+REF_GUARD_ABS_MIN: int = 85          # 跳过插值参考值的 abs 阈值
 DISTANT_INTERP_MIN_TIME: float = 1.0      # 远距离插值最小时间距离 (秒)
 FORCE_MEDIAN_WINDOW_TIME: float = 0.1      # force-median 中值窗口时间 (秒)
 TRUST_WINDOW_TIME: float = 0.15            # 信任传播验证时间窗 (秒)
@@ -174,11 +181,8 @@ VITERBI_CONF_NORMAL_MIN: int = 80           # Viterbi 置信度"正常"等级下
 VITERBI_CONF_MARGINAL_MIN: int = 40         # Viterbi 置信度"存疑"等级下限
 
 # ═══════════════════ 错误检测信号内部常量 ═══════════════════
-LINEARITY_DECAY_FACTOR: float = 3.0          # 线性度指数衰减系数
-LINEARITY_TIME_WINDOW: float = 0.25          # 线性度每侧搜索时间窗 (秒)
-LINEARITY_MAX_NEIGHBORS: int = 10            # 线性度每侧最大邻居帧数
-PHYSICS_TIME_WINDOW: float = 0.25            # 物理检查搜索时间窗 (秒)
-PHYSICS_DECAY_FACTOR: float = 2.0            # 物理违规指数衰减系数
+LINEARITY_TIME_WINDOW: float = 0.25          # 插值期望值每侧搜索时间窗 (秒)
+LINEARITY_MAX_NEIGHBORS: int = 10            # 插值期望值每侧最大邻居帧数
 ACCEL_SPIKE_VIOLATION_MULT: float = 3.0      # 加速度尖峰阈值倍率
 ACCEL_SPIKE_SEARCH_WINDOW: int = 15          # 对立尖峰搜索窗口 (帧)
 CONF_TIER_LOW_MAX: int = 30                  # 置信度 low tier 上限
