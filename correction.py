@@ -493,7 +493,19 @@ def _auto_align_pass(rows: list, observations: list, times: list,
     for i in range(n):
         if Flag.is_trusted(rows[i][3]) or rows[i][2] < 0:
             continue
+        # 跳过已被更强阶段修正的帧（fill / re-OCR / partial）：
+        # 这些帧的 align 锚点须排除修正帧 → 锚点退到岛两端，线性插值在
+        # 阶梯坡上滞后（实测 test4 align 61/62 把 fill 已写对的正确值拉偏）。
+        # fine-tune 只应作用于原始 RAW 帧的小偏移，不应对抗强阶段输出。
+        if Flag.is_corrected(rows[i][3]):
+            continue
         sigs = confidence_scores[i].get('signals', {}) if i < len(confidence_scores) else {}
+        conf = confidence_scores[i].get('score', 50) if i < len(confidence_scores) else 50
+        # 跳过 Phase 1 高置信帧（conf≥70 即被判定可信）：align 只应修正
+        # 可疑帧的小偏移；可信帧若有偏移，启发式 nudge 在阶梯坡上只会因
+        # 插值滞后而改错（实测 test4 RAW 帧 align 5 毁 0 修）。
+        if conf >= 70:
+            continue
         acc = sigs.get('accel', 100)
         # Skip island interiors (very low accel score) — need stronger correction
         if acc <= ACCEL_SCORE_ISLAND_INTERIOR + 5:
@@ -585,6 +597,13 @@ def _force_median_smooth(rows: list, times: list, max_speed_kmh: float,
                 continue
             if corrected_only and not Flag.is_corrected(rows[i][3]):
                 continue  # 手动模式：只处理 Viterbi/fill 修正过的帧
+            # 自动模式：不处理已修正帧 —— 强阶段（Viterbi/fill/re-OCR）输出
+            # 已是最终值；而 median 窗口排除 FILL 值（避免互相确认）后，在
+            # 阶梯坡岛上 median 被拉到非岛 RAW 锚点，反而把正确的 fill 值
+            # 重新拉偏（实测 test4 0修7毁、test6 0修9毁）。修正值只在
+            # corrected_only 手动模式下用 RAW/trusted 窗口安全清理。
+            if not corrected_only and Flag.is_corrected(rows[i][3]):
+                continue
             # Time-based median window
             med_look = max(1, int(FORCE_MEDIAN_WINDOW_TIME / max((times[1] - times[0]) if n >= 2 else 1/30, 1e-3)))
             neighbors = [rows[j][2] for j in range(i - med_look, i + med_look + 1)
