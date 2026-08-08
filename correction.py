@@ -36,6 +36,7 @@ from config import (
     CANDIDATE_POSTFILTER_ABS_MIN,
     CANDIDATE_HUNDREDS_MAX_DIFF,
     ACCEL_SCORE_ISLAND_INTERIOR,
+    ZERO_CHANGE_TARGET_CONF, ZERO_CHANGE_NEIGHBOR_CONF, ZERO_CHANGE_DIFF_THRESHOLD,
     REF_GUARD_ABS_MIN, INTERP_ANCHOR_CONF_MIN,
     DISTANT_INTERP_MIN_TIME, DISTANT_INTERP_ISLAND_THRESHOLD,
     FORCE_MEDIAN_WINDOW_TIME,
@@ -49,6 +50,9 @@ if TYPE_CHECKING:
     from ocr_native import OcrEngine
 
 logger = logging.getLogger("RaceVideoToLog.correction")
+
+# PIL convert('L') 灰度权重（零变化约束二值化用）
+_GRAY_WEIGHTS = np.array([0.299, 0.587, 0.114], dtype=np.float32)
 
 
 # ═══════════════════ Helpers ═══════════════════
@@ -78,6 +82,124 @@ def _interp_candidate(i: int, rows: list, times: list,
         if 0 <= val <= max_speed_kmh:
             return round(val)
     return None
+
+
+def _zc_pre_pass(rows: list, raw_frames: list, conf_by_idx: dict[int, float]) -> int:
+    """零变化约束（holding 拉伸版）：连续小 diff 段 = 显示未变段，段内必须同值。
+
+    单边硬证据：diff < T ⇒ 必然未变（数字变了像素必变）；diff >= T ⇒ 未知
+    （模糊/运动/光照都可能，不用于判定"变了"）。故只把「小 diff 拉伸段」
+    作为硬等值约束：段内任一高置信帧（>= NEIGHBOR_CONF）定值 → 整段低置信帧
+    （< TARGET_CONF）强制取该值。比 pairwise 强在：一个锚点修复整段，不受
+    链式传播断链影响。段内无高置信帧（如整段误读）则不动作，交给 ref/interp。
+
+    惰性扩展：只算含低置信帧的拉伸涉及的边 diff（缓存），效率可控。
+    返回修正帧数。"""
+    if not raw_frames:
+        return 0
+    crops: dict[int, object] = {}
+    for _fi, _crop in raw_frames:
+        if _crop is not None:
+            crops[_fi] = _crop
+    # 固定阈值校准：采样 crops 的 Otsu 阈值取中位数（速度数字颜色大致恒定）。
+    # 逐帧 Otsu 会被模糊帧直方图干扰（阈值漂移翻转背景像素），固定阈值
+    # 更快且更稳（实测分离度相当：test5 未变 max 0.89→0.63%）。
+    thresh = _zc_calibrate_thresh(crops)
+    n = len(rows)
+    if n < 2:
+        return 0
+
+    frac_cache: dict[int, float] = {}
+
+    def _frac(edge: int) -> float:
+        """边 (edge, edge+1) 的二值化 diff（缓存）。"""
+        v = frac_cache.get(edge)
+        if v is not None:
+            return v
+        a = crops.get(rows[edge][0])
+        b = crops.get(rows[edge + 1][0])
+        if a is None or b is None or a.shape != b.shape:
+            v = 1.0
+        else:
+            ga = (a.astype(np.float32) @ _GRAY_WEIGHTS).astype(np.uint8)
+            gb = (b.astype(np.float32) @ _GRAY_WEIGHTS).astype(np.uint8)
+            v = float(((ga > thresh) != (gb > thresh)).mean())
+        frac_cache[edge] = v
+        return v
+
+    fixed = 0
+    visited: set[int] = set()
+    for i in range(n):
+        if conf_by_idx.get(i, 50) >= ZERO_CHANGE_TARGET_CONF:
+            continue  # 目标必须低置信（可疑）
+        if i in visited:
+            continue
+        # 扩展 holding 拉伸 [lo, hi]：相邻边 diff 均 < 阈值
+        lo = i
+        while lo > 0 and _frac(lo - 1) < ZERO_CHANGE_DIFF_THRESHOLD:
+            lo -= 1
+        hi = i
+        while hi < n - 1 and _frac(hi) < ZERO_CHANGE_DIFF_THRESHOLD:
+            hi += 1
+        for k in range(lo, hi + 1):
+            visited.add(k)
+        # 段内高置信锚点（值须一致）
+        anchors = [k for k in range(lo, hi + 1)
+                   if conf_by_idx.get(k, 50) >= ZERO_CHANGE_NEIGHBOR_CONF
+                   and rows[k][2] >= 0]
+        if not anchors:
+            continue
+        avals = {rows[k][2] for k in anchors}
+        if len(avals) != 1:
+            continue  # 锚点值冲突 → 不动作（避免误判）
+        av = next(iter(avals))
+        for k in range(lo, hi + 1):
+            if conf_by_idx.get(k, 50) >= ZERO_CHANGE_TARGET_CONF:
+                continue  # 不覆盖高置信帧
+            if abs(rows[k][2] - av) > 0.5:
+                rows[k][2] = av
+                rows[k][3] = Flag.ZERO_CHANGE
+                fixed += 1
+    return fixed
+
+
+def _zc_calibrate_thresh(crops: dict, n_samples: int = 50) -> int:
+    """采样 crops 的 Otsu 阈值，取中位数作为固定二值化阈值。"""
+    if not crops:
+        return 127
+    keys = sorted(crops)
+    step = max(1, len(keys) // n_samples)
+    ths = []
+    for k in keys[::step][:n_samples]:
+        g = (crops[k].astype(np.float32) @ _GRAY_WEIGHTS).astype(np.uint8)
+        ths.append(_otsu_thresh(g))
+    return int(np.median(ths))
+
+
+def _otsu_thresh(gray: np.ndarray) -> int:
+    """Otsu 二值化阈值（最大化类间方差）。"""
+    hist, _ = np.histogram(gray, bins=256, range=(0, 256))
+    total = int(gray.size)
+    sum_total = float((np.arange(256) * hist).sum())
+    sum_b = 0.0
+    w_b = 0
+    var_max = -1.0
+    best = 127
+    for t in range(256):
+        w_b += hist[t]
+        if w_b == 0:
+            continue
+        w_f = total - w_b
+        if w_f == 0:
+            break
+        sum_b += t * hist[t]
+        m_b = sum_b / w_b
+        m_f = (sum_total - sum_b) / w_f
+        vb = w_b * w_f * (m_b - m_f) ** 2
+        if vb > var_max:
+            var_max = vb
+            best = t
+    return best
 
 
 def _local_interp(i: int, rows: list, observations: list, times: list,
@@ -652,6 +774,14 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
     conf_by_idx: dict[int, float] = {}
     for c in confidence_scores: conf_by_idx[c['index']] = c['score']
 
+    # ── 零变化约束（思路 2）──
+    # 相邻帧 ROI 差分 < 阈值 + 邻帧高置信 → 目标帧 = 邻帧值。修复"显示未变
+    # 但单帧 OCR 误读"（clear 视频未变帧 mean diff ~0.03 vs 变帧 ~30，分离度好）。
+    # 只作用于低置信目标帧（conf < ZERO_CHANGE_TARGET_CONF），从不破坏高置信帧。
+    n_zc = _zc_pre_pass(rows, raw_frames, conf_by_idx)
+    if log_fn and n_zc > 0:
+        log_fn(f"  Zero-change: {n_zc} frames forced equal to holding display")
+
     if log_fn:
         log_fn(f"Correction (Phase 2, auto): threshold={correct_threshold}, "
                f"{n} rows, {len(pinned_set)} pinned")
@@ -659,6 +789,7 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
     correction_frames: set[int] = set()
     for i in range(n):
         if i in pinned_set or Flag.is_trusted(rows[i][3]): continue
+        if Flag.is_corrected(rows[i][3]): continue  # 零变化约束已修正 → 不再重纠正
         if conf_by_idx.get(i, 50) < correct_threshold:
             correction_frames.add(i)
 

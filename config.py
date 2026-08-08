@@ -131,6 +131,12 @@ FILL_MAX_PASSES: int = 50
 CORRECTION_MIN_DIFF: float = 0.5
 AUTO_SMOOTH_CLUSTER_MAX: int = 5
 AUTO_SMOOTH_DEVIATION_MULT: float = 5.0
+# ── 零变化约束（思路 2：相邻帧 ROI 差分，Otsu 二值化后）──
+ZERO_CHANGE_TARGET_CONF: int = 70      # 目标帧 Phase-1 置信度 < 此值才可能被约束（可疑帧）
+ZERO_CHANGE_NEIGHBOR_CONF: int = 85    # 邻帧置信度 >= 此值才作为值来源（高可信锚点）
+ZERO_CHANGE_DIFF_THRESHOLD: float = 0.002  # 二值化后像素翻转占比 < 此值视为"显示未变"
+                                     # 实测 test5/test6 未变 med=0.000%、变 min=0.31%：
+                                     # T=0.2% → 变误判未变 0%、未变覆盖 99%（安全甜点）
 
 # ═══════════════════ 平滑 + 自动对齐参数 ═══════════════════
 SMOOTHNESS_MAX_ITERATIONS: int = 10       # _smoothness_pass 最大迭代轮数

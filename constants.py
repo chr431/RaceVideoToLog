@@ -11,6 +11,7 @@ class Flag:
         REOCR_AUTO (11)   — 重 OCR 自动修正
         FILL_INTERP (12)  — 物理插值填充
         PARTIAL_AUTO (13) — 部分数字模式推断修正
+        ZERO_CHANGE (14)  — 零变化约束：相邻帧 ROI 未变 → 强制等于高置信邻帧
         HIGH_TRUST (21)   — Viterbi+物理验证，自动高可信帧
         PINNED (22)       — 用户手动修正，绝对真值
     """
@@ -18,6 +19,7 @@ class Flag:
     REOCR_AUTO: int = 11
     FILL_INTERP: int = 12
     PARTIAL_AUTO: int = 13
+    ZERO_CHANGE: int = 14
     HIGH_TRUST: int = 21
     PINNED: int = 22
 
