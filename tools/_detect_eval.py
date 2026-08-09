@@ -1,12 +1,12 @@
 """段级检测算法评估：召回率 + 误报率。
 
 对每视频：解码+分段+OCR → 每段 (ocr值, truth值)。
-- 误读段（真错误）= ocr ≠ truth（rep 帧 truth）
+- 误读段（真错误）= |ocr - truth| > tol（默认 1，容忍 ±1：ref 有 ±1 容差，
+  ±1 off 不算错误）
 - _detect 的 suspect 标记 → TP(误读被flag) / FN(误读漏) / FP(正确被flag)
 - 召回率 Recall = TP/(TP+FN)，误报率 FPR = FP/正确段数
-另报：漏检误差幅度分布、纠错后最终错误数（上下文）。
 
-用法：python tools/_detect_eval.py [videos...]
+用法：python tools/_detect_eval.py [--tol 1] [videos...]
 """
 from __future__ import annotations
 import re
@@ -67,7 +67,9 @@ def main() -> None:
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("videos", nargs="*", default=["test", "test2", "test3", "test5", "test6"])
+    ap.add_argument("--tol", type=float, default=1.0, help="±容差，默认 1")
     args = ap.parse_args()
+    TOL = args.tol
 
     agg = {"seg": 0, "err": 0, "ok": 0, "tp": 0, "fn": 0, "fp": 0,
            "final_err": 0}
@@ -89,8 +91,8 @@ def main() -> None:
             t = truth.get(rep_frames[i])
             ov = seg_vals[i]
             if t is None or ov is None:
-                continue  # None 段（OCR 未读出）计入检测漏？不：None 恒 suspect
-            is_err = abs(ov - t) >= 0.5
+                continue
+            is_err = abs(ov - t) > TOL
             if is_err:
                 err += 1
                 if sus[i]:
@@ -105,19 +107,18 @@ def main() -> None:
                     fp += 1
         recall = tp / max(err, 1)
         fpr = fp / max(ok, 1)
-        # 纠错后最终错误（上下文）
         corr, _n = pipe._correct(seg_vals, seg_times, sus)
         final_err = sum(1 for i, seg in enumerate(segs)
                         if corr[i] is not None
                         and truth.get(rep_frames[i]) is not None
-                        and abs(corr[i] - truth[rep_frames[i]]) >= 0.5)
+                        and abs(corr[i] - truth[rep_frames[i]]) > TOL)
         print(f"{v:<6} {len(segs):>6} {err:>5} {tp:>4} {fn:>4} {fp:>5} "
               f"{recall*100:>6.1f}% {fpr*100:>6.2f}% {final_err:>6}")
         agg["seg"] += len(segs); agg["err"] += err; agg["ok"] += ok
         agg["tp"] += tp; agg["fn"] += fn; agg["fp"] += fp
         agg["final_err"] += final_err
 
-    print(f"\n合计: 段 {agg['seg']} 误读 {agg['err']} 正确 {agg['ok']}")
+    print(f"\n[tol=±{TOL:.0f}] 合计: 段 {agg['seg']} 误读 {agg['err']} 正确 {agg['ok']}")
     print(f"召回率 = {agg['tp']}/{agg['tp']+agg['fn']} "
           f"({agg['tp']/max(agg['tp']+agg['fn'],1)*100:.1f}%)  误读漏 {agg['fn']}")
     print(f"误报率 = {agg['fp']}/{agg['ok']} "
@@ -129,3 +130,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
