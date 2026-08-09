@@ -33,6 +33,9 @@ SEG_MED_K: int = 10             # 中值滤波窗口半宽（段索引）：平�
 SEG_DETECT_FLOOR: float = 3.0   # 带宽下限 (km/h)：防 ±1-2 噪声被 flag
                                 # （floor4×mult2=gate8 会漏 8-off 尖峰，如
                                 # test.mp4 1499 段 160 在 168 平板上）
+SEG_SINGLE_FLOOR: float = 2.0   # 单帧段专用带宽下限：单帧段误读率 4.2% vs
+                                # 多帧 0.3%（12.6×，80% 误读是单帧段）→ 平缓区
+                                # gate 4 抓小偏差误读；弯曲区仍按实际带宽放宽
 SEG_ANCHOR_MAX_FRAMES: float = 120.0  # 纠错锚点最大帧距离：近锚点才插值（防远锚点误插值）
 
 # ═══════════════════ OCR 输入 pad 宽度下限 ═══════════════════

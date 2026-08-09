@@ -100,6 +100,7 @@ class SegmentPipeline:
                  min_dev: float = config.SEG_MIN_DEV,
                  med_k: int = config.SEG_MED_K,
                  detect_floor: float = config.SEG_DETECT_FLOOR,
+                 single_floor: float = config.SEG_SINGLE_FLOOR,
                  anchor_max: float = config.SEG_ANCHOR_MAX_FRAMES,
                  progress_cb=None, cancel_check=None):
         self._video_path = Path(video_path)
@@ -121,6 +122,7 @@ class SegmentPipeline:
         self._min_dev = min_dev
         self._med_k = med_k
         self._detect_floor = detect_floor
+        self._single_floor = single_floor
         self._anchor_max = anchor_max
         self._progress = progress_cb or (lambda m, p: None)
         self._cancel = cancel_check or (lambda: None)
@@ -245,17 +247,21 @@ class SegmentPipeline:
         return seg_vals, rep_frames
 
     # ── 阶段 4：段级检测 + 纠正 ──
-    def _detect(self, seg_vals, seg_times):
+    def _detect(self, seg_vals, seg_times, seg_lens=None):
         """中值滤波检测：平滑值曲线（跟随弯曲），误读=尖峰被中值剔除。
 
         对每段 i，smoothed = 局部非 None 值的中位数（段索引窗口 ±med_k）。
         正确段贴合中值（偏差 ≤ 局部带宽），误读尖峰偏差大。门限 =
-        max(局部相邻差中位数, detect_floor) × mult。边缘段（左右一侧无
-        上下文）不 flag —— 中值在单调上升/下降区滞后，视频起止的低/高速段
-        会被窗口拉偏误判（test2 起始 5→8→12 回归源）。None 段恒 suspect。
+        max(局部相邻差中位数, floor) × mult。边缘段（左右一侧无上下文）
+        不 flag —— 中值在单调上升/下降区滞后，视频起止的低/高速段会被窗口
+        拉偏误判（test2 起始 5→8→12 回归源）。None 段恒 suspect。
+
+        单帧段（seg_lens[i]==1）用更紧 floor：误读率 4.2% vs 多帧 0.3%
+        （12.6×，80% 误读是单帧段——过渡/模糊帧难 OCR 又易成单帧段），
+        平缓区门限降到 4 抓小偏差误读，弯曲区仍按实际带宽放宽。
         """
         n = len(seg_vals)
-        # 局部带宽（相邻差中位数，帧窗口内）
+        # 局部带宽（相邻差中位数，帧窗口内，未加 floor）
         if n >= 2:
             gaps = np.diff(seg_times)
             med_gap = float(np.median(gaps)) if len(gaps) else 1.0
@@ -263,7 +269,7 @@ class SegmentPipeline:
             med_gap = 1.0
         win_frames = min(self._win * max(med_gap, 1.0), 120.0)
         st = np.asarray(seg_times, dtype=np.float64)
-        bw = [0.0] * n
+        bw_raw = [0.0] * n
         for i in range(n):
             ti = seg_times[i]
             lo = int(np.searchsorted(st, ti - win_frames, side="left"))
@@ -271,8 +277,7 @@ class SegmentPipeline:
             dvs = [abs(seg_vals[j] - seg_vals[j - 1])
                    for j in range(lo + 1, hi)
                    if seg_vals[j] is not None and seg_vals[j - 1] is not None]
-            bw[i] = max(float(np.median(dvs)) if dvs else 0.0,
-                        self._detect_floor)
+            bw_raw[i] = float(np.median(dvs)) if dvs else 0.0
         suspect = [False] * n
         for i in range(n):
             if seg_vals[i] is None:
@@ -289,7 +294,9 @@ class SegmentPipeline:
             if not (lefts and rights):
                 continue
             med = float(np.median(nbrs))
-            if abs(seg_vals[i] - med) > bw[i] * self._mult:
+            floor = self._single_floor if (seg_lens and seg_lens[i] == 1) \
+                else self._detect_floor
+            if abs(seg_vals[i] - med) > max(bw_raw[i], floor) * self._mult:
                 suspect[i] = True
         return suspect
 
@@ -343,7 +350,8 @@ class SegmentPipeline:
         self._cancel()
         self._progress("检测纠正...", 88.0)
         seg_times = [seg[len(seg) // 2] for seg in segs]
-        suspect = self._detect(seg_vals, seg_times)
+        suspect = self._detect(seg_vals, seg_times,
+                               [len(s) for s in segs])
         corr, self._n_corr = self._correct(seg_vals, seg_times, suspect)
         self.rows = self._build_rows(frames, segs, corr)
         self._store_run_state(frames, self.crops, segs, seg_vals, rep_frames, corr)
