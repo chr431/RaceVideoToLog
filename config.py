@@ -28,9 +28,11 @@ MONITOR_GPU: bool = True               # 是否采样 GPU 利用率/显存/温�
 SEG_C: float = 5.0              # 分段聚类阈值：max 3×3 窗口和 < C ⇒ 显示未变
 SEG_WIN: int = 30               # 段级检测带宽窗口（换算成帧：×中位段间距，上限 120 帧）
 SEG_MULT: float = 2.0           # 检测门限倍率：|值-中值| > 带宽×mult ⇒ suspect
-SEG_MIN_DEV: float = 8.0        # 纠正最小偏差：|插值-当前| > 此值才改
+SEG_MIN_DEV: float = 6.0        # 纠正最小偏差：|插值-当前| > 此值才改
 SEG_MED_K: int = 10             # 中值滤波窗口半宽（段索引）：平滑值曲线，误读=尖峰
-SEG_DETECT_FLOOR: float = 4.0   # 带宽下限 (km/h)：防 ±1-2 噪声被 flag
+SEG_DETECT_FLOOR: float = 3.0   # 带宽下限 (km/h)：防 ±1-2 噪声被 flag
+                                # （floor4×mult2=gate8 会漏 8-off 尖峰，如
+                                # test.mp4 1499 段 160 在 168 平板上）
 SEG_ANCHOR_MAX_FRAMES: float = 120.0  # 纠错锚点最大帧距离：近锚点才插值（防远锚点误插值）
 
 # ═══════════════════ OCR 输入 pad 宽度下限 ═══════════════════

@@ -326,11 +326,9 @@ def main() -> None:
 
     # 参数组合：中值滤波检测(k,floor,mult) × 纠错(min_dev, anchor_max)
     combos = []
-    for win_k in (10, 20):
-        for floor, mult in ((4.0, 3.0), (6.0, 3.0), (4.0, 2.0)):
-            for md in (8.0, 15.0):
-                for am in (120.0, 1e9):
-                    combos.append((win_k, floor, mult, md, am))
+    for floor, mult in ((3.0, 2.0), (4.0, 2.0), (3.0, 3.0), (2.0, 2.0)):
+        for md in (6.0, 8.0):
+            combos.append((10, floor, mult, md, 1e9))
 
     print(f"{'视频':<6}", end="")
     for c in combos:
