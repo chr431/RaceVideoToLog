@@ -9,7 +9,7 @@ from pathlib import Path
 
 import config
 import monitor as _monitor
-from pipeline import ProcessingPipeline
+from segment_flow import SegmentPipeline
 
 
 def _monitor_settings(args: argparse.Namespace) -> tuple[bool, float]:
@@ -56,7 +56,7 @@ def run_headless(args: argparse.Namespace) -> None:
     print(f"识别范围: {region}")
     print(f"采样间隔: 1/{args.div}")
     print(f"最大速度: {args.max_speed} km/h, 最大加速度: {args.max_accel} m/s^2")
-    print(f"OCR 后端选择: {args.backend}")
+    print(f"分段流水线: diff分段 → 段值OCR → 段级纠错")
 
     t_total_start = time.perf_counter()
 
@@ -69,23 +69,21 @@ def run_headless(args: argparse.Namespace) -> None:
             if pct >= 100.0:
                 print()
 
-    pipeline = ProcessingPipeline(
-        video_path=video_path,
+    pipeline = SegmentPipeline(
+        video_path=str(video_path),
         roi=region,
-        max_speed=args.max_speed,
-        max_accel=args.max_accel,
+        max_speed_kmh=args.max_speed,
+        max_accel_mps2=args.max_accel,
         frame_div=args.div,
         target_h=args.target_h,
         pad=args.pad,
-        buffer_size=args.buffer,
-        backend=args.backend,
         ocr_model=args.ocr_model,
         speed_format=args.format,
-        frame_start=str(args.frame_start or ""),
-        frame_end=str(args.frame_end or ""),
+        frame_start=args.frame_start,
+        frame_end=args.frame_end,
         progress_cb=_progress,
-        log_level=getattr(args, 'log_level', 'normal'),
         max_width=getattr(args, 'max_width', 0),
+        fps=None,
     )
 
     t0 = time.perf_counter()
@@ -93,7 +91,7 @@ def run_headless(args: argparse.Namespace) -> None:
     if _mon_enabled:
         _monitor.start(interval_s=_mon_interval, with_gpu=config.MONITOR_GPU)
     try:
-        pipeline.run_auto(output_path)
+        pipeline.run(output_path)
     except Exception as e:
         print(f"\n错误: {e}")
         sys.exit(1)
@@ -102,7 +100,7 @@ def run_headless(args: argparse.Namespace) -> None:
 
     t_total = time.perf_counter() - t0
     print(f"总耗时: {t_total:.1f}s")
-    # 输出详细的阶段计时（标量键；correction_stages 嵌套 dict 只在 _summary.json）
+    # 输出详细的阶段计时（标量键）
     for stage, elapsed in pipeline.timing_flat().items():
         print(f"  {stage}: {elapsed:.1f}s")
     if _stats:

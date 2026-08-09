@@ -69,7 +69,6 @@ def run(video: str, truth: str, backend: str, out_csv: str,
     child = subprocess.Popen(
         [sys.executable, str(PROJECT / "RaceVideoToLog.py"),
          video, "--from-csv", truth,
-         "--backend", backend,
          "--ocr-model", ocr_model,
          "--log-level", "detailed",
          "-o", out_csv],

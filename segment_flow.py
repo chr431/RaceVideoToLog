@@ -12,6 +12,7 @@
 from __future__ import annotations
 import csv
 import logging
+import os as _os
 import re
 import time
 from pathlib import Path
@@ -89,17 +90,22 @@ class SegmentPipeline:
     """生产分段流水线。"""
 
     def __init__(self, video_path: str, roi: tuple, max_speed_kmh: float,
-                 max_accel_mps2: float, fps: float, frame_start: int | None,
+                 max_accel_mps2: float, fps: float | None, frame_start: int | None,
                  frame_end: int | None, target_h: int, max_width: int,
                  ocr_model: str, speed_format: str = "km/h",
                  frame_div: int = 1, pad: int = 0,
-                 C: float = 5.0, win: int = 30, mult: float = 3.0,
-                 min_dev: float = 15.0, progress_cb=None):
+                 C: float = config.SEG_C, win: int = config.SEG_WIN,
+                 mult: float = config.SEG_MULT,
+                 min_dev: float = config.SEG_MIN_DEV,
+                 med_k: int = config.SEG_MED_K,
+                 detect_floor: float = config.SEG_DETECT_FLOOR,
+                 anchor_max: float = config.SEG_ANCHOR_MAX_FRAMES,
+                 progress_cb=None, cancel_check=None):
         self._video_path = Path(video_path)
         self._roi = tuple(roi)
         self._max_speed = max_speed_kmh
         self._max_accel = max_accel_mps2
-        self._fps = fps
+        self._fps = fps  # None → _decode_all 里从 decord 推导
         self._frame_start = frame_start or 0
         self._frame_end = frame_end
         self._target_h = target_h
@@ -112,22 +118,49 @@ class SegmentPipeline:
         self._win = win
         self._mult = mult
         self._min_dev = min_dev
+        self._med_k = med_k
+        self._detect_floor = detect_floor
+        self._anchor_max = anchor_max
         self._progress = progress_cb or (lambda m, p: None)
+        self._cancel = cancel_check or (lambda: None)
         self.rows: list = []
         self.timing: dict = {}
+        # 段级 review / finalize 支持（run 后填充）
+        self.segments: list[dict] = []   # [{start,end,value,rep_frame,rep_crop}]
+        self.crops: dict = {}            # 解码的 ROI 帧（review 懒加载预览用）
+        self._segs: list = []
+        self._frames: list = []
+        self._ocr_vals: list = []
 
     # ── 阶段 1：解码 + 特征（diff/清晰度）──
     def _decode_all(self):
         from decord import VideoReader, gpu, cpu
         vr = None
         label = "CPU"
-        try:
-            from decord import gpu as _g
-            vr = VideoReader(str(self._video_path), ctx=_g(0))
-            label = "GPU"
-        except Exception:
+        _force = _os.environ.get("DECORD_FORCE_CPU", "").strip() == "1"
+        if not _force:
+            try:
+                from decord import gpu as _g
+                vr = VideoReader(str(self._video_path), ctx=_g(0))
+                label = "GPU"
+            except Exception:
+                vr = None
+        if vr is None:
             vr = VideoReader(str(self._video_path), ctx=cpu(0))
         self._backend = f"decord/{label}"
+        # fps 未指定时从解码器推导（CLI/GUI 无需传 fps）
+        if self._fps is None:
+            for m in ("get_avg_fps", "get_fps"):
+                fn = getattr(vr, m, None)
+                if fn is None:
+                    continue
+                try:
+                    self._fps = float(fn())
+                    break
+                except Exception:
+                    self._fps = None
+            if not self._fps or self._fps <= 0:
+                self._fps = 30.0
         x1, y1, x2, y2 = self._roi
         total = len(vr)
         end = min(self._frame_end or total, total)
@@ -149,6 +182,8 @@ class SegmentPipeline:
             if k % 500 == 0:
                 self._progress(f"[{self._backend}] 解码: {k}/{len(frames)}",
                                3 + k / max(len(frames), 1) * 70)
+            if k % 100 == 0:
+                self._cancel()
         self.timing["decode"] = time.perf_counter() - t0
         del vr
         return frames, crops, grays, sharp
@@ -210,12 +245,16 @@ class SegmentPipeline:
 
     # ── 阶段 4：段级检测 + 纠正 ──
     def _detect(self, seg_vals, seg_times):
+        """中值滤波检测：平滑值曲线（跟随弯曲），误读=尖峰被中值剔除。
+
+        对每段 i，smoothed = 局部非 None 值的中位数（段索引窗口 ±med_k）。
+        正确段贴合中值（偏差 ≤ 局部带宽），误读尖峰偏差大。门限 =
+        max(局部相邻差中位数, detect_floor) × mult。边缘段（左右一侧无
+        上下文）不 flag —— 中值在单调上升/下降区滞后，视频起止的低/高速段
+        会被窗口拉偏误判（test2 起始 5→8→12 回归源）。None 段恒 suspect。
+        """
         n = len(seg_vals)
-        # 窗口按帧（时间）而非段数。段索引窗口在段大小不均时失效：win3 合并
-        # 噪声边界得到 300+ 帧大段，±30 段会横跨进远处减速区拉低插值期望，
-        # 把正确值误判 suspect（test6 尾部 350→332 误纠错）。用中位帧间距把
-        # win=30 段换算成帧窗口（≈90 帧），大段只取局部邻域；上限 120 帧防
-        # 长时间巡航段把窗口撑大造成锚点稀释。
+        # 局部带宽（相邻差中位数，帧窗口内）
         if n >= 2:
             gaps = np.diff(seg_times)
             med_gap = float(np.median(gaps)) if len(gaps) else 1.0
@@ -223,37 +262,42 @@ class SegmentPipeline:
             med_gap = 1.0
         win_frames = min(self._win * max(med_gap, 1.0), 120.0)
         st = np.asarray(seg_times, dtype=np.float64)
+        bw = [0.0] * n
+        for i in range(n):
+            ti = seg_times[i]
+            lo = int(np.searchsorted(st, ti - win_frames, side="left"))
+            hi = int(np.searchsorted(st, ti + win_frames, side="right"))
+            dvs = [abs(seg_vals[j] - seg_vals[j - 1])
+                   for j in range(lo + 1, hi)
+                   if seg_vals[j] is not None and seg_vals[j - 1] is not None]
+            bw[i] = max(float(np.median(dvs)) if dvs else 0.0,
+                        self._detect_floor)
         suspect = [False] * n
         for i in range(n):
             if seg_vals[i] is None:
                 suspect[i] = True
                 continue
-            ti = seg_times[i]
-            lo = int(np.searchsorted(st, ti - win_frames, side="left"))
-            hi = int(np.searchsorted(st, ti + win_frames, side="right"))
-            lefts = [j for j in range(lo, i) if seg_vals[j] is not None]
-            rights = [j for j in range(i + 1, hi) if seg_vals[j] is not None]
-            exps = []
-            for l in lefts:
-                for r in rights:
-                    span = seg_times[r] - seg_times[l]
-                    if span < 1e-3:
-                        continue
-                    frac = (ti - seg_times[l]) / span
-                    exps.append(seg_vals[l] + (seg_vals[r] - seg_vals[l]) * frac)
-            if not exps:
+            lo = max(0, i - self._med_k)
+            hi = min(n, i + self._med_k + 1)
+            nbrs = [seg_vals[j] for j in range(lo, hi) if seg_vals[j] is not None]
+            if len(nbrs) < 3:
                 suspect[i] = True
                 continue
-            exp = float(np.median(exps))
-            dvs = [abs(seg_vals[j] - seg_vals[j - 1])
-                   for j in range(lo + 1, hi)
-                   if seg_vals[j] is not None and seg_vals[j - 1] is not None]
-            bw = max(float(np.median(dvs)) if dvs else 0.0, 6.0)
-            if abs(seg_vals[i] - exp) > bw * self._mult:
+            lefts = any(seg_vals[j] is not None for j in range(lo, i))
+            rights = any(seg_vals[j] is not None for j in range(i + 1, hi))
+            if not (lefts and rights):
+                continue
+            med = float(np.median(nbrs))
+            if abs(seg_vals[i] - med) > bw[i] * self._mult:
                 suspect[i] = True
         return suspect
 
     def _correct(self, seg_vals, seg_times, suspect):
+        """锚点插值纠正：suspect/None 段取最近可信锚点线性插值。
+
+        anchor_max 限锚点帧距离：近锚点（≤anchor_max 帧）才插值，防远锚点
+        跨弯曲区误插值（低 min_dev 下过度纠正的回归源）。None 段恒插值。
+        """
         out = list(seg_vals)
         n_corr = 0
         for i in range(len(seg_vals)):
@@ -262,20 +306,23 @@ class SegmentPipeline:
                 pass
             elif not suspect[i]:
                 continue
+            ti = seg_times[i]
             la = None
             for j in range(i - 1, -1, -1):
                 if not suspect[j] and seg_vals[j] is not None:
-                    la = j
+                    if ti - seg_times[j] <= self._anchor_max:
+                        la = j
                     break
             ra = None
             for j in range(i + 1, len(seg_vals)):
                 if not suspect[j] and seg_vals[j] is not None:
-                    ra = j
+                    if seg_times[j] - ti <= self._anchor_max:
+                        ra = j
                     break
             interp = None
             if la is not None and ra is not None:
                 span = seg_times[ra] - seg_times[la]
-                frac = (seg_times[i] - seg_times[la]) / span if span > 1e-3 else 0.5
+                frac = (ti - seg_times[la]) / span if span > 1e-3 else 0.5
                 interp = seg_vals[la] + (seg_vals[ra] - seg_vals[la]) * frac
             elif la is not None:
                 interp = seg_vals[la]
@@ -292,17 +339,62 @@ class SegmentPipeline:
         t_total = time.perf_counter()
         self._progress("解码...", 2.0)
         frames, crops, grays, sharp = self._decode_all()
+        self._cancel()
         self._progress("分段...", 73.0)
         segs = self._segment(frames, grays)
+        self._cancel()
         self._progress("段值 OCR...", 73.0)
         seg_vals, rep_frames = self._ocr_segments(segs, crops, sharp)
+        self._cancel()
         seg_times = [seg[len(seg) // 2] for seg in segs]
         suspect = self._detect(seg_vals, seg_times)
         corr, self._n_corr = self._correct(seg_vals, seg_times, suspect)
         self.rows = self._build_rows(frames, segs, corr)
+        self._store_run_state(frames, crops, segs, seg_vals, rep_frames, corr)
         self._write_csv(self.rows, output_path)
         self.timing["total"] = time.perf_counter() - t_total
         self._progress("完成", 100.0)
+        return self.rows
+
+    def _store_run_state(self, frames, crops, segs, seg_vals, rep_frames, corr):
+        """保存 run() 的中间状态，供 GUI 段级 review / finalize 使用。"""
+        self._frames = frames
+        self.crops = crops
+        self._segs = segs
+        self._ocr_vals = list(seg_vals)
+        self._corr_vals = list(corr)
+        self.segments = [
+            {"start": seg[0], "end": seg[-1],
+             "value": corr[i],
+             "ocr_value": seg_vals[i],
+             "rep_frame": rep_frames[i],
+             "rep_crop": crops[rep_frames[i]]}
+            for i, seg in enumerate(segs)
+        ]
+
+    def timing_flat(self) -> dict:
+        """展平 timing dict（丢弃嵌套值），兼容 headless/gui_export 调用。"""
+        return {k: v for k, v in self.timing.items()
+                if isinstance(v, (int, float))}
+
+    def finalize(self, output_path, segment_values=None):
+        """从（可能被用户编辑的）段值重建 rows 并重写 CSV。
+
+        segment_values: 与 self.segments 等长的段修正值；None = 用 run() 的
+        纠正结果。GUI 段级 review 改值后调用，single-pass 重写输出。
+        """
+        if segment_values is None:
+            vals = self._corr_vals
+        else:
+            vals = list(segment_values)
+            if len(vals) != len(self._segs):
+                raise ValueError(f"段值数量 {len(vals)} ≠ 段数 {len(self._segs)}")
+            # corrected 计数相对原始 OCR 值重算
+            self._n_corr = sum(1 for ov, nv in zip(self._ocr_vals, vals)
+                               if nv is not None and ov != nv)
+            self._corr_vals = vals
+        self.rows = self._build_rows(self._frames, self._segs, vals)
+        self._write_csv(self.rows, output_path)
         return self.rows
 
     # ── 阶段 5：构建 rows + 写 CSV ──

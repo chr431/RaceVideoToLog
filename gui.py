@@ -26,9 +26,8 @@ from PySide6.QtGui import (
 )
 
 from ocr_engine import (
-    VideoMetadata, Flag,
+    VideoMetadata,
     format_duration,
-    _reset_backend, _select_backend,
 )
 from gui_analysis import AnalysisTab
 from gui_review import ReviewDialog
@@ -231,7 +230,6 @@ class RaceVideoToLogApp(QMainWindow):
         s["format_ms"].clicked.connect(lambda: self._on_fmt("m/s"))
         s["format_kmh"].clicked.connect(lambda: self._on_fmt("km/h"))
         s["format_mph"].clicked.connect(lambda: self._on_fmt("mile/h"))
-        s["backend_combo"].currentIndexChanged.connect(self._on_backend)
         # Timeline set-to-current buttons
         s["_set_start_btn"].clicked.connect(lambda: s["frame_start_edit"].setText(str(self._slider.value())))
         s["_set_end_btn"].clicked.connect(lambda: s["frame_end_edit"].setText(str(self._slider.value())))
@@ -298,7 +296,7 @@ class RaceVideoToLogApp(QMainWindow):
             self._status_label.setText("导入失败。")
 
     def _load_video(self, path: Path) -> None:
-        from pipeline import open_decord_vr
+        from video_utils import open_decord_vr
 
         _t("load_video: start")
         vr, label = open_decord_vr(str(path))
@@ -405,32 +403,6 @@ class RaceVideoToLogApp(QMainWindow):
 
     # ═══════════════════ OCR 引擎 ═══════════════════
 
-    def _on_backend(self, _idx: int) -> None:
-        _reset_backend(); self._release_engines()
-        keys = config.BACKEND_KEYS
-        key = keys[self._settings["backend_combo"].currentIndex()]
-        actual = _select_backend(key)
-        _backend_labels = {"TensorRT": "TensorRT (GPU)", "CUDA": "CUDA (GPU)", "CPU": "CPU"}
-        self._status_label.setText(f"OCR 后端: {_backend_labels.get(actual, actual)}")
-
-    def _create_ocr(self) -> "OcrEngine":
-        from ocr_native import OcrEngine
-        _reset_backend()
-        keys = config.BACKEND_KEYS
-        key = keys[self._settings["backend_combo"].currentIndex()]
-        _select_backend(key)
-        from gpu_setup import get_engine_type, get_setup_advice
-        _et = get_engine_type()
-
-        _advice = get_setup_advice()
-        if _advice:
-            self._status_label.setText(_advice.split("\n")[0])
-
-        if _et == "tensorrt":
-            self._status_label.setText("正在加载 TensorRT 引擎...")
-            self._status_label.repaint()
-        return OcrEngine(self._settings["model_combo"].currentText(), _et)
-
     def _release_engines(self) -> None:
         for e in ([self.ocr_engine] if self.ocr_engine else []):
             try: del e
@@ -479,7 +451,7 @@ class RaceVideoToLogApp(QMainWindow):
         _spin_fields = {
             "div": s["div_spin"], "target_h": s["target_h_spin"],
             "max_width": s["max_width_spin"],
-            "pad": s["pad_spin"], "buffer": s["buffer_spin"],
+            "pad": s["pad_spin"],
         }
         for key, widget in _spin_fields.items():
             val = parse_csv_setting(key, settings.get(key, ""))
@@ -488,7 +460,6 @@ class RaceVideoToLogApp(QMainWindow):
 
         # ── 下拉框字段 ──
         _combo_map = {
-            "backend":      (s["backend_combo"],      {k: i for i, k in enumerate(config.BACKEND_KEYS)}),
             "model":        (s["model_combo"],         {"v6_small": 0}),
         }
         for key, (combo, mapping) in _combo_map.items():
@@ -523,9 +494,7 @@ class RaceVideoToLogApp(QMainWindow):
             ma = float(s["max_accel_edit"].text())
             fd = s["div_spin"].value(); th = s["target_h_spin"].value()
             mw = s["max_width_spin"].value()
-            pp = s["pad_spin"].value(); nw = s["buffer_spin"].value()
-            be = config.BACKEND_KEYS[s["backend_combo"].currentIndex()]
-            log_level = ["normal", "detailed", "debug"][s["log_level_combo"].currentIndex()]
+            pp = s["pad_spin"].value()
             monitor_enabled = s["monitor_checkbox"].isChecked()
         except ValueError:
             QMessageBox.warning(self, "参数错误", "请检查数值参数。"); return
@@ -536,15 +505,6 @@ class RaceVideoToLogApp(QMainWindow):
         self._export_btn.setEnabled(False); self._cancel_btn.setEnabled(True)
 
         # ── 检查可选依赖可用性 ──
-        if be == "tensorrt":
-            try:
-                import tensorrt  # noqa: F401
-            except ModuleNotFoundError:
-                QMessageBox.warning(self, "TensorRT 未安装",
-                    "你选择了 TensorRT 后端，但 venv 中未安装 tensorrt。\n"
-                    "将自动回退到 CPU 推理。\n\n"
-                    "启用 GPU 加速（需先安装 CUDA Toolkit 13.x + TensorRT 11.x）：\n"
-                    "  .venv\\Scripts\\pip install cuda-python tensorrt")
         try:
             import decord  # noqa: F401
         except ImportError:
@@ -557,14 +517,12 @@ class RaceVideoToLogApp(QMainWindow):
             video_path=self.video_path,
             roi=roi,
             max_speed_kmh=ms, max_accel_mps2=ma,
-            frame_div=fd, target_h=th, pad_px=pp, buffer_size=nw,
+            frame_div=fd, target_h=th, pad_px=pp,
             max_width=mw,
-            backend=be,
             ocr_model=s["model_combo"].currentText(),
             speed_format=self.speed_format,
             frame_start=s["frame_start_edit"].text(),
             frame_end=s["frame_end_edit"].text(),
-            log_level=log_level,
             monitor_enabled=monitor_enabled,
             output_path=Path(out),
             parent=self,
@@ -599,19 +557,13 @@ class RaceVideoToLogApp(QMainWindow):
         out = getattr(self, "_review_output_path", None)
         if pipeline is None or out is None:
             return
-        rows = pipeline.rows
-        confidences = pipeline.confidences
-        # 传入 rows 深副本：对话框内的预览修改不会泄漏到主数据；
-        # 只有 get_corrections() 的确认项在关闭后单点写回。
-        dlg = ReviewDialog(self, [r[:] for r in rows], pipeline.observations,
-            pipeline.raw_frames, confidences,
-            pipeline._max_speed, pipeline._max_accel)
+        # 段级 review：段值 + 代表帧预览，用户可改段值（段内不混速度，改段=改全段）
+        dlg = ReviewDialog(self, pipeline.segments,
+                           pipeline._max_speed, pipeline._max_accel,
+                           pipeline._fps or 1.0)
         _t("final_check: before exec")
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            for fi, v in dlg.get_corrections().items():
-                if 0 <= fi < len(rows):
-                    rows[fi][2] = v
-                    rows[fi][3] = Flag.PINNED
+        accepted = dlg.exec() == QDialog.DialogCode.Accepted
+        corrections = dlg.get_corrections()
         _t("final_check: dialog closed")
         # finalize（写 CSV/统计）在 frozen 环境可能被安全扫描拖慢数秒 →
         # 后台执行，完成后回主线程收尾
@@ -619,7 +571,14 @@ class RaceVideoToLogApp(QMainWindow):
         from PySide6.QtCore import QTimer as _QT
         def _finalize_bg():
             _t("final_check: finalize start")
-            pipeline.finalize(out)
+            if accepted and corrections:
+                vals = [seg["value"] for seg in pipeline.segments]
+                for si, v in corrections.items():
+                    if 0 <= si < len(vals):
+                        vals[si] = v
+                pipeline.finalize(out, vals)
+            else:
+                pipeline.finalize(out)
             _t("final_check: finalize done")
             _QT.singleShot(0, lambda: (self._finish_export(),
                                        self._status_label.setText("最终检查完成 — 结果已保存。"),
@@ -652,25 +611,25 @@ class RaceVideoToLogApp(QMainWindow):
     def _finish_export(self) -> None:
         self._export_btn.setEnabled(True); self._cancel_btn.setEnabled(False)
         self._teardown_export_thread()
-        # Release pipeline memory (raw_frames etc.) on cancel/error
+        # Release pipeline memory (crops etc.) on cancel/error
         pipeline = getattr(self, "_pipeline", None)
         if pipeline is not None:
             import logging
             _log = logging.getLogger("RaceVideoToLog.gui")
             try:
-                from pipeline import _rss_mb, _sum_nbytes
-                _raw_mb = _sum_nbytes([x[1] for x in pipeline.raw_frames]) / 1e6
-                _log.info("[MEM] _finish_export PRE-clear: raw_frames=%d(%.1fMB) rss=%.0fMB",
-                    len(pipeline.raw_frames), _raw_mb, _rss_mb())
+                from video_utils import rss_mb, sum_nbytes
+                _raw_mb = sum_nbytes(list(pipeline.crops.values())) / 1e6
+                _log.info("[MEM] _finish_export PRE-clear: crops=%d(%.1fMB) rss=%.0fMB",
+                    len(pipeline.crops), _raw_mb, rss_mb())
             except Exception:
                 pass
-            pipeline.raw_frames.clear()
+            pipeline.crops.clear()
             if getattr(pipeline, '_diag', None):
                 pipeline._diag.clear()
             import gc; gc.collect()
             try:
-                from pipeline import _rss_mb
-                _log.info("[MEM] _finish_export POST-clear: rss=%.0fMB", _rss_mb())
+                from video_utils import rss_mb
+                _log.info("[MEM] _finish_export POST-clear: rss=%.0fMB", rss_mb())
             except Exception:
                 pass
             self._pipeline = None

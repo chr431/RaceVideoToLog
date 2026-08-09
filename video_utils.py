@@ -159,3 +159,59 @@ def _preprocess_standard(crop: "np.ndarray", target_h: int, pad: int,
         resized = np.pad(resized, ((pad, pad), (pad, pad), (0, 0)),
                          mode="edge")  # 等价 cv2 BORDER_REPLICATE
     return resized
+
+
+def open_decord_vr(video_path, force_cpu: bool = False):
+    """Open video with decord — GPU (NVDEC) preferred, CPU fallback.
+
+    Returns (VideoReader, label) where label is ``'GPU'`` or ``'CPU'``.
+    Set ``DECORD_FORCE_CPU=1`` in the environment or pass *force_cpu=True*
+    to skip GPU even when available.
+    """
+    from decord import VideoReader as _VR
+
+    _vr = None
+    _label = "CPU"
+    _force = force_cpu or _os.environ.get("DECORD_FORCE_CPU", "").strip() == "1"
+
+    if not _force:
+        try:
+            from decord import gpu as _decord_gpu
+            _vr = _VR(str(video_path), ctx=_decord_gpu(0))
+            _label = "GPU"
+        except Exception:
+            pass
+
+    if _vr is None:
+        try:
+            from decord import cpu as _decord_cpu
+            _vr = _VR(str(video_path), ctx=_decord_cpu(0))
+        except ModuleNotFoundError:
+            raise RuntimeError(
+                "decord 未安装（需要自建 fork，PyPI 版不支持）。"
+                "请运行 setup_venv.bat 或从 chr431/decord 获取发布产物到 _decord_build\\")
+        except Exception as _e:
+            raise RuntimeError(f"decord 无法打开视频: {_e}")
+
+    return _vr, _label
+
+
+def rss_mb() -> float:
+    """当前进程 RSS（MB）。psutil 缺失返回 -1。"""
+    try:
+        import psutil
+        return psutil.Process(_os.getpid()).memory_info().rss / (1024 * 1024)
+    except ImportError:
+        return -1.0
+
+
+def sum_nbytes(seq) -> int:
+    """序列中 ndarray/bytes 元素的总字节数（兼容 (frame, bytes) 二元组）。"""
+    s = 0
+    for x in seq:
+        if hasattr(x, "nbytes"):
+            s += x.nbytes
+        elif hasattr(x, "__len__") and len(x) == 2:
+            if hasattr(x[1], "nbytes"):
+                s += x[1].nbytes
+    return s
