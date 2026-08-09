@@ -167,14 +167,20 @@ class SegmentPipeline:
         seg_vals = []
         rep_frames = []
         t0 = time.perf_counter()
-        for k, seg in enumerate(segs):
-            rep = max(seg, key=lambda fi: sharp[fi])
-            proc = _preprocess_standard(crops[rep], self._target_h, self._pad,
-                                        max_width=self._max_width)
-            sv, _rt, _c = extract_speed_value(eng([proc])[0])
-            seg_vals.append(int(sv) if sv is not None and sv >= 0 else None)
-            rep_frames.append(rep)
-            if k % 500 == 0:
+        # 批量：每组 B 个代表帧一次 session.run（TRT batch 能力）
+        B = 16
+        reps = [max(seg, key=lambda fi: sharp[fi]) for seg in segs]
+        for k in range(0, len(segs), B):
+            chunk = segs[k:k + B]
+            procs = [_preprocess_standard(crops[rep], self._target_h, self._pad,
+                                          max_width=self._max_width)
+                     for rep in reps[k:k + B]]
+            results = eng(procs)
+            for rep, res in zip(reps[k:k + B], results):
+                sv, _rt, _c = extract_speed_value(res)
+                seg_vals.append(int(sv) if sv is not None and sv >= 0 else None)
+                rep_frames.append(rep)
+            if k % 1000 == 0:
                 self._progress(f"[OCR] 段: {k}/{len(segs)}",
                                73 + k / max(len(segs), 1) * 15)
         self.timing["ocr"] = time.perf_counter() - t0
