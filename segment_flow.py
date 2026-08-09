@@ -365,6 +365,7 @@ class SegmentPipeline:
         self._corr_vals = list(corr)
         self.segments = [
             {"start": seg[0], "end": seg[-1],
+             "frames": list(seg),  # 该段的采样帧列表（review 逐帧绘制用）
              "value": corr[i],
              "ocr_value": seg_vals[i],
              "rep_frame": rep_frames[i],

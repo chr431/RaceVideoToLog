@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+import numpy as np
+
 import config
 
 from PySide6.QtWidgets import (
@@ -267,23 +269,46 @@ class ReviewDialog(QDialog):
         pt = vb.mapSceneToView(pos)
         x = pt.x()
         cache = getattr(self, '_chart_cache', None)
-        mids = (cache or {}).get('mids') or []
-        if not mids:
+        xs = (cache or {}).get('xs') or []
+        sidx = (cache or {}).get('sidx') or []
+        if not xs:
             return
         import bisect
-        idx = bisect.bisect_left(mids, x)
-        if idx >= len(mids):
-            idx = len(mids) - 1
-        elif idx > 0 and abs(mids[idx - 1] - x) < abs(mids[idx] - x):
+        idx = bisect.bisect_left(xs, x)
+        if idx >= len(xs):
+            idx = len(xs) - 1
+        elif idx > 0 and abs(xs[idx - 1] - x) < abs(xs[idx] - x):
             idx -= 1
-        seg = self._segments[idx]
-        v = self._seg_value(idx)
+        si = sidx[idx]
+        seg = self._segments[si]
+        v = self._seg_value(si)
         self._hover_line.setPos(x)
         self._hover_line.setVisible(True)
-        text = (f"段#{idx} [{seg['start']}-{seg['end']}]: {v:.0f} km/h"
-                if v is not None and v >= 0 else f"段#{idx}: (无效)")
+        text = (f"段#{si} [{seg['start']}-{seg['end']}]: {v:.0f} km/h"
+                if v is not None and v >= 0 else f"段#{si}: (无效)")
         self._hover_text.setText(text)
         self._hover_text.setVisible(True)
+
+    def _frame_data(self):
+        """逐帧数据：所有采样帧的 (x=帧号, y=段值, 段索引, 连线数组)。
+
+        y 取当前段值（含修正预览）；None 段 y=-1（无效标记）。连线数组
+        connect[i]=同段相邻帧 → 段内连线、段间断开。
+        """
+        xs, ys, sidx = [], [], []
+        for si, seg in enumerate(self._segments):
+            v = self._seg_value(si)
+            frames = seg.get('frames') or [seg['start']]
+            xs.extend(frames)
+            ys.extend([v if v is not None else -1] * len(frames))
+            sidx.extend([si] * len(frames))
+        n = len(xs)
+        # connect 数组长度 = N（点数）：True 连接点 i → i+1（同段相连，段间断开）
+        sidx_arr = np.asarray(sidx)
+        conn = np.zeros(n, dtype=bool)
+        if n > 1:
+            conn[:-1] = sidx_arr[1:] == sidx_arr[:-1]
+        return xs, ys, sidx, conn
 
     def _redraw_chart(self, plot=None) -> None:
         if plot is None:
@@ -301,14 +326,12 @@ class ReviewDialog(QDialog):
         cur_corr = frozenset(self._corrections.keys())
         self._chart_corrections_fs = cur_corr
 
-        mids = [(seg['start'] + seg['end']) / 2 for seg in self._segments]
-        speeds = [self._seg_value(i) for i in range(len(self._segments))]
+        xs, ys, sidx, conn = self._frame_data()
         prev_data = self._chart_cache.get('data_hash', 0) if hasattr(self, '_chart_cache') else 0
-        data_hash = hash((len(mids), mids[0] if mids else 0,
-                          mids[-1] if mids else 0,
-                          sum(v if v is not None else -1 for v in speeds),
-                          len(self._corrections)))
-        self._chart_cache = {'mids': mids, 'speeds': speeds, 'data_hash': data_hash}
+        data_hash = hash((len(xs), xs[0] if xs else 0, xs[-1] if xs else 0,
+                          sum(ys), len(self._corrections)))
+        self._chart_cache = {'xs': xs, 'ys': ys, 'sidx': sidx,
+                             'data_hash': data_hash}
         needs_rebuild = (prev_dark != dark or not hasattr(self, '_chart_cache')
                          or prev_corr != cur_corr or prev_data != data_hash)
 
@@ -321,15 +344,22 @@ class ReviewDialog(QDialog):
             self._chart_artists = {}
 
             gray_c = COLOR_LIGHT_GRAY if not dark else COLOR_LIGHTER_GRAY
+            # 段连线（step 曲线：同段相邻帧连线，段间断开）—— 显示全部点
+            line = pg.PlotDataItem(xs, ys, connect=conn,
+                                   pen=pg.mkPen(gray_c, width=1))
+            plot.addItem(line)
+            self._chart_artists['seg_line'] = line
+
+            # 散点分层：正常灰 / 需审核橙 / 已修正蓝
             gx, gy, gi, ox, oy, oi = [], [], [], [], [], []
-            for i in range(len(self._segments)):
-                v = speeds[i]
-                if i in self._corrections:
+            for k in range(len(xs)):
+                si = sidx[k]
+                if si in self._corrections:
                     continue
-                if v is None or v < 0 or self._needs_review(i):
-                    ox.append(mids[i]); oy.append(v if v is not None else 0); oi.append(i)
+                if ys[k] < 0 or self._needs_review(si):
+                    ox.append(xs[k]); oy.append(ys[k]); oi.append(si)
                 else:
-                    gx.append(mids[i]); gy.append(v); gi.append(i)
+                    gx.append(xs[k]); gy.append(ys[k]); gi.append(si)
             gray = pg.ScatterPlotItem(size=4, brush=make_brush(gray_c, 100), pen=None)
             gray.setData(x=gx, y=gy, data=gi)
             gray.sigClicked.connect(self._on_scatter_clicked)
@@ -374,17 +404,22 @@ class ReviewDialog(QDialog):
         cur = self._chart_artists.get('cur_highlight')
         if corr is None or cur is None:
             return
-        mids = self._chart_cache['mids']
-        cx = [mids[si] for si in self._corrections if si < len(mids)]
-        cy = [self._corrections[si] for si in self._corrections if si < len(mids)]
+        cache = self._chart_cache
+        xs = cache.get('xs') or []
+        ys = cache.get('ys') or []
+        sidx = cache.get('sidx') or []
+        # 修正蓝点：已修正段的全部帧
+        corr_set = set(self._corrections.keys())
+        cx = [xs[k] for k in range(len(xs)) if sidx[k] in corr_set]
+        cy = [ys[k] for k in range(len(xs)) if sidx[k] in corr_set]
         corr.setData(x=cx, y=cy)
+        # 当前红点：选中段的全部帧（水平 run）
         si = self._current_seg
-        if si < len(mids):
-            target = self._seg_value(si)
-            cur.setData(x=[mids[si]], y=[target if target is not None else 0])
-            cur.setBrush(make_brush(COLOR_BLUE if si in self._corrections else COLOR_RED))
-        else:
-            cur.setData(x=[], y=[])
+        sel = [k for k in range(len(xs)) if sidx[k] == si]
+        cx2 = [xs[k] for k in sel]
+        cy2 = [ys[k] for k in sel]
+        cur.setData(x=cx2, y=cy2)
+        cur.setBrush(make_brush(COLOR_BLUE if si in self._corrections else COLOR_RED))
 
     def _on_scatter_clicked(self, scatter, points) -> None:
         for pt in points:
