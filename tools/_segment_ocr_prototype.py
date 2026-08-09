@@ -79,14 +79,33 @@ def calibrate_thresh(crops: dict, frames: list) -> int:
     return int(np.median(ths))
 
 
-def segment(crops: dict, frames: list, thresh: int, T: float) -> list[list]:
-    """按二值化 diff 分段：holding 边（frac<T）连接成段。"""
+def cluster_max(diff: np.ndarray) -> float:
+    """diff 掩码的最大连通分量大小（8-连通）。"""
+    from scipy import ndimage
+    n = int(diff.sum())
+    if n == 0:
+        return 0.0
+    labels, nlab = ndimage.label(diff, structure=np.ones((3, 3)))
+    sizes = ndimage.sum(diff, labels, range(1, nlab + 1))
+    return float(sizes.max()) if nlab > 0 else 0.0
+
+
+def segment(crops: dict, frames: list, thresh: int, T: float,
+            mode: str = "frac", gamma: float = 0.0) -> list[list]:
+    """按二值化 diff 分段。mode='frac'：像素翻转占比<T；mode='cluster'：
+    最大连通分量<C（数字变化聚集、噪声分散，聚类判别更强）。"""
     edges = []
     for i in range(len(frames) - 1):
         a, b = crops[frames[i]], crops[frames[i + 1]]
         ga, gb = gray(a), gray(b)
-        frac = float(((ga > thresh) != (gb > thresh)).mean())
-        edges.append(frac < T)
+        if gamma > 0:
+            ga = (255.0 * np.power(ga.astype(np.float32) / 255.0, gamma)).astype(np.uint8)
+            gb = (255.0 * np.power(gb.astype(np.float32) / 255.0, gamma)).astype(np.uint8)
+        diff = (ga > thresh) != (gb > thresh)
+        if mode == "cluster":
+            edges.append(cluster_max(diff) < T)
+        else:
+            edges.append(float(diff.mean()) < T)
     segs = []
     s = 0
     for i in range(len(frames) - 1):
@@ -103,6 +122,11 @@ def main() -> None:
     ap.add_argument("--model", default="tiny", choices=["tiny", "small"])
     ap.add_argument("--k", type=int, default=1, help="每段 OCR 代表帧数（1 或 3 投票）")
     ap.add_argument("--max-frames", type=int, default=0)
+    ap.add_argument("--mode", default="frac", choices=["frac", "cluster"],
+                    help="分段 diff 判别：占比 / 最大连通分量")
+    ap.add_argument("--gamma", type=float, default=0.0, help="diff 计算 gamma（0=不启用）")
+    ap.add_argument("--T", type=float, default=0.002,
+                    help="frac 模式阈值；cluster 模式 = max 分量上限")
     args = ap.parse_args()
 
     from ocr_native import OcrEngine
@@ -117,7 +141,8 @@ def main() -> None:
             frames = frames[: args.max_frames]
         crops = read_crops(vdir, frames)
         thresh = calibrate_thresh(crops, frames)
-        segs = segment(crops, frames, thresh, 0.002)
+        segs = segment(crops, frames, thresh, args.T, mode=args.mode,
+                       gamma=args.gamma)
 
         # 逐帧基线（正常输入，生产 max_width）
         base_ok = base_err = 0
@@ -162,7 +187,8 @@ def main() -> None:
         dt = time.perf_counter() - t0
         tot = ok + err
         red = n_ocr / base_tot
-        print(f"{v}: {len(frames)}帧 → {len(segs)}段 ({red*100:.0f}% OCR调用, {n_ocr}次)")
+        print(f"{v}: {len(frames)}帧 → {len(segs)}段 ({red*100:.0f}% OCR调用, {n_ocr}次) "
+              f"[{args.mode}{'+g'+str(args.gamma) if args.gamma else ''} T={args.T}]")
         print(f"  逐帧基线 {args.model}: {base_ok} ({base_ok/base_tot*100:.2f}%) err {base_err}")
         print(f"  分段 k={args.k}     : {ok} ({ok/tot*100:.2f}%) err {err} | "
               f"OCR {dt/n_ocr*1000:.1f}ms/段")
