@@ -1,5 +1,6 @@
 """视频/数据通用工具。"""
 from __future__ import annotations
+import os as _os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -149,6 +150,11 @@ def _preprocess_standard(crop: "np.ndarray", target_h: int, pad: int,
         resized = _np_resize(crop, new_w, target_h)
     else:
         resized = crop.astype(np.float32)
+    # 实验：gamma 对比度增强（RVTOL_OCR_GAMMA=2.0 等），放大高段分离
+    # （白字黄底等背景色块场景），平滑无裁剪不侵蚀笔画。实测三视频 raw OCR 全提升。
+    _g = _os.environ.get("RVTOL_OCR_GAMMA")
+    if _g:
+        resized = 255.0 * np.power(resized / 255.0, float(_g))
     if pad > 0:
         resized = np.pad(resized, ((pad, pad), (pad, pad), (0, 0)),
                          mode="edge")  # 等价 cv2 BORDER_REPLICATE
