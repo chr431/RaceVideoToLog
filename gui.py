@@ -40,6 +40,26 @@ from qfluentwidgets import (setTheme, Theme, isDarkTheme,
     PushButton, PrimaryPushButton,
     BodyLabel, StrongBodyLabel, CaptionLabel, Slider, ProgressBar, CompactSpinBox, Pivot)
 
+# ── qfluentwidgets watcher 保护 ──
+# widget 销毁时 Paint/DynamicPropertyChange 事件在途会触发
+# "Internal C++ object already deleted"（PySide6 已知问题，真实显示器上
+# 关闭窗口/对话框时都可能出现）。捕获 RuntimeError 并忽略，避免 stderr 刷屏。
+# 这是对第三方包内部事件过滤器的安全护栏，不影响正常样式应用。
+import qfluentwidgets.common.style_sheet as _qfw_ss  # noqa: E402
+
+for _watcher_cls in (_qfw_ss.CustomStyleSheetWatcher,
+                     _qfw_ss.DirtyStyleSheetWatcher):
+    _orig_event_filter = _watcher_cls.eventFilter
+
+    def _safe_event_filter(self, obj, e, _orig=_orig_event_filter):
+        try:
+            return _orig(self, obj, e)
+        except RuntimeError:
+            # 底层 C++ 对象已删除（widget 销毁竞态）→ 不处理该事件
+            return False
+
+    _watcher_cls.eventFilter = _safe_event_filter
+
 
 def _t(mark: str) -> None:
     """GUI 计时打点：写 %LOCALAPPDATA%/RaceVideoToLog/gui_timing.log（排查 EXE 卡顿）。"""
@@ -275,6 +295,36 @@ class RaceVideoToLogApp(QMainWindow):
         def _update_icon(dark: bool) -> None:
             self._theme_btn.setText("☀" if not dark else "☾")
         ThemeManager.register(_update_icon)
+        # 保存句柄，closeEvent 时注销，避免窗口销毁后 ThemeManager 仍触发
+        self._theme_callbacks = [_update_bg, _update_titlebar, _update_icon]
+
+    def closeEvent(self, event) -> None:
+        """关闭前清理：取消导出线程 + 注销主题回调。
+
+        防止导出线程/主题回调在窗口销毁后访问已删除 widget（"Internal
+        C++ object already deleted" 的常见来源）。全程防御式，避免 closeEvent
+        自身异常放大事件过滤器级联错误。
+        """
+        try:
+            self._cancel_export()
+        except Exception:
+            pass
+        th = getattr(self, "_export_thread", None)
+        if th is not None:
+            try:
+                th.wait(3000)  # 取消标志已设，worker 应在解码检查点退出
+            except Exception:
+                pass
+            try:
+                self._teardown_export_thread()
+            except Exception:
+                pass
+        for cb in getattr(self, "_theme_callbacks", []):
+            try:
+                ThemeManager.unregister(cb)
+            except Exception:
+                pass
+        super().closeEvent(event)
 
     def _toggle_theme(self) -> None:
         from qfluentwidgets import qconfig
