@@ -90,7 +90,7 @@ def build_settings_panel(parent) -> dict:
     pl.addWidget(widgets["pad_spin"], 3, 3)
     pl.addWidget(BodyLabel("OCR 模型"), 4, 0)
     widgets["model_combo"] = ComboBox()
-    widgets["model_combo"].addItems(["v6_tiny", "v6_small"])
+    widgets["model_combo"].addItems(["v6_small"])
     widgets["model_combo"].setCurrentIndex(0)
     widgets["model_combo"].setFixedWidth(95)
     pl.addWidget(widgets["model_combo"], 4, 1)

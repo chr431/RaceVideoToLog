@@ -8,8 +8,7 @@ MPS_TO_KMH: float = 3.6          # m/s → km/h 转换因子
 
 # ═══════════════════ 用户可配置默认值 ═══════════════════
 DEFAULT_BACKEND: str = "auto"           # GPU 后端 (auto / tensorrt / cpu)
-DEFAULT_OCR_MODEL: str = "v6_tiny"     # 主 OCR 模型
-DEFAULT_REOCR_MODEL: str = "v6_small"  # 重 OCR 模型（自动推导：主 tiny → 用此模型；主 small → 无重 OCR）
+DEFAULT_OCR_MODEL: str = "v6_small"     # 唯一 OCR 模型（v2.13 起移除 tiny / 重 OCR）
 DEFAULT_SPEED_FORMAT: str = "km/h"     # 速度单位 (km/h / m/s / mile/h)
 DEFAULT_FRAME_DIV: int = 2             # 采样间隔 (1=每帧, 2=隔帧)
 DEFAULT_MAX_SPEED: float = 400.0       # 最大速度 (km/h)
@@ -43,10 +42,10 @@ OCR_FRAME_BATCH: int = 6               # 帧批处理大小（≤6 兼容 TRT pr
 #   2.45%，96 时 0.19%/2.42%，256 时 test5 0.14%）。
 # - small=224：test6 err 0.09%（192 时 0.16%，48~96 时 0.69~1.19% —— small
 #   并不窄宽鲁棒，宽 pad 更准；256 与 224 精度相同但更慢）。
-# 跨模型 tiny+small 时 re-OCR(small@224) 让 test6 err 0.47%→0.38%。
-OCR_PAD_WIDTH_MIN: int = 192
+# - small=224：test6 err 0.09%（192 时 0.16%，48~96 时 0.69~1.19% —— small
+#   并不窄宽鲁棒，宽 pad 更准；256 与 224 精度相同但更慢）。
+OCR_PAD_WIDTH_MIN: int = 224
 OCR_PAD_WIDTH_MIN_BY_MODEL: dict[str, int] = {
-    "v6_tiny": 192,
     "v6_small": 224,
 }
 

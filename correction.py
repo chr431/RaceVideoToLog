@@ -309,87 +309,11 @@ def _auto_expand_digits(raw_text: str, max_speed_kmh: float) -> list[int]:
     return candidates
 
 
-def _reocr_crop(crop_bgr: "np.ndarray", ocr: "OcrEngine", max_speed_kmh: float,
-                cache: dict | None = None, max_width: int = 0) -> set:
-    cache = cache if cache is not None else {}
-    if crop_bgr is not None and crop_bgr.size > 0:
-        raw = crop_bgr.tobytes()
-        cache_key = hash(raw[:256])
-    else:
-        cache_key = None
-    if cache_key is not None and cache_key in cache:
-        return cache[cache_key]
-    candidates: set[int] = set()
-    if crop_bgr is None or crop_bgr.size == 0:
-        return candidates
-    h, w = crop_bgr.shape[:2]
-    if h <= 0 or w <= 0: return candidates
-    # Single-height re-OCR: multi-height (24,32,48) tested, no improvement
-    # over using the main pipeline target_h=48 alone.  Removes ~0.5s latency.
-    # 与主识别共用 _preprocess_standard：max_width 压缩（扁字体）必须一致，
-    # 否则 re-OCR 对扁数字读不出正确值（实测 bug）。
-    from video_utils import _preprocess_standard
-    proc = _preprocess_standard(crop_bgr, 48, 0, max_width=max_width)
-    res = ocr([proc])[0]
-    sv, rt, _conf = extract_speed_value(res)
-    if sv is not None and sv <= max_speed_kmh:
-        candidates.add(int(sv))
-    if cache_key is not None:
-        cache[cache_key] = candidates
-    return candidates
-
-
 # ═══════════════════ Candidate generation ═══════════════════
 
-def _prewarm_reocr(frames: "set[int] | list[int]", raw_frames: list,
-                   ocr: "OcrEngine", cache: dict, max_speed_kmh: float,
-                   max_width: int = 0) -> None:
-    """批量 re-OCR 预热：对 frames 中未缓存帧一次性批推理填 cache。
-
-    供 correct_errors 和 pipeline（主 OCR 阶段后台线程）复用。
-    线程安全：与 correct_errors 的预热段并发调用时，同一帧的结果相同
-    （同模型同预处理），重复推理仅浪费、不产生错误。
-    """
-    from video_utils import _preprocess_standard
-    from ocr_engine import ocr_rec_batch, extract_speed_value as _esv
-    _batch_frames: list[int] = []
-    _batch_procs: list = []
-    for fi in sorted(frames):
-        if fi >= len(raw_frames):
-            continue
-        crop_bgr = raw_frames[fi][1]
-        if crop_bgr is None or crop_bgr.size == 0:
-            continue
-        raw = crop_bgr.tobytes()
-        ck = hash(raw[:256])
-        if ck in cache:
-            continue
-        _batch_frames.append(fi)
-        _batch_procs.append(_preprocess_standard(crop_bgr, 48, 0, max_width=max_width))
-    if not _batch_procs:
-        return
-    # 分批推理（每批 ≤64 帧）：一次喂全部帧会在 __call__ 内产生
-    # (B, seq, 6906) 级中间数组（整批 argmax int64 峰值 ~2.2GB/千帧，
-    # Windows 堆不归还 → RSS 保持高位）。分批后峰值 ~600MB。
-    _results: list = []
-    for _s0 in range(0, len(_batch_procs), 64):
-        _results.extend(ocr_rec_batch(ocr, _batch_procs[_s0:_s0 + 64]))
-    for fi, res in zip(_batch_frames, _results):
-        crop_bgr = raw_frames[fi][1]
-        raw = crop_bgr.tobytes()
-        sv, rt, _conf = _esv(res)
-        # 失败帧也写空集：同一帧重试结果必然相同（同模型同预处理），
-        # 避免 _reocr_crop 逐帧重试推理（CPU 低质帧多时曾
-        # 每帧 ~8.7ms × 数百帧重试）
-        if sv is not None and sv <= max_speed_kmh:
-            cache[hash(raw[:256])] = {int(sv)}
-        else:
-            cache[hash(raw[:256])] = set()
-
-
 def _generate_candidates(fi: int, rows: list, observations: list, raw_frames: list,
-                         ocr: "OcrEngine", pinned_set: set, times: list,
-                         max_speed_kmh: float, reocr_cache: dict,
+                         pinned_set: set, times: list,
+                         max_speed_kmh: float,
                          split_results: dict[int, str] | None,
                          fps: float,
                          max_accel_mps2: float | None = None,
@@ -405,12 +329,6 @@ def _generate_candidates(fi: int, rows: list, observations: list, raw_frames: li
         protected_set.add(raw_val)
 
     obs = observations[min(fi, len(observations) - 1)]
-
-    if fi < len(raw_frames) and ocr is not None:
-        reocr_set = _reocr_crop(raw_frames[fi][1], ocr, max_speed_kmh, cache=reocr_cache, max_width=max_width)
-        for cv in sorted(reocr_set):
-            if 0 <= cv <= max_speed_kmh and cv not in protected_set:
-                protected.append(cv); protected_set.add(cv)
 
     if split_results and fi in split_results:
         try:
@@ -753,10 +671,9 @@ def _force_median_smooth(rows: list, times: list, max_speed_kmh: float,
 # ═══════════════════ Main correction pipeline ═══════════════════
 
 def correct_errors(rows: list, observations: list, raw_frames: list,
-                   ocr: "OcrEngine", confidence_scores: list[dict],
+                   confidence_scores: list[dict],
                    times: list[float], max_speed_kmh: float, max_accel_mps2: float,
                    pinned: set[int] | None = None,
-                   reocr_cache: dict | None = None,
                    split_results: dict[int, str] | None = None,
                    fps: float = 1.0, log_fn: "Callable | None" = None,
                    progress_fn: "Callable | None" = None,
@@ -768,7 +685,6 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
     for pi in pinned:
         if rows[pi][3] < Flag.HIGH_TRUST: rows[pi][3] = Flag.PINNED
     pinned_set = pinned
-    cache: dict = reocr_cache if reocr_cache is not None else {}
     correct_threshold = AUTO_CORRECT_THRESHOLD
 
     conf_by_idx: dict[int, float] = {}
@@ -796,20 +712,10 @@ def correct_errors(rows: list, observations: list, raw_frames: list,
     candidates_by_frame: dict[int, list[float]] = {}
     total_correct = len(correction_frames)
 
-    # ── re-OCR 批量预热：候选生成前一次性批推理所有未缓存帧 ──
-    # _reocr_crop 逐帧调用会浪费 session.run 固定开销（~3x 慢）。
-    # 先批量预处理+推理填 cache，逐帧循环全部命中。
-    # （pipeline 可在主 OCR 阶段提前启动 _prewarm_reocr 并行预热，
-    #   此处只补剩余未缓存帧 —— cache 检查天然增量。）
-    if raw_frames and ocr is not None:
-        with STAGE.stage("corr.reocr_prewarm"):
-            _prewarm_reocr(correction_frames, raw_frames, ocr, cache,
-                           max_speed_kmh, max_width)
-
     with STAGE.stage("corr.candidates"):
         for idx, fi in enumerate(sorted(correction_frames)):
-            cands = _generate_candidates(fi, rows, observations, raw_frames, ocr, pinned_set,
-                times, max_speed_kmh, cache, split_results,
+            cands = _generate_candidates(fi, rows, observations, raw_frames, pinned_set,
+                times, max_speed_kmh, split_results,
                 fps=fps,
                 max_accel_mps2=max_accel_mps2, max_width=max_width)
             if cands: candidates_by_frame[fi] = cands

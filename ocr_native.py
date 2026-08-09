@@ -43,27 +43,22 @@ class OcrEngine:
     """PP-OCRv6 rec 原生引擎（ONNX / TensorRT 双后端）。
 
     Args:
-        variant: "v6_tiny" | "v6_small"
+        variant: "v6_small"（唯一模型，v2.13 起）
         engine_type: "onnxruntime" | "tensorrt"
     """
 
-    def __init__(self, variant: str = "v6_tiny",
+    def __init__(self, variant: str = "v6_small",
                  engine_type: str = "onnxruntime",
                  progress_cb: "Callable[[str], None] | None" = None) -> None:
         """progress_cb: 构建引擎等耗时阶段的进度消息回调 (str)。"""
         self._variant = variant
         self._progress_cb = progress_cb
-        # 推理锁：主 OCR 线程 + 后台重 OCR 预热线程并发调用同一引擎。
-        # 注：重 OCR 自动推导（tiny→small / small→无）后主/重引擎必不同，
-        # 但保留此锁以防未来同引擎并发路径复现 Myelin 崩溃
-        # （TRT IExecutionContext 非线程安全 —— execute_v2 报 "already
-        # loaded binary graph" 并级联 CUDA illegal access）。
         self._lock = threading.Lock()
         size = variant.replace("v6_", "")
         models = _models_dir()
 
         # ── 字符表（与 rapidocr CTCLabelDecode.get_character 一致）──
-        dict_name = "ppocrv6_tiny_dict.txt" if size == "tiny" else "ppocrv6_dict.txt"
+        dict_name = "ppocrv6_dict.txt"
         with open(models / dict_name, "rb") as f:
             chars = [ln.decode("utf-8").strip("\n").strip("\r\n")
                      for ln in f.readlines()]

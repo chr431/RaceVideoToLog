@@ -489,7 +489,7 @@ class RaceVideoToLogApp(QMainWindow):
         # ── 下拉框字段 ──
         _combo_map = {
             "backend":      (s["backend_combo"],      {k: i for i, k in enumerate(config.BACKEND_KEYS)}),
-            "model":        (s["model_combo"],         {"v6_tiny": 0, "v6_small": 1}),
+            "model":        (s["model_combo"],         {"v6_small": 0}),
         }
         for key, (combo, mapping) in _combo_map.items():
             val = parse_csv_setting(key, settings.get(key, ""))

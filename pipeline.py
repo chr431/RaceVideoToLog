@@ -122,11 +122,6 @@ class ProcessingPipeline:
         self._backend = backend
         self._log_level = log_level  # "normal" | "detailed" | "debug"
         self._ocr_model = ocr_model
-        # 重 OCR 自动推导（用户不可选）：主 tiny → small（跨模型第二意见，
-        # 实测 test5 0.29%→0.04%、test6 1.87%→0.47% 精度 4x）；主 small →
-        # None（同引擎重 OCR 净效果为零，实测 test6 0.16% 与无重 OCR 一致）。
-        self._reocr_model: str | None = (
-            config.DEFAULT_REOCR_MODEL if self._ocr_model == "v6_tiny" else None)
         self._speed_format = speed_format
         self._frame_start = frame_start
         self._cancel_check = cancel_check
@@ -139,7 +134,6 @@ class ProcessingPipeline:
 
         # 状态
         self._ocr: "OcrEngine | None" = None
-        self._reocr: "OcrEngine | None" = None  # 重 OCR 引擎
         self._raw_frames: list[tuple[float, np.ndarray]] = []
         self._observations: list[SpeedObservation] = []
         self._rows: list[list] = []
@@ -148,18 +142,12 @@ class ProcessingPipeline:
         self._segments: list[dict] = []
         # ── 性能计时 ──
         self._timing: dict[str, float] = {}
-        # ── 重 OCR 缓存（绑定到 Pipeline 实例生命周期）──
-        self._reocr_cache: dict[int, set[float]] = {}
-        # 后台 re-OCR 预热线程（主 OCR 阶段提前启动，correction 前接力补帧）
-        self._prewarm_thread: "threading.Thread | None" = None
-        self._prewarm_queue: "Queue | None" = None
         # Phase 1 流式检测器（主 OCR 批处理时增量计算局部信号）
         self._detector: "object | None" = None
         self._fps: float = 0.0
         self._error_report: "object | None" = None
         self._detection_confidence: list[dict] = []
         self._confidences: list[dict] = []
-        self._prewarm_t0: float = 0.0  # 后台预热线程启动时刻（prewarm 计时）
         self.last_output_path: Path | None = None
 
     # ── 公开只读属性（消除跨模块私有访问）──
@@ -265,11 +253,6 @@ class ProcessingPipeline:
                 self._emit("加载 TensorRT 引擎...", 1.5)
             self._ocr = OcrEngine(self._ocr_model, _et,
                                   progress_cb=lambda m: self._emit(m, 2.0))
-            # 重 OCR 引擎由 __init__ 自动推导（tiny→small / small→None），
-            # 主/重模型必然不同 → 独立引擎（同引擎共享路径已无意义）。
-            if self._reocr_model:
-                self._reocr = OcrEngine(self._reocr_model, _et,
-                                        progress_cb=lambda m: self._emit(m, 3.0))
         return self._ocr
 
     def _correct(self, progress_base: float, progress_span: float) -> None:
@@ -295,32 +278,15 @@ class ProcessingPipeline:
         n_med = sum(1 for c in self._detection_confidence if 30 <= c['score'] < 70)
         n_high = sum(1 for c in self._detection_confidence if c['score'] >= 70)
         logger.info("Phase 1: %d frames high=%d medium=%d low=%d", n, n_high, n_med, n_low)
-        # 后台 re-OCR 预热接力：把最终 correction_frames 全量提交给预热线程
-        # （线程内部按 cache 去重，跳过中部已处理帧），correction 阶段不再
-        # 串行推理 —— 预热时间完全移出 correction 墙钟。
-        if self._prewarm_thread is not None and self._prewarm_queue is not None:
-            _all_frames = [i for i, c in enumerate(self._detection_confidence)
-                           if c["score"] < 70 and i < len(self._raw_frames)]
-            if _all_frames:
-                self._prewarm_queue.put(_all_frames)
-            self._prewarm_queue.put(None)
-            self._prewarm_thread.join()
-            self._prewarm_thread = None
-            self._prewarm_queue = None
-            if self._prewarm_t0:
-                STAGE.accumulate("prewarm", _time.perf_counter() - self._prewarm_t0)
-                self._prewarm_t0 = 0.0
         self._emit("Phase 2: correction...", progress_base + 2.0)
         def _prog(done, total):
             if done % max(1, total // 5) != 0 and done != total: return
             self._emit(f"corr: {done}/{total}", progress_base + 2.0 + (done/max(total,1))*progress_span)
-        _reocr = self._reocr  # None = 主模型 small 无重 OCR（correct_errors 处理）
         self._rows, self._detection_confidence = correct_errors(
-            self._rows, self._observations, self._raw_frames, _reocr,
+            self._rows, self._observations, self._raw_frames,
             self._detection_confidence, times,
             self._max_speed, self._max_accel,
             pinned=self._pinned if self._pinned else None,
-            reocr_cache=self._reocr_cache,
             split_results=self._split_results if self._split_results else None,
             fps=self._fps, progress_fn=_prog,
             notes=self._diag_notes if self._diag else None,
@@ -443,7 +409,6 @@ class ProcessingPipeline:
         _collect_diag = self._log_level in ("detailed", "debug")
         diag: list[dict] = []
         done = 0
-        _prewarm_started = False
         _inference_ms = 0.0  # accumulator: OCR inference time (ms)
         est_total = (_end_limit - (f_start or 0)) // frame_step
         # ── 批处理识别：一次 session.run 处理多帧，摊销每帧固定开销 ──
@@ -454,7 +419,7 @@ class ProcessingPipeline:
 
         def _flush_batch() -> None:
             """对 _batch 内所有帧做一次批识别，追加到 observations/diag。"""
-            nonlocal done, _inference_ms, _prewarm_started
+            nonlocal done, _inference_ms
             if not _batch:
                 return
             items = _batch[:]
@@ -491,61 +456,12 @@ class ProcessingPipeline:
                     _label = f"{self._video_backend_actual} + {get_gpu_backend()}"
                     self._emit(f"[{_label}] OCR: {done}/{est_total}", pct)
                 # 批量 advance：每 PHASE1_BATCH 帧算一次信号（中位数插值/带宽
-                # 跨帧向量化），而非逐帧 —— 实测 98→24µs/帧（4.1x）。prewarm
-                # 触发前与 finalize 会补算，尾部 WINDOW 帧由 finalize 兜底。
+                # 跨帧向量化），而非逐帧 —— 实测 98→24µs/帧（4.1x）。finalize
+                # 会补算，尾部 WINDOW 帧由 finalize 兜底。
                 if done % 64 == 0 or done == est_total:
                     _t_p1 = _time.perf_counter()
                     _detector.advance(observations)
                     STAGE.accumulate("phase1", _time.perf_counter() - _t_p1)
-                # ── re-OCR 预热提前启动（流式 Phase1 信号就绪区 ~50% 时）──
-                # 预热是 correction 的瓶颈（~4s，占 correction ~97%）。Phase 1
-                # 的局部信号随主 OCR 批处理增量计算（IncrementalDetector），
-                # 主 OCR 进行到 50% 时已就绪的信号是"精确"置信度（与整段
-                # detect_errors 逐位一致）→ 直接取中部 correction 帧启动后台
-                # 预热；最终 correction_frames 由 correction 前接力入队补上
-                # （线程按 cache 去重）。线程全程异常保护：失败时 correction
-                # 内串行补预热（cache 机制兜底，功能正确）。
-                if (not _prewarm_started and done >= int(est_total * 0.50)
-                        and self._reocr is not None):
-                    _prewarm_started = True
-                    try:
-                        # 批量 advance 下 confidence 可能滞后 ~64 帧 → 补算一次
-                        _detector.advance(observations)
-                        _frames = {c["index"] for c in _detector.confidence_so_far()
-                                   if c["score"] < 70}
-                        if _frames:
-                            from queue import Queue as _Queue
-                            from correction import _prewarm_reocr
-
-                            def _prewarm_loop(fq: "_Queue",
-                                              rf: list, ocr, cache,
-                                              ms, mw) -> None:
-                                """接力式预热：队列消费完中部帧后继续处理
-                                correction 阶段提交的尾部差集，收到 None 退出。"""
-                                while True:
-                                    batch = fq.get()
-                                    if batch is None:
-                                        break
-                                    try:
-                                        _prewarm_reocr(batch, rf, ocr, cache,
-                                                       ms, mw)
-                                    except Exception as _e:
-                                        logger.warning("后台 re-OCR 接力失败: %s", _e)
-
-                            self._prewarm_queue = _Queue()
-                            _th = threading.Thread(
-                                target=_prewarm_loop,
-                                args=(self._prewarm_queue, self._raw_frames,
-                                      self._reocr, self._reocr_cache,
-                                      self._max_speed, self._max_width),
-                                daemon=True)
-                            self._prewarm_t0 = _time.perf_counter()
-                            _th.start()
-                            self._prewarm_queue.put(_frames)
-                            self._prewarm_thread = _th
-                            logger.info("后台 re-OCR 预热启动: %d 帧", len(_frames))
-                    except Exception as _e:
-                        logger.warning("后台 re-OCR 预热启动失败: %s", _e)
 
         while True:
             item = q.get()
@@ -623,8 +539,6 @@ class ProcessingPipeline:
                         f", max_width={self._max_width}"
                         f", pad={self._pad}, buffer={self._buffer_size}\n")
             fh.write(f"# backend={self._backend_actual}, model={self._ocr_model}")
-            reocr_info = f", reocr_model={self._reocr_model}" if self._reocr_model and self._reocr_model != self._ocr_model else ""
-            fh.write(f"{reocr_info}")
             fh.write(f", video_backend={self._video_backend_actual or 'decord'}\n")
             if n_pinned > 0:
                 fh.write(f"# pinned={n_pinned}\n")

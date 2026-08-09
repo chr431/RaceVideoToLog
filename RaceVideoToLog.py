@@ -41,8 +41,8 @@ def main() -> None:
         help="预处理最大宽度 px（0=不限）。扁宽字体设为 96 可改善识别")
     parser.add_argument("--buffer", type=int, default=config.DEFAULT_BUFFER_SIZE)
     parser.add_argument("--backend", choices=config.BACKEND_KEYS, default=config.DEFAULT_BACKEND)
-    parser.add_argument("--ocr-model", choices=["v6_tiny", "v6_small"], default=config.DEFAULT_OCR_MODEL,
-        help="主 OCR 模型 (默认 tiny)；重 OCR 自动推导：tiny→small / small→无")
+    parser.add_argument("--ocr-model", choices=["v6_small"], default=config.DEFAULT_OCR_MODEL,
+        help="OCR 模型（v2.13 起唯一 v6_small，无重 OCR）")
     parser.add_argument("-o", "--output", type=str)
     parser.add_argument("--frame-start", type=int, metavar="N")
     parser.add_argument("--frame-end", type=int, metavar="N")
