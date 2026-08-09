@@ -223,7 +223,10 @@ class SegmentPipeline:
         out = list(seg_vals)
         n_corr = 0
         for i in range(len(seg_vals)):
-            if not suspect[i] or seg_vals[i] is None:
+            if seg_vals[i] is None:
+                # None 段（OCR 未读出）→ 必须插值，否则帧输出 -1
+                pass
+            elif not suspect[i]:
                 continue
             la = None
             for j in range(i - 1, -1, -1):
@@ -244,10 +247,28 @@ class SegmentPipeline:
                 interp = seg_vals[la]
             elif ra is not None:
                 interp = seg_vals[ra]
-            if interp is not None and abs(interp - seg_vals[i]) > self._min_dev:
-                out[i] = round(interp)
-                n_corr += 1
+            if interp is not None:
+                if seg_vals[i] is None or abs(interp - seg_vals[i]) > self._min_dev:
+                    out[i] = round(interp)
+                    n_corr += 1
         return out, n_corr
+
+    # ── 主入口（顺序：解码 → 分段 → 段OCR → 检测纠正 → CSV）──
+    def run(self, output_path):
+        t_total = time.perf_counter()
+        self._progress("解码 + 分段...", 2.0)
+        frames, crops, grays, sharp = self._decode_all()
+        segs = self._segment(frames, grays)
+        self._progress("段值 OCR...", 73.0)
+        seg_vals, rep_frames = self._ocr_segments(segs, crops, sharp)
+        seg_times = [seg[len(seg) // 2] for seg in segs]
+        suspect = self._detect(seg_vals, seg_times)
+        corr, self._n_corr = self._correct(seg_vals, seg_times, suspect)
+        self.rows = self._build_rows(frames, segs, corr)
+        self._write_csv(self.rows, output_path)
+        self.timing["total"] = time.perf_counter() - t_total
+        self._progress("完成", 100.0)
+        return self.rows
 
     # ── 阶段 5：构建 rows + 写 CSV ──
     def _build_rows(self, frames, segs, corr):
@@ -285,20 +306,88 @@ class SegmentPipeline:
             for row in rows:
                 w.writerow(row)
 
-    # ── 主入口 ──
-    def run(self, output_path):
-        t_total = time.perf_counter()
-        self._progress("解码 + 分段...", 2.0)
-        frames, crops, grays, sharp = self._decode_all()
-        segs = self._segment(frames, grays)
-        self.timing["segment"] = self.timing.get("decode", 0)  # 段计算并入解码
-        self._progress("段值 OCR...", 73.0)
-        seg_vals, rep_frames = self._ocr_segments(segs, crops, sharp)
-        seg_times = [seg[len(seg) // 2] for seg in segs]
-        suspect = self._detect(seg_vals, seg_times)
-        corr, self._n_corr = self._correct(seg_vals, seg_times, suspect)
-        self.rows = self._build_rows(frames, segs, corr)
-        self._write_csv(self.rows, output_path)
-        self.timing["total"] = time.perf_counter() - t_total
-        self._progress("完成", 100.0)
-        return self.rows
+    # ── 阶段 1：解码 + 特征（diff/清晰度）──
+    def _decode_all(self):
+        from decord import VideoReader, gpu, cpu
+        vr = None
+        label = "CPU"
+        try:
+            vr = VideoReader(str(self._video_path), ctx=gpu(0))
+            label = "GPU"
+        except Exception:
+            vr = VideoReader(str(self._video_path), ctx=cpu(0))
+        self._backend = f"decord/{label}"
+        x1, y1, x2, y2 = self._roi
+        total = len(vr)
+        end = min(self._frame_end or total, total)
+        if self._frame_start > 0:
+            vr.seek_accurate(self._frame_start)
+        frames = list(range(self._frame_start, end, self._frame_div))
+        crops = {}
+        grays = {}
+        sharp = {}
+        t0 = time.perf_counter()
+        for k, fi in enumerate(frames):
+            c = vr.next_roi(x1, y1, x2 + 1, y2 + 1).asnumpy()
+            if c.shape[0] != y2 - y1 + 1 or c.shape[1] != x2 - x1 + 1:
+                c = c[y1:y2 + 1, x1:x2 + 1]
+            crops[fi] = c
+            g = _gray(c)
+            grays[fi] = g
+            sharp[fi] = float(g.std())
+            if k % 500 == 0:
+                self._progress(f"[{self._backend}] 解码: {k}/{len(frames)}",
+                               3 + k / max(len(frames), 1) * 70)
+        self.timing["decode"] = time.perf_counter() - t0
+        del vr
+        return frames, crops, grays, sharp
+
+    # ── 阶段 2：分段（聚类 diff）──
+    def _segment(self, frames, grays):
+        ths = []
+        step = max(1, len(frames) // 50)
+        for fi in frames[::step][:50]:
+            ths.append(_otsu(grays[fi]))
+        th = int(np.median(ths)) if ths else 127
+        self._bin_thresh = th
+        edges = []
+        for i in range(len(frames) - 1):
+            d = (grays[frames[i]] > th) != (grays[frames[i + 1]] > th)
+            edges.append(_cluster_max(d) < self._C)
+        segs = []
+        s = 0
+        for i in range(len(frames) - 1):
+            if not edges[i]:
+                segs.append(frames[s:i + 1])
+                s = i + 1
+        segs.append(frames[s:])
+        return segs
+
+    # ── 阶段 3：段值 OCR（每段最清晰代表帧，批量）──
+    def _ocr_segments(self, segs, crops, sharp):
+        from ocr_native import OcrEngine
+        from video_utils import _preprocess_standard
+        eng = OcrEngine(self._ocr_model, "tensorrt")
+        seg_vals = []
+        rep_frames = []
+        t0 = time.perf_counter()
+        B = 16
+        reps = [max(seg, key=lambda fi: sharp[fi]) for seg in segs]
+        for k in range(0, len(segs), B):
+            chunk = segs[k:k + B]
+            procs = [_preprocess_standard(crops[rep], self._target_h, self._pad,
+                                          max_width=self._max_width)
+                     for rep in reps[k:k + B]]
+            results = eng(procs)
+            for rep, res in zip(reps[k:k + B], results):
+                sv, _rt, _c = extract_speed_value(res)
+                seg_vals.append(int(sv) if sv is not None and sv >= 0 else None)
+                rep_frames.append(rep)
+            if k % 1000 == 0:
+                self._progress(f"[OCR] 段: {k}/{len(segs)}",
+                               73 + k / max(len(segs), 1) * 15)
+        self.timing["ocr"] = time.perf_counter() - t0
+        self._n_segments = len(segs)
+        return seg_vals, rep_frames
+
+    # ── 阶段 4：段级检测 + 纠正 ──
