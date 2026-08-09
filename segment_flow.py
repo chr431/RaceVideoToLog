@@ -1,13 +1,14 @@
-"""分段流水线（生产）：解码 → diff分段 → 段值OCR → 段级纠错 → CSV。
+"""分段流水线（生产）：解码+分段+段值OCR 流水线化 → 段级纠错 → CSV。
 
 与 ProcessingPipeline 同接口（run/finalize），CLI 用 --segment 切换。
-分段 OCR 大幅减少调用（36-64%），瓶颈转移到解码（读全帧算 diff/清晰度）。
+分段 OCR 大幅减少调用（36-64%），解码（I/O 瓶颈）与段值 OCR 线程重叠
+摊薄墙钟（test6 26.1s → 16.8s）。
 
 算法（experiment-binary-ocr 分支验证）：
-- diff 分段：聚类判别（max 3×3 窗口和 < C ⇒ 显示未变）
-- 段值：每段最清晰代表帧 OCR（sharpness=灰度std）
-- 段级检测：median-of-pairs abs（残差/带宽）
-- 段级纠正：可信锚点插值（min_dev 门，跳过曲线正确段）
+- diff 分段：聚类判别（max 3×3 窗口和 < C ⇒ 显示未变），解码循环内增量计算
+- 段值：每段最清晰代表帧 OCR（sharpness=灰度std），OCR 线程批处理闭合段
+- 段级检测：中值滤波（跟随弯曲，误读=尖峰被中值剔除）
+- 段级纠正：可信锚点插值（锚点距离上界，跳过曲线正确段）
 """
 from __future__ import annotations
 import csv
@@ -334,27 +335,195 @@ class SegmentPipeline:
                     n_corr += 1
         return out, n_corr
 
-    # ── 主入口（顺序：解码 → 分段 → 段OCR → 检测纠正 → CSV）──
+    # ── 主入口（流水线：解码∥分段∥段OCR 重叠 → 检测纠正 → CSV）──
     def run(self, output_path):
         t_total = time.perf_counter()
-        self._progress("解码...", 2.0)
-        frames, crops, grays, sharp = self._decode_all()
+        self._progress("解码+分段+段值OCR...", 2.0)
+        frames, segs, seg_vals, rep_frames = self._run_pipelined()
         self._cancel()
-        self._progress("分段...", 73.0)
-        segs = self._segment(frames, grays)
-        self._cancel()
-        self._progress("段值 OCR...", 73.0)
-        seg_vals, rep_frames = self._ocr_segments(segs, crops, sharp)
-        self._cancel()
+        self._progress("检测纠正...", 88.0)
         seg_times = [seg[len(seg) // 2] for seg in segs]
         suspect = self._detect(seg_vals, seg_times)
         corr, self._n_corr = self._correct(seg_vals, seg_times, suspect)
         self.rows = self._build_rows(frames, segs, corr)
-        self._store_run_state(frames, crops, segs, seg_vals, rep_frames, corr)
+        self._store_run_state(frames, self.crops, segs, seg_vals, rep_frames, corr)
         self._write_csv(self.rows, output_path)
         self.timing["total"] = time.perf_counter() - t_total
         self._progress("完成", 100.0)
         return self.rows
+
+    def _run_pipelined(self):
+        """流水线：解码线程增量分段，OCR 线程批处理已闭合段的代表帧。
+
+        解码是 I/O 瓶颈（CPU 占用低），段边界（win3）在解码循环内增量计算，
+        段一闭合就把代表帧（最清晰）交给 OCR 工作线程 —— 解码∥OCR 重叠摊薄
+        总墙钟。代表帧选择与串行 _segment/_ocr_segments 完全一致（每段 max
+        灰度 std），OCR 批 B=16。
+
+        返回 (frames, segs, seg_vals, rep_frames)；self.crops = {rep_frame:
+        crop}（仅代表帧，供 review 预览，比存全帧省内存）。
+        """
+        from queue import Queue
+        import threading
+        from ocr_native import OcrEngine
+        from video_utils import _preprocess_standard
+        from ocr_engine import extract_speed_value
+
+        # ── 打开解码器 + fps ──
+        from decord import VideoReader, gpu, cpu
+        vr = None
+        label = "CPU"
+        _force = _os.environ.get("DECORD_FORCE_CPU", "").strip() == "1"
+        if not _force:
+            try:
+                from decord import gpu as _g
+                vr = VideoReader(str(self._video_path), ctx=_g(0))
+                label = "GPU"
+            except Exception:
+                vr = None
+        if vr is None:
+            vr = VideoReader(str(self._video_path), ctx=cpu(0))
+        self._backend = f"decord/{label}"
+        if self._fps is None:
+            for m in ("get_avg_fps", "get_fps"):
+                fn = getattr(vr, m, None)
+                if fn is None:
+                    continue
+                try:
+                    self._fps = float(fn())
+                    break
+                except Exception:
+                    self._fps = None
+            if not self._fps or self._fps <= 0:
+                self._fps = 30.0
+        x1, y1, x2, y2 = self._roi
+        total = len(vr)
+        end = min(self._frame_end or total, total)
+        if self._frame_start > 0:
+            vr.seek_accurate(self._frame_start)
+        frames = list(range(self._frame_start, end, self._frame_div))
+
+        # ── 阈值校准：缓冲前 50 帧（seek 校准每次 seek_accurate ~30ms，
+        # 50 次加 ~1.5s 得不偿失；前 50 帧 Otsu 阈值与全片抽样一致）──
+        calib_n = min(50, len(frames))
+        calib: list = []  # (fi, crop, gray, sharp)
+        for k in range(calib_n):
+            c = vr.next_roi(x1, y1, x2 + 1, y2 + 1).asnumpy()
+            if c.shape[0] != y2 - y1 + 1 or c.shape[1] != x2 - x1 + 1:
+                c = c[y1:y2 + 1, x1:x2 + 1]
+            g = _gray(c)
+            calib.append((frames[k], c, g, float(g.std())))
+        ths = [_otsu(g) for _fi, _c, g, _s in calib]
+        th = int(np.median(ths)) if ths else 127
+        self._bin_thresh = th
+
+        # ── OCR 工作线程：批处理闭合段代表帧 ──
+        q: Queue = Queue(maxsize=64)  # 有界：OCR 慢时背压解码（防内存膨胀）
+        results: dict = {}
+        ocr_err: list = []
+        ocr_wall = [0.0]
+
+        def ocr_worker() -> None:
+            t0 = time.perf_counter()
+            try:
+                eng = OcrEngine(self._ocr_model, "tensorrt")
+                B = 16
+                b_idx, b_reps, b_crops = [], [], []
+
+                def flush() -> None:
+                    if not b_idx:
+                        return
+                    procs = [_preprocess_standard(c, self._target_h, self._pad,
+                                                  max_width=self._max_width)
+                             for c in b_crops]
+                    res = eng(procs)
+                    for idx, rep, r in zip(b_idx, b_reps, res):
+                        sv, _rt, _c = extract_speed_value(r)
+                        results[idx] = (int(sv) if sv is not None and sv >= 0
+                                        else None, rep)
+                    b_idx.clear(); b_reps.clear(); b_crops.clear()
+
+                while True:
+                    item = q.get()
+                    if item is None:  # 哨兵
+                        break
+                    idx, rep, crop = item
+                    b_idx.append(idx); b_reps.append(rep); b_crops.append(crop)
+                    if len(b_idx) >= B:
+                        flush()
+                flush()
+            except Exception as e:
+                ocr_err.append(e)
+            finally:
+                ocr_wall[0] = time.perf_counter() - t0
+
+        ocr_thread = threading.Thread(target=ocr_worker, daemon=True)
+        ocr_thread.start()
+
+        # ── 生产者：解码 + 增量分段 + 发闭合段 ──
+        def frame_stream():
+            """先产出缓冲的校准帧，再流式解码剩余帧。"""
+            for k in range(calib_n):
+                yield calib[k]
+            for k in range(calib_n, len(frames)):
+                c = vr.next_roi(x1, y1, x2 + 1, y2 + 1).asnumpy()
+                if c.shape[0] != y2 - y1 + 1 or c.shape[1] != x2 - x1 + 1:
+                    c = c[y1:y2 + 1, x1:x2 + 1]
+                g = _gray(c)
+                yield (frames[k], c, g, float(g.std()))
+
+        segs: list = []
+        rep_crops: dict = {}
+        seg_idx = 0
+        s = 0
+        rep_frame = frames[0]
+        rep_crop = None
+        rep_sharp = -1.0
+        prev_b = None
+        t0 = time.perf_counter()
+        try:
+            for k, (fi, c, g, sharp) in enumerate(frame_stream()):
+                b = g > th
+                if prev_b is not None:
+                    d = prev_b != b
+                    if _cluster_win3(d) >= self._C:
+                        # 闭合段 [s..k-1]：发代表帧给 OCR 线程
+                        seg = frames[s:k]
+                        segs.append(seg)
+                        q.put((seg_idx, rep_frame, rep_crop))
+                        rep_crops[rep_frame] = rep_crop
+                        seg_idx += 1
+                        s = k
+                        rep_frame = fi; rep_crop = c; rep_sharp = sharp
+                    elif sharp > rep_sharp:
+                        rep_sharp = sharp; rep_frame = fi; rep_crop = c
+                else:
+                    rep_frame = fi; rep_crop = c; rep_sharp = sharp
+                prev_b = b
+                if k % 100 == 0:
+                    self._cancel()
+                if k % 500 == 0:
+                    self._progress(f"[{self._backend}] 解码+分段: {k}/{len(frames)}",
+                                   3 + k / max(len(frames), 1) * 55)
+            # 闭合最后一段
+            seg = frames[s:]
+            segs.append(seg)
+            q.put((seg_idx, rep_frame, rep_crop))
+            rep_crops[rep_frame] = rep_crop
+            seg_idx += 1
+        finally:
+            q.put(None)
+            ocr_thread.join()
+
+        if ocr_err:
+            raise ocr_err[0]
+        self.timing["decode"] = time.perf_counter() - t0
+        self.timing["ocr"] = ocr_wall[0]
+        self._n_segments = len(segs)
+        self.crops = rep_crops
+        del vr
+        return frames, segs, [results[i][0] for i in range(seg_idx)], \
+            [results[i][1] for i in range(seg_idx)]
 
     def _store_run_state(self, frames, crops, segs, seg_vals, rep_frames, corr):
         """保存 run() 的中间状态，供 GUI 段级 review / finalize 使用。"""
@@ -369,7 +538,7 @@ class SegmentPipeline:
              "value": corr[i],
              "ocr_value": seg_vals[i],
              "rep_frame": rep_frames[i],
-             "rep_crop": crops[rep_frames[i]]}
+             "rep_crop": crops.get(rep_frames[i])}
             for i, seg in enumerate(segs)
         ]
 
