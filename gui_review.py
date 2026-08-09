@@ -21,7 +21,7 @@ from qfluentwidgets import (BodyLabel, StrongBodyLabel, CaptionLabel,
     PrimaryPushButton, PushButton, isDarkTheme)
 from widget_utils import (make_static_card, disable_spin_flyout,
     make_brush, ModPlotWidget)
-from config import (COLOR_RED, COLOR_ORANGE, COLOR_BLUE,
+from config import (COLOR_RED, COLOR_ORANGE, COLOR_GREEN, COLOR_BLUE,
     COLOR_LIGHT_GRAY, COLOR_LIGHTER_GRAY, chart_colors)
 import pyqtgraph as pg
 
@@ -46,6 +46,8 @@ class ReviewDialog(QDialog):
         # 修正：段索引 → 新值（应用到整个段范围）
         self._corrections: dict[int, float] = {}
         self._current_seg: int = 0
+        # 预览：spinbox 改变时的 (段索引, 预览值)，用于隐藏现有段并临时渲染
+        self._preview: tuple[int, float] | None = None
 
         self._build_ui()
         self._register_theme_callbacks()
@@ -326,14 +328,21 @@ class ReviewDialog(QDialog):
         cur_corr = frozenset(self._corrections.keys())
         self._chart_corrections_fs = cur_corr
 
+        pv_seg = self._preview[0] if self._preview else None
+        pv_val = self._preview[1] if self._preview else None
+
         xs, ys, sidx, conn = self._frame_data()
         prev_data = self._chart_cache.get('data_hash', 0) if hasattr(self, '_chart_cache') else 0
         data_hash = hash((len(xs), xs[0] if xs else 0, xs[-1] if xs else 0,
                           sum(ys), len(self._corrections)))
         self._chart_cache = {'xs': xs, 'ys': ys, 'sidx': sidx,
                              'data_hash': data_hash}
+        prev_preview = getattr(self, '_chart_preview', None)
+        cur_preview = self._preview
+        self._chart_preview = cur_preview
         needs_rebuild = (prev_dark != dark or not hasattr(self, '_chart_cache')
-                         or prev_corr != cur_corr or prev_data != data_hash)
+                         or prev_corr != cur_corr or prev_preview != cur_preview
+                         or prev_data != data_hash)
 
         if needs_rebuild:
             plot.clear()
@@ -344,16 +353,27 @@ class ReviewDialog(QDialog):
             self._chart_artists = {}
 
             gray_c = COLOR_LIGHT_GRAY if not dark else COLOR_LIGHTER_GRAY
-            # 段连线（step 曲线：同段相邻帧连线，段间断开）—— 显示全部点
-            line = pg.PlotDataItem(xs, ys, connect=conn,
+            # 段连线（step 曲线）：预览段 NaN 隐藏 + 断开其连接
+            line_ys = list(ys)
+            conn_line = conn.copy()
+            if pv_seg is not None:
+                for k in range(len(xs)):
+                    if sidx[k] == pv_seg:
+                        line_ys[k] = float('nan')
+                for k in range(len(xs) - 1):
+                    if sidx[k] == pv_seg or sidx[k + 1] == pv_seg:
+                        conn_line[k] = False
+            line = pg.PlotDataItem(xs, line_ys, connect=conn_line,
                                    pen=pg.mkPen(gray_c, width=1))
             plot.addItem(line)
             self._chart_artists['seg_line'] = line
 
-            # 散点分层：正常灰 / 需审核橙 / 已修正蓝
+            # 散点分层：正常灰 / 需审核橙 / 已修正蓝（跳过预览段）
             gx, gy, gi, ox, oy, oi = [], [], [], [], [], []
             for k in range(len(xs)):
                 si = sidx[k]
+                if si == pv_seg:
+                    continue
                 if si in self._corrections:
                     continue
                 if ys[k] < 0 or self._needs_review(si):
@@ -370,6 +390,23 @@ class ReviewDialog(QDialog):
             orange.sigClicked.connect(self._on_scatter_clicked)
             plot.addItem(orange)
             self._chart_artists['bg_orange'] = orange
+
+            # 临时预览段（绿色虚线 + 实心点）：隐藏现有段后渲染新位置
+            if pv_seg is not None:
+                frames = self._segments[pv_seg]['frames']
+                px = list(frames)
+                py_ = [pv_val] * len(px)
+                pline = pg.PlotDataItem(
+                    px, py_, connect='all',
+                    pen=pg.mkPen(COLOR_GREEN, width=1.5,
+                                 style=Qt.PenStyle.DashLine))
+                plot.addItem(pline)
+                self._chart_artists['preview_line'] = pline
+                ppts = pg.ScatterPlotItem(size=7, brush=pg.mkBrush(COLOR_GREEN),
+                                          pen=pg.mkPen('w', width=1.0))
+                ppts.setData(x=px, y=py_)
+                plot.addItem(ppts)
+                self._chart_artists['preview_pts'] = ppts
 
             corr = pg.ScatterPlotItem(size=6, brush=pg.mkBrush(COLOR_BLUE),
                                       pen=pg.mkPen('w', width=1.0))
@@ -408,18 +445,22 @@ class ReviewDialog(QDialog):
         xs = cache.get('xs') or []
         ys = cache.get('ys') or []
         sidx = cache.get('sidx') or []
-        # 修正蓝点：已修正段的全部帧
+        pv_seg = self._preview[0] if self._preview else None
+        # 修正蓝点：已修正段的全部帧（预览段被覆盖层替代，跳过）
         corr_set = set(self._corrections.keys())
+        if pv_seg is not None:
+            corr_set.discard(pv_seg)
         cx = [xs[k] for k in range(len(xs)) if sidx[k] in corr_set]
         cy = [ys[k] for k in range(len(xs)) if sidx[k] in corr_set]
         corr.setData(x=cx, y=cy)
-        # 当前红点：选中段的全部帧（水平 run）
+        # 当前红点：预览时隐藏（绿色预览段替代）；否则高亮选中段全部帧
         si = self._current_seg
-        sel = [k for k in range(len(xs)) if sidx[k] == si]
-        cx2 = [xs[k] for k in sel]
-        cy2 = [ys[k] for k in sel]
-        cur.setData(x=cx2, y=cy2)
-        cur.setBrush(make_brush(COLOR_BLUE if si in self._corrections else COLOR_RED))
+        if pv_seg is not None:
+            cur.setData(x=[], y=[])
+        else:
+            sel = [k for k in range(len(xs)) if sidx[k] == si]
+            cur.setData(x=[xs[k] for k in sel], y=[ys[k] for k in sel])
+            cur.setBrush(make_brush(COLOR_BLUE if si in self._corrections else COLOR_RED))
 
     def _on_scatter_clicked(self, scatter, points) -> None:
         for pt in points:
@@ -485,6 +526,7 @@ class ReviewDialog(QDialog):
 
     def _navigate_to(self, si: int) -> None:
         self._current_seg = si
+        self._preview = None  # 离开段丢弃未提交预览
         seg = self._segments[si]
         self._seg_label.setText(f"#{si} [{seg['start']}-{seg['end']}]")
         self._show_seg_image(si)
@@ -501,7 +543,8 @@ class ReviewDialog(QDialog):
         si = self._current_seg
         if si < 0 or si >= len(self._segments):
             return
-        # 段值预览：未提交前不写入 corrections
+        # 段值预览：未提交前不写入 corrections；隐藏现有段并临时渲染预览段
+        self._preview = (si, float(value))
         self._speed_value_label.setText(f"速度: {value:.0f} km/h (预览)")
         self._redraw_chart()
 
@@ -527,17 +570,19 @@ class ReviewDialog(QDialog):
                     neighbors.append(nv)
         if not neighbors:
             return True, ""
-        # 相邻段时间间隔（帧 → 秒）
+        # 相邻段时间间隔（帧 → 秒）：取两侧最近的间隙
         seg = self._segments[si]
-        dt_min = 1e-3
+        dt_min = float("inf")
         for j in (si - 1, si + 1):
             if 0 <= j < n:
                 s2 = self._segments[j]
                 dt = (s2['start'] - seg['end']) / self._fps if s2['start'] >= seg['end'] \
                     else (seg['start'] - s2['end']) / self._fps
-                dt = max(abs(dt), 1e-3)
-                dt_min = min(dt_min, dt)
-        max_dv = self._max_accel / 3.6 * dt_min  # km/h
+                dt_min = min(dt_min, max(abs(dt), 1e-3))
+        if dt_min == float("inf"):
+            return True, ""  # 无相邻段，无需检查
+        # m/s² → km/h/s 是 ×3.6（1 m/s = 3.6 km/h）；除以 3.6 会把阈值算小 13×
+        max_dv = self._max_accel * 3.6 * dt_min  # km/h
         worst = max(abs(v - nv) for nv in neighbors)
         if worst > max_dv * 3.0:  # 3× 容差（段间可能跨真实跳变）
             msg = (f"段 #{si} 输入值 {v:.0f} km/h 与相邻段物理不一致\n\n"
@@ -558,6 +603,7 @@ class ReviewDialog(QDialog):
             if reply == QMessageBox.StandardButton.No:
                 return
         self._corrections[si] = v
+        self._preview = None  # 提交后清除预览
         self._redraw_chart()
         self._show_seg_image(si)
         self._btn_delete.setEnabled(True)
@@ -567,6 +613,7 @@ class ReviewDialog(QDialog):
         if si not in self._corrections:
             return
         self._corrections.pop(si, None)
+        self._preview = None
         self._speed_edit.setValue(self._speed_input_value(si))
         self._redraw_chart()
         self._btn_delete.setEnabled(False)
