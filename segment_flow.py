@@ -418,17 +418,24 @@ class SegmentPipeline:
 
     def _write_csv(self, rows, output_path):
         with Path(output_path).open("w", newline="", encoding="utf-8-sig") as fh:
-            w = csv.writer(fh)
-            w.writerow([f"# RaceVideoToLog v{config.__version__}"])
-            w.writerow([f"# video={self._video_path.name}, fps={self._fps:.3f}"])
             r = self._roi
-            w.writerow([f"# roi={r[0]},{r[1]},{r[2]},{r[3]}, "
-                        f"format={self._speed_format}, frame_start={self._frame_start}, "
-                        f"frame_end={self._frame_end or ''}"])
-            w.writerow([f"# max_speed={self._max_speed}, max_accel={self._max_accel}"])
-            w.writerow([f"# backend={self._backend}, model={self._ocr_model}"])
-            w.writerow([f"# segments={self._n_segments}, corrected={self._n_corr}"])
+            # 头行用 fh.write 直接写（csv.writer 会给含逗号的注释加引号，
+            # 行首变 " 导致 parse_csv_header 解析失败 —— GUI 导入 CSV 兼容性）
+            fh.write(f"# RaceVideoToLog v{config.__version__}\n")
+            fh.write(f"# video={self._video_path.name}, fps={self._fps:.3f}\n")
+            fh.write(f"# roi={r[0]},{r[1]},{r[2]},{r[3]}, format={self._speed_format}"
+                     f", frame_start={self._frame_start or ''}"
+                     f", frame_end={self._frame_end or ''}\n")
+            fh.write(f"# max_speed={self._max_speed}, max_accel={self._max_accel}"
+                     f", div={self._frame_div}, target_h={self._target_h}"
+                     f", max_width={self._max_width}, pad={self._pad}\n")
+            fh.write(f"# backend={self._backend}, model={self._ocr_model}\n")
+            fh.write(f"# segments={self._n_segments}, corrected={self._n_corr}\n")
             tstr = ", ".join(f"{k}={v:.2f}" for k, v in self.timing.items())
-            w.writerow([f"# timing: {tstr}"])
+            if tstr:
+                fh.write(f"# timing: {tstr}\n")
+            # 数据行用 csv.writer（int 帧号/距离/速度/flag，对齐旧格式）
+            w = csv.writer(fh)
             for row in rows:
-                w.writerow(row)
+                w.writerow((f"{int(row[0])}", f"{row[1]:.2f}",
+                            f"{int(row[2])}", str(row[3])))

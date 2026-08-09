@@ -125,3 +125,25 @@ def test_otsu_bimodal():
     g[50:, :] = np.clip(rng.normal(200, 6, (50, 50)), 0, 255).astype(np.uint8)
     th = _otsu(g)
     assert 50 < th < 180, f"otsu 应在谷值，实际 {th}"
+
+
+def test_write_csv_header_parsable(tmp_path):
+    """CSV 头必须能被 parse_csv_header 解析（GUI 导入 / CLI from-csv 依赖）。
+
+    回归：头行曾用 csv.writer 写入，含逗号注释被加引号（行首变 "）导致
+    parse_csv_header 返回空 dict。
+    """
+    from ocr_engine import parse_csv_header, parse_csv_setting
+    p = _pipe()
+    p._fps = 30.0
+    p._backend = "decord/GPU"
+    p._n_segments = 5
+    p._n_corr = 1
+    p.timing = {"decode": 1.0, "total": 2.0}
+    out = tmp_path / "t.csv"
+    p._write_csv([[0, 0.0, 100, 0], [1, 0.0, 100, 0]], out)
+    s = parse_csv_header(str(out))
+    assert s, "CSV 头应能被解析"
+    assert parse_csv_setting("roi", s["roi"]) == [0, 0, 10, 10]
+    assert float(s["max_speed"]) == 400.0
+    assert int(s["div"]) == 1  # frame_div 默认 1
