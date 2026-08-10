@@ -89,6 +89,10 @@ class OcrEngine:
         if not physical:
             physical = (int(os.cpu_count() or 8) // 2)  # 假设 2 线程/核
         n = max(2, physical // 2)
+        # env 覆盖（性能实验用，如 CPU 解码场景让核给解码线程）
+        _env_t = os.environ.get("RVTOL_OCR_THREADS")
+        if _env_t:
+            n = max(1, int(_env_t))
         so.intra_op_num_threads = n
         so.inter_op_num_threads = 2
         self._session = ort.InferenceSession(

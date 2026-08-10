@@ -13,7 +13,10 @@ MPS_TO_KMH: float = 3.6          # m/s → km/h 转换因子
 # ═══════════════════ 用户可配置默认值 ═══════════════════
 DEFAULT_OCR_MODEL: str = "v6_small"     # 唯一 OCR 模型（v2.13 起移除 tiny / 重 OCR）
 DEFAULT_SPEED_FORMAT: str = "km/h"     # 速度单位 (km/h / m/s / mile/h)
-DEFAULT_BUFFER_SIZE: int = 64          # 解码∥OCR 流水线队列缓冲（段数）
+DEFAULT_BUFFER_SIZE: int = 128          # 解码∥OCR 流水线队列缓冲（段数）
+                                        # 64→128：GPU 解码突发时缓冲背压，减少
+                                        # 解码线程 q.put 阻塞等待（GPU+CPU wall
+                                        # -0.3s；256 无进一步收益）
 DEFAULT_DECODE_BACKEND: str = "auto"   # 解码后端 (auto / cpu / nvdec)
 DECODE_BACKEND_KEYS: list[str] = ["auto", "cpu", "nvdec"]
 DECODE_BACKEND_LABELS: dict[str, str] = {"auto": "自动", "cpu": "CPU", "nvdec": "NVDEC"}

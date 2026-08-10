@@ -25,6 +25,8 @@ PROJECT = Path(__file__).parent.parent
 VIDEO_DIR = Path("D:/Videos/racelog_test")
 OUT_DIR = PROJECT / "outputs"
 
+import config  # noqa: E402  (DECODE_BACKEND_KEYS)
+
 
 def resolve(video_name: str) -> tuple[str, str]:
     """Return (video_path, truth_csv_path) for a video name."""
@@ -106,17 +108,20 @@ def run(video: str, truth: str, backend: str, out_csv: str,
         timing["peak_rss_mb"] = round(peak_rss)
         timing["end_rss_mb"] = round(cur_rss)
     # logger goes to stderr (Python logging default), prints go to stdout —
-    # scan both. "OCR 完成: N 帧 (decord/gpu), ..." gives frames + backend.
+    # scan both. 段管线（v2.13）输出 "[decord/GPU] 解码+分段: 0/7223" 与
+    # "总耗时: X.Xs"；backend 从 CSV 头 "# backend=decord/GPU" 读。
     text = (r.stdout or "") + "\n" + (r.stderr or "")
-    for line in text.splitlines():
-        m = re.search(r"(\d+) 帧 \((\S+)\),", line)
-        if m:
-            timing["frames"] = int(m.group(1))
-            timing["actual_backend"] = m.group(2)
-            break
-    # Total pipeline time: "流水线完成: 总计 X.Xs (ocr=.., ...)" (CSV header
-    # has no total= field).
-    m = re.search(r"流水线完成: 总计 ([\d.]+)s", text)
+    m = re.search(r"\[decord/(\w+)\]", text)
+    if m:
+        timing["actual_backend"] = m.group(1)
+    # 帧数 = CSV 数据行数（比解析 stdout 更稳）
+    n_frames = sum(1 for _l in open(out_csv, encoding="utf-8-sig",
+                                    errors="replace")
+                   if _l.strip() and not _l.startswith("#"))
+    if n_frames:
+        timing["frames"] = n_frames
+    # Total pipeline time: 段管线 stdout "总耗时: X.Xs"（CSV 头无 total=）。
+    m = re.search(r"总耗时: ([\d.]+)s", text)
     if m:
         timing["total_pipeline_s"] = float(m.group(1))
     # Stage timing from the CSV header (written by _write_csv):
@@ -145,17 +150,20 @@ def run(video: str, truth: str, backend: str, out_csv: str,
     return timing
 
 
-def accuracy(out_csv: str, truth: str) -> dict:
-    """Compare pipeline output against truth (verify_accuracy module)."""
-    sys.path.insert(0, str(PROJECT))
-    from tools.verify_accuracy import compare, load_truth
-    stats = compare(load_truth(truth), out_csv)
-    return {
-        "matched": stats["matched"],
-        "wrong": stats["wrong"],
-        "error_rate": round(stats["error_rate"], 3),
-        "false_trusted": stats["false_trusted_count"],
-    }
+def accuracy(out_csv: str, truth: str) -> dict | None:
+    """Compare pipeline output against truth (best-effort; module may be gone)."""
+    try:
+        sys.path.insert(0, str(PROJECT))
+        from tools.verify_accuracy import compare, load_truth
+        stats = compare(load_truth(truth), out_csv)
+        return {
+            "matched": stats["matched"],
+            "wrong": stats["wrong"],
+            "error_rate": round(stats["error_rate"], 3),
+            "false_trusted": stats["false_trusted_count"],
+        }
+    except (ImportError, Exception):
+        return None
 
 
 def print_row(label: str, t: dict, acc: dict | None = None) -> None:
