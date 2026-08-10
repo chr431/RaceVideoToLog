@@ -1,11 +1,17 @@
 """视频/数据通用工具。"""
 from __future__ import annotations
+import os as _os
 from dataclasses import dataclass
 from pathlib import Path
 
 from functools import lru_cache
 
 import numpy as np
+
+from config import OCR_GAMMA as _OCR_GAMMA_DEFAULT
+
+# OCR 预处理灰度权重（与 segment_flow._gray 一致）。
+_GRAY_W = np.array([0.299, 0.587, 0.114], dtype=np.float32)
 
 
 @dataclass
@@ -131,13 +137,20 @@ def _np_resize(img: "np.ndarray", new_w: int, new_h: int) -> "np.ndarray":
 
 
 def _preprocess_standard(crop: "np.ndarray", target_h: int, pad: int,
-                         max_width: int = 0) -> "np.ndarray":
-    """标准预处理：resize（numpy 双线性）+ 可选宽度限制 + 边缘填充。
+                         max_width: int = 0,
+                         gamma: "float | None" = None) -> "np.ndarray":
+    """标准预处理：resize（numpy 双线性）+ 可选宽度限制 + 灰度 gamma + 边缘填充。
 
     max_width > 0 时限制宽度上限（px），用于纠正扁宽字体
     （如数字高度≈宽度时设为 96 可恢复 ~2:1 高宽比）。
     主识别（pipeline）与 re-OCR（correction）共用，保证一致。
     输出 float32（与 cv2 路径数值差 <= 1e-5）。
+
+    gamma：灰度对比度增强指数（255*(gray/255)^g）。None = 用 env
+    RVTOL_OCR_GAMMA，都没有则 config.OCR_GAMMA（正式默认 2.0）。
+    白字黄底等背景色块场景放大高段分离，平滑无裁剪不侵蚀笔画。
+    gamma <= 0 跳过灰度变换（保留 RGB，回退旧行为）；
+    灰度权重 [0.299,0.587,0.114] 与 segment_flow._gray 一致。
     """
     h, w = crop.shape[:2]
     if target_h < 8:
@@ -149,7 +162,72 @@ def _preprocess_standard(crop: "np.ndarray", target_h: int, pad: int,
         resized = _np_resize(crop, new_w, target_h)
     else:
         resized = crop.astype(np.float32)
+    if gamma is None:
+        _env = _os.environ.get("RVTOL_OCR_GAMMA")
+        gamma = float(_env) if _env else float(_OCR_GAMMA_DEFAULT)
+    if gamma > 0:
+        # 灰度 + gamma（正式预处理）：RGB 逐通道 gamma 视觉差异小、回归多
+        # （tools/_gamma_misread_montage 对比），灰度版视觉更清晰、回归少。
+        gray = resized @ _GRAY_W                          # (h, w) float32
+        resized = 255.0 * np.power(gray / 255.0, gamma)
+        resized = np.stack([resized] * 3, axis=-1)
     if pad > 0:
         resized = np.pad(resized, ((pad, pad), (pad, pad), (0, 0)),
                          mode="edge")  # 等价 cv2 BORDER_REPLICATE
     return resized
+
+
+def open_decord_vr(video_path, force_cpu: bool = False):
+    """Open video with decord — GPU (NVDEC) preferred, CPU fallback.
+
+    Returns (VideoReader, label) where label is ``'GPU'`` or ``'CPU'``.
+    Set ``DECORD_FORCE_CPU=1`` in the environment or pass *force_cpu=True*
+    to skip GPU even when available.
+    """
+    from decord import VideoReader as _VR
+
+    _vr = None
+    _label = "CPU"
+    _force = force_cpu or _os.environ.get("DECORD_FORCE_CPU", "").strip() == "1"
+
+    if not _force:
+        try:
+            from decord import gpu as _decord_gpu
+            _vr = _VR(str(video_path), ctx=_decord_gpu(0))
+            _label = "GPU"
+        except Exception:
+            pass
+
+    if _vr is None:
+        try:
+            from decord import cpu as _decord_cpu
+            _vr = _VR(str(video_path), ctx=_decord_cpu(0))
+        except ModuleNotFoundError:
+            raise RuntimeError(
+                "decord 未安装（需要自建 fork，PyPI 版不支持）。"
+                "请运行 setup_venv.bat 或从 chr431/decord 获取发布产物到 _decord_build\\")
+        except Exception as _e:
+            raise RuntimeError(f"decord 无法打开视频: {_e}")
+
+    return _vr, _label
+
+
+def rss_mb() -> float:
+    """当前进程 RSS（MB）。psutil 缺失返回 -1。"""
+    try:
+        import psutil
+        return psutil.Process(_os.getpid()).memory_info().rss / (1024 * 1024)
+    except ImportError:
+        return -1.0
+
+
+def sum_nbytes(seq) -> int:
+    """序列中 ndarray/bytes 元素的总字节数（兼容 (frame, bytes) 二元组）。"""
+    s = 0
+    for x in seq:
+        if hasattr(x, "nbytes"):
+            s += x.nbytes
+        elif hasattr(x, "__len__") and len(x) == 2:
+            if hasattr(x[1], "nbytes"):
+                s += x[1].nbytes
+    return s

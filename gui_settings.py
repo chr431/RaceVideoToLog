@@ -6,7 +6,7 @@ while keeping widget references for export/import operations.
 from __future__ import annotations
 
 from qfluentwidgets import (
-    CardWidget, ComboBox, LineEdit, RadioButton,
+    CardWidget, ComboBox, LineEdit, RadioButton, CheckBox,
     BodyLabel, StrongBodyLabel, CaptionLabel, PushButton,
 )
 
@@ -24,11 +24,11 @@ def build_settings_panel(parent) -> dict:
     Returns dict keys:
         format_ms, format_kmh, format_mph  -- RadioButton (speed format)
         max_speed_edit, max_accel_edit      -- LineEdit
-        div_spin, buffer_spin, target_h_spin, pad_spin  -- CompactSpinBox
-        backend_combo                       -- ComboBox
-        model_combo, reocr_model_combo      -- ComboBox
+        buffer_spin, target_h_spin, pad_spin, max_width_spin  -- CompactSpinBox
+        backend_combo                        -- ComboBox (解码后端 auto/cpu/nvdec)
+        ocr_backend_combo                    -- ComboBox (OCR 后端 auto/cpu/tensorrt)
         log_level_combo                     -- ComboBox
-        mode_auto, mode_baseline            -- RadioButton (correction mode)
+        monitor_checkbox                    -- CheckBox (资源监控开关)
         frame_start_edit, frame_end_edit    -- LineEdit
     """
     widgets: dict = {}
@@ -68,54 +68,42 @@ def build_settings_panel(parent) -> dict:
     perf_card = make_static_card(parent)
     pl = QGridLayout(perf_card)
     pl.addWidget(StrongBodyLabel("性能"), 0, 0, 1, 4)
-    pl.addWidget(BodyLabel("采样率 1/"), 1, 0)
-    widgets["div_spin"] = make_int_spinbox(1, 10, config.DEFAULT_FRAME_DIV, 70)
-    pl.addWidget(widgets["div_spin"], 1, 1)
-    pl.addWidget(BodyLabel("并行线程数"), 1, 2)
-    widgets["buffer_spin"] = make_int_spinbox(1, 64, config.DEFAULT_BUFFER_SIZE, 70)
-    pl.addWidget(widgets["buffer_spin"], 1, 3)
-    pl.addWidget(BodyLabel("OCR 高度 (px)"), 2, 0)
+    pl.addWidget(BodyLabel("队列缓冲"), 1, 0)
+    widgets["buffer_spin"] = make_int_spinbox(4, 256, config.DEFAULT_BUFFER_SIZE, 70)
+    pl.addWidget(widgets["buffer_spin"], 1, 1)
+    pl.addWidget(BodyLabel("OCR 高度 (px)"), 1, 2)
     widgets["target_h_spin"] = make_int_spinbox(8, 256, config.DEFAULT_TARGET_H, 70)
-    pl.addWidget(widgets["target_h_spin"], 2, 1)
-    pl.addWidget(BodyLabel("最大宽度 (px)"), 2, 2)
+    pl.addWidget(widgets["target_h_spin"], 1, 3)
+    pl.addWidget(BodyLabel("最大宽度 (px)"), 2, 0)
     widgets["max_width_spin"] = make_int_spinbox(0, 512, config.DEFAULT_MAX_WIDTH, 70)
-    pl.addWidget(widgets["max_width_spin"], 2, 3)
-    pl.addWidget(BodyLabel("OCR 后端"), 3, 0)
-    widgets["backend_combo"] = ComboBox()
-    widgets["backend_combo"].addItems([config.BACKEND_LABELS[k] for k in config.BACKEND_KEYS])
-    widgets["backend_combo"].setCurrentIndex(0)
-    pl.addWidget(widgets["backend_combo"], 3, 1)
-    pl.addWidget(BodyLabel("边缘填充 (px)"), 3, 2)
+    pl.addWidget(widgets["max_width_spin"], 2, 1)
+    pl.addWidget(BodyLabel("边缘填充 (px)"), 2, 2)
     widgets["pad_spin"] = make_int_spinbox(0, 64, config.DEFAULT_PAD, 70)
-    pl.addWidget(widgets["pad_spin"], 3, 3)
-    pl.addWidget(BodyLabel("OCR 模型"), 4, 0)
-    widgets["model_combo"] = ComboBox()
-    widgets["model_combo"].addItems(["v6_tiny", "v6_small"])
-    widgets["model_combo"].setCurrentIndex(0)
-    widgets["model_combo"].setFixedWidth(95)
-    pl.addWidget(widgets["model_combo"], 4, 1)
-    pl.addWidget(BodyLabel("重OCR"), 4, 2)
-    widgets["reocr_model_combo"] = ComboBox()
-    widgets["reocr_model_combo"].addItems(["同主模型", "v6_tiny", "v6_small"])
-    widgets["reocr_model_combo"].setCurrentIndex(2)
-    widgets["reocr_model_combo"].setFixedWidth(120)
-    pl.addWidget(widgets["reocr_model_combo"], 4, 3)
-    pl.addWidget(BodyLabel("日志级别"), 5, 0)
+    pl.addWidget(widgets["pad_spin"], 2, 3)
+    pl.addWidget(BodyLabel("解码后端"), 3, 0)
+    widgets["backend_combo"] = ComboBox()
+    widgets["backend_combo"].addItems(
+        [config.DECODE_BACKEND_LABELS[k] for k in config.DECODE_BACKEND_KEYS])
+    widgets["backend_combo"].setCurrentIndex(0)
+    widgets["backend_combo"].setFixedWidth(95)
+    pl.addWidget(widgets["backend_combo"], 3, 1)
+    pl.addWidget(BodyLabel("OCR 后端"), 3, 2)
+    widgets["ocr_backend_combo"] = ComboBox()
+    widgets["ocr_backend_combo"].addItems(
+        [config.OCR_BACKEND_LABELS[k] for k in config.OCR_BACKEND_KEYS])
+    widgets["ocr_backend_combo"].setCurrentIndex(0)
+    widgets["ocr_backend_combo"].setFixedWidth(95)
+    pl.addWidget(widgets["ocr_backend_combo"], 3, 3)
+    pl.addWidget(BodyLabel("日志级别"), 4, 0)
     widgets["log_level_combo"] = ComboBox()
     widgets["log_level_combo"].addItems(["正常", "详细", "调试"])
     widgets["log_level_combo"].setCurrentIndex(0)
     widgets["log_level_combo"].setFixedWidth(120)
-    pl.addWidget(widgets["log_level_combo"], 5, 1)
-
-    # ── Correction mode card ──
-    mode_card = make_static_card(parent)
-    ml = QVBoxLayout(mode_card)
-    ml.addWidget(StrongBodyLabel("纠错模式"))
-    widgets["mode_auto"] = RadioButton("自动纠错（全自动，推荐）")
-    widgets["mode_auto"].setChecked(True)
-    widgets["mode_baseline"] = RadioButton("人工辅助纠错")
-    ml.addWidget(widgets["mode_auto"])
-    ml.addWidget(widgets["mode_baseline"])
+    pl.addWidget(widgets["log_level_combo"], 4, 1)
+    pl.addWidget(BodyLabel("资源监控"), 4, 2)
+    widgets["monitor_checkbox"] = CheckBox("")
+    widgets["monitor_checkbox"].setChecked(config.MONITOR_ENABLED)
+    pl.addWidget(widgets["monitor_checkbox"], 4, 3)
 
     # ── Timeline range card ──
     time_card = make_static_card(parent)
@@ -144,7 +132,6 @@ def build_settings_panel(parent) -> dict:
     ll.setSpacing(6)
     ll.addWidget(fmt_card)
     ll.addWidget(perf_card)
-    ll.addWidget(mode_card)
     ll.addWidget(time_card)
     ll.addStretch()
 

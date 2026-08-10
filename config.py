@@ -1,30 +1,94 @@
-"""RaceVideoToLog 集中配置 — 常量、颜色、公共 API。"""
+"""RaceVideoToLog 集中配置 — 常量、颜色、公共 API。
+
+v2.13 起：分段流水线（segment_flow.py）为唯一管线，原逐帧纠错参数
+（Viterbi/多信号检测/对齐等）已删除。
+"""
 from __future__ import annotations
 
-__version__ = "2.9.0"
+__version__ = "2.13.0"
 
 # ═══════════════════ 物理常量 ═══════════════════
 MPS_TO_KMH: float = 3.6          # m/s → km/h 转换因子
 
 # ═══════════════════ 用户可配置默认值 ═══════════════════
-DEFAULT_BACKEND: str = "auto"           # GPU 后端 (auto / tensorrt / cpu)
-DEFAULT_OCR_MODEL: str = "v6_tiny"     # 主 OCR 模型
-DEFAULT_REOCR_MODEL: str = "v6_small"  # 重 OCR 模型
+DEFAULT_OCR_MODEL: str = "v6_small"     # 唯一 OCR 模型（v2.13 起移除 tiny / 重 OCR）
 DEFAULT_SPEED_FORMAT: str = "km/h"     # 速度单位 (km/h / m/s / mile/h)
-DEFAULT_FRAME_DIV: int = 2             # 采样间隔 (1=每帧, 2=隔帧)
+DEFAULT_BUFFER_SIZE: int = 128          # 解码∥OCR 流水线队列缓冲（段数）
+                                        # 64→128：GPU 解码突发时缓冲背压，减少
+                                        # 解码线程 q.put 阻塞等待（GPU+CPU wall
+                                        # -0.3s；256 无进一步收益）
+DEFAULT_DECODE_BACKEND: str = "auto"   # 解码后端 (auto / cpu / nvdec)
+DECODE_BACKEND_KEYS: list[str] = ["auto", "cpu", "nvdec"]
+DECODE_BACKEND_LABELS: dict[str, str] = {"auto": "自动", "cpu": "CPU", "nvdec": "NVDEC"}
+DEFAULT_OCR_BACKEND: str = "auto"      # OCR 推理后端 (auto / cpu / tensorrt)
+OCR_BACKEND_KEYS: list[str] = ["auto", "cpu", "tensorrt"]
+OCR_BACKEND_LABELS: dict[str, str] = {"auto": "自动", "cpu": "CPU", "tensorrt": "TensorRT"}
 DEFAULT_MAX_SPEED: float = 400.0       # 最大速度 (km/h)
 DEFAULT_MAX_ACCEL: float = 50.0        # 最大加速度 (m/s²)
 DEFAULT_TARGET_H: int = 48             # OCR 预处理目标高度 (px)
 DEFAULT_PAD: int = 0                   # OCR 预处理 padding (px)
 DEFAULT_MAX_WIDTH: int = 0              # 预处理最大宽度 px（0=不限）
-DEFAULT_BUFFER_SIZE: int = 16          # 生产者-消费者队列缓冲大小
+OCR_GAMMA: float = 2.0                 # OCR 预处理灰度 gamma 增强指数（正式预处理：
+                                       # 白字黄底等背景色块场景放大高段分离；灰度
+                                       # 先于 gamma——RGB 逐通道 gamma 视觉差异小、
+                                       # 回归多。1.0=纯灰度不增强，0=保留 RGB）
 DEFAULT_LOG_LEVEL: str = "normal"      # 日志级别 (normal / detailed / debug)
-DEFAULT_CORRECTION_MODE: str = "auto"  # 纠错模式 (auto / manual)
+MONITOR_ENABLED: bool = True           # 默认启用资源监控（--no-monitor / GUI 复选框 / RVTOL_MONITOR=0 关闭）
+MONITOR_INTERVAL_S: float = 1.0        # 资源采样间隔（秒）
+MONITOR_GPU: bool = True               # 是否采样 GPU 利用率/显存/温度
 
-# ═══════════════════ 枚举值（CLI/GUI 单点定义） ═══════════════════
-BACKEND_KEYS: list[str] = ["auto", "tensorrt", "cpu"]
-BACKEND_LABELS: dict[str, str] = {"auto": "自动", "tensorrt": "TensorRT", "cpu": "CPU"}
-OCR_FRAME_BATCH: int = 6               # 帧批处理大小（≤6 兼容 TRT profile 上限）
+# ═══════════════════ 段管线参数 ═══════════════════
+SEG_C: float = 5.0              # 分段聚类阈值：max 3×3 窗口和 < C ⇒ 显示未变
+SEG_WIN: int = 30               # 段级检测带宽窗口（换算成帧：×中位段间距，上限 120 帧）
+SEG_MULT: float = 2.0           # 检测门限倍率：|值-中值| > 带宽×mult ⇒ suspect
+SEG_MIN_DEV: float = 6.0        # 纠正最小偏差：|插值-当前| > 此值才改
+SEG_MED_K: int = 10             # 中值滤波窗口半宽（段索引）：平滑值曲线，误读=尖峰
+SEG_DETECT_FLOOR: float = 3.0   # 带宽下限 (km/h)：防 ±1-2 噪声被 flag
+                                # （floor4×mult2=gate8 会漏 8-off 尖峰，如
+                                # test.mp4 1499 段 160 在 168 平板上）
+SEG_SINGLE_FLOOR: float = 2.0   # 单帧段专用带宽下限：单帧段误读率 4.2% vs
+                                # 多帧 0.3%（12.6×，80% 误读是单帧段）→ 平缓区
+                                # gate 4 抓 ≥5-off 单帧误读；弯曲区按实际带宽
+                                # （↓到 1.5/1.0 虽提升 ±1 召回 94.5→96.7%，但
+                                #  当前纠错把正确单帧段改错 → test 19→22/23 回归，
+                                #  需配合纠错保守化（下一步）才可放宽）
+SEG_ANCHOR_MAX_FRAMES: float = 120.0  # 纠错锚点最大帧距离：近锚点才插值（防远锚点误插值）
+
+# ═══════════════════ 段级置信度（中值偏差 + 急动度加权，供 DP 锚定） ═══════════════════
+SEG_CONF_W_MED: float = 0.7       # 中值偏差信号权重（主导锚定：紧邻误读的
+                                  # 正确段中值分高 → 被 pin，防 DP 平滑拖走）
+SEG_CONF_W_JERK: float = 0.3      # 急动度信号权重：辅助区分（刹车中值低但
+                                  # 急动度高 → conf 中，raw 观测保其不变）
+SEG_CONF_JERK_SCALE: float = 3.0  # 急动度分指数尺度 (km/h)：100*exp(-jerk/scale)
+
+# ═══════════════════ 段级稠密格点 DP 纠正（对齐旧 viterbi_dense） ═══════════════════
+# 观测 = 纯惩罚偏离 raw（旧系统 ref 来自重 OCR，重 OCR 已删 → ref 删除）。
+# 观测存在的意义：惩罚任何改动，防止把正确的改错。DP 只在转移平滑性
+# （加速度约束）强烈要求时移动值。
+SEG_DP_OBS_WEIGHT: float = 1.0      # 观测权重：非锚点填向局部锚点插值（曲线），
+                                    # 高权重让 DP 输出精确贴合曲线（锚点插值
+                                    # 本身给基线，DP 再加全局平滑处理运行）
+SEG_DP_ACCEL_WEIGHT: float = 1.0    # 转移权重：超加速度约束的二次惩罚
+SEG_DP_MAX_DV_CAP: float = 4.0      # 每段转移最大变化 (km/h)：max_dv = min(
+                                    # max_accel×dt×3.6, cap)。长段间距时
+                                    # max_accel×dt 过松（8-off 跳变免费），
+                                    # cap 保证误读跳变被惩罚、DP 拉正
+SEG_DP_ANCHOR_COST: float = 0.1     # 高置信段锚定代价（固定到 raw）
+SEG_DP_CHANGE_THRESHOLD: float = 3.0  # |DP输出 - raw| > 此值才修正：干净视频
+                                      # 1-off 拉偏不提交；放宽到 3.0 消掉 2-off
+                                      # 正确段被 DP 微调改错（gamma raw 下实测
+                                      # 误改 2→0，漏纠不变，最终 15→13）
+SEG_DP_ANCHOR_CONF: float = 20.0   # 锚定阈值：conf ≥ 此值的段固定到 raw
+                                    # （门控 conf 后正确段 p10=72 干净分离，
+                                    #  T=20 pin 100% 正确、仅 9% 误读）
+
+# ═══════════════════ OCR 输入 pad 宽度下限 ═══════════════════
+# 速度数字是窄图（48 高后 78-160 宽）。v6_small 在宽 pad 更准
+# （test6：224→err 0.09%，192→0.16%，48~96→0.69~1.19%；256 精度相同但更慢）。
+OCR_PAD_WIDTH_MIN: int = 224
+OCR_PAD_WIDTH_MIN_BY_MODEL: dict[str, int] = {
+    "v6_small": 224,
+}
 
 # ═══════════════════ 图表颜色 ═══════════════════
 COLOR_BLUE: str = "#2196F3"
@@ -71,98 +135,7 @@ def set_gpu_backend(backend: str) -> None:
     global _gpu_backend
     _gpu_backend = backend
 
-# ═══════════════════ 邻帧一致性评分（GUI 人工修正校验）═══════════════════
+# ═══════════════════ 邻帧一致性评分（signals 使用，GUI 已改段级）═══════════════════
 CONSISTENCY_TIME_WINDOW: float = 0.5    # 时间窗 (秒)
 CONSISTENCY_DECAY_TAU: float = 0.06     # 指数衰减常数 exp(-dt/tau)
 CONSISTENCY_PINNED_WEIGHT: float = 3.0  # 已固定帧权重倍率
-MANUAL_EDIT_ACCEL_WARNING: float = 0.5  # 人工修正加速度警告阈值
-
-# ═══════════════════ 错误检测：多信号置信度评分 ═══════════════════
-ERROR_DETECT_OCR_CONF_WEIGHT: float = 0.01   # OCR 模型内部置信度
-ERROR_DETECT_PHYSICS_WEIGHT: float = 0.15     # 物理可达性
-ERROR_DETECT_LINEARITY_WEIGHT: float = 0.15   # 局部线性度（中位数鲁棒插值）
-ERROR_DETECT_ACCEL_SPIKE_WEIGHT: float = 0.50 # 加速度尖峰对检测
-# 最差信号地板：任一信号低于阈值时，组合分数上限
-ERROR_DETECT_FLOOR_CAP: dict[float, float] = {30.0: 25.0, 50.0: 50.0, 70.0: 69.0}
-
-# ═══════════════════ Viterbi DP ═══════════════════
-VITERBI_OBS_WEIGHT: float = 0.3
-VITERBI_ACCEL_WEIGHT: float = 1.0
-VITERBI_TRUSTED_BOUNDARY_CONFIDENCE: int = 85
-VITERBI_MAX_CANDIDATES: int = 40
-
-# ═══════════════════ 纠错参数 ═══════════════════
-MANUAL_CORRECT_THRESHOLD: int = 40
-AUTO_CORRECT_THRESHOLD: int = 70
-CORRECTION_MAX_ROUNDS: int = 10        # Viterbi 多轮迭代
-FILL_MAX_PASSES: int = 50
-CORRECTION_MIN_DIFF: float = 0.5
-MANUAL_CORRECTION_MIN_DIFF: float = 2.0  # 手动模式 Viterbi 最小提交差值（±1 微调视为噪声保留 raw）
-AUTO_SMOOTH_CLUSTER_MAX: int = 5
-AUTO_SMOOTH_DEVIATION_MULT: float = 5.0
-
-# ═══════════════════ 平滑 + 自动对齐参数 ═══════════════════
-SMOOTHNESS_MAX_ITERATIONS: int = 10       # _smoothness_pass 最大迭代轮数
-AUTO_ALIGN_DIFF_MIN_KMH: int = 5         # auto-align 最小修正量 (km/h)
-AUTO_ALIGN_DIFF_MAX_KMH: int = 25        # auto-align 最大修正量 (km/h)
-AUTO_ALIGN_NUDGE_FACTOR: float = 0.8     # auto-align 向插值修正的比例
-AUTO_ALIGN_MIN_CHANGE_KMH: int = 3       # auto-align 最小提交变化量 (km/h)
-
-# ═══════════════════ Force-Median 平滑参数 ═══════════════════
-FORCE_MEDIAN_MAX_ITERATIONS: int = 15     # _force_median_smooth 最大迭代轮数
-FORCE_MEDIAN_NUDGE_FACTOR: float = 0.7    # 向中值修正的比例
-FORCE_MEDIAN_THRESHOLD_MULT: float = 3.0  # max_dv 阈值倍率（3×：只改明显偏离的帧，避免 ±1-3 噪声被拉）
-FORCE_MEDIAN_MIN_CHANGE_KMH: int = 1      # 最小变化量 (km/h)
-
-# ═══════════════════ 候选值后过滤 ═══════════════════
-CANDIDATE_POSTFILTER_PHYSICS_MIN: int = 90    # 自洽帧 physics 最低阈值
-CANDIDATE_POSTFILTER_LINEARITY_MIN: int = 90  # 自洽帧 linearity 最低阈值
-CANDIDATE_HUNDREDS_MAX_DIFF: int = 100         # 百位变体最大允许差值 (km/h)
-
-# ═══════════════════ 参考值构建保护 ═══════════════════
-REF_GUARD_PHYSICS_MIN: int = 90      # 跳过插值参考值的 physics 阈值
-REF_GUARD_LINEARITY_MIN: int = 90    # 跳过插值参考值的 linearity 阈值
-DISTANT_INTERP_MIN_TIME: float = 1.0      # 远距离插值最小时间距离 (秒)
-FORCE_MEDIAN_WINDOW_TIME: float = 0.1      # force-median 中值窗口时间 (秒)
-TRUST_WINDOW_TIME: float = 0.15            # 信任传播验证时间窗 (秒)
-DISTANT_INTERP_ISLAND_THRESHOLD: int = 30  # 孤岛检测距离阈值 (km/h)
-REF_INTERP_MAX_KMH_DIFF: int = 50    # 插值参考值最大允许偏差 (km/h)
-REF_MIN_DIFF: float = 3.0            # 参考值最小偏差：raw 与插值差 < 此值时不设参考（raw 自洽）
-
-# ═══════════════════ Viterbi 后处理 ═══════════════════
-VITERBI_POST_TRUST_THRESHOLD: int = 70     # Viterbi 后信任判定最低分数
-TRUST_WINDOW_FALLBACK_MAX_DV: float = 8.0  # 信任窗口 fallback max_dv (km/h)
-FILL_CONFIDENCE_THRESHOLD: int = 30        # Fill 阶段的置信度阈值
-FILL_CANDIDATE_MAX_DIFF: int = 12          # fill 候选优先的最大差值（与插值的距离保护）
-FINAL_CONF_BLEND_PHASE1: float = 0.7       # 最终置信度中 Phase 1 权重
-FINAL_CONF_BLEND_VITERBI: float = 0.3      # 最终置信度中 Viterbi 权重
-
-# ═══════════════════ Viterbi DP 内部常量 ═══════════════════
-VITERBI_FALLBACK_DT: float = 1.0 / 30.0    # 时间戳无效时的 fallback dt (秒)
-VITERBI_ANCHOR_COST: float = 0.1           # 锚点/边界帧的极低成本
-VITERBI_CHANGE_THRESHOLD_KMH: float = 0.5   # Viterbi 结果与 raw 差异 < 此值不计为修正
-VITERBI_OBS_COST_FALLBACK_MULT: float = 0.1 # raw<=0 时的观测代价倍率
-VITERBI_MIN_MAX_COST: float = 0.01          # dp_cost 归一化初始最小值
-VITERBI_COST_NORM_CONF_EXCLUDE: int = 80    # 排除出归一化池的 Phase1 置信度阈值
-VITERBI_ANCHOR_CONF_THRESHOLD: int = 90     # 标记为锚点帧的 Phase1 置信度阈值
-VITERBI_CONF_NORMAL_MIN: int = 80           # Viterbi 置信度"正常"等级下限
-VITERBI_CONF_MARGINAL_MIN: int = 40         # Viterbi 置信度"存疑"等级下限
-
-# ═══════════════════ 错误检测信号内部常量 ═══════════════════
-LINEARITY_DECAY_FACTOR: float = 3.0          # 线性度指数衰减系数
-LINEARITY_TIME_WINDOW: float = 0.25          # 线性度每侧搜索时间窗 (秒)
-LINEARITY_MAX_NEIGHBORS: int = 10            # 线性度每侧最大邻居帧数
-PHYSICS_TIME_WINDOW: float = 0.25            # 物理检查搜索时间窗 (秒)
-PHYSICS_DECAY_FACTOR: float = 2.0            # 物理违规指数衰减系数
-ACCEL_SPIKE_VIOLATION_MULT: float = 2.0      # 加速度尖峰阈值倍率
-ACCEL_SPIKE_SEARCH_WINDOW: int = 15          # 对立尖峰搜索窗口 (帧)
-CONF_TIER_LOW_MAX: int = 30                  # 置信度 low tier 上限
-CONF_TIER_MEDIUM_MAX: int = 70               # 置信度 medium tier 上限
-ACCEL_SCORE_NORMAL: float = 100.0            # 正常帧加速度信号得分
-ACCEL_SCORE_NEAR_ONE: float = 50.0           # 近一个尖峰的得分
-ACCEL_SCORE_SAME_DIR: float = 60.0           # 同向尖峰得分
-ACCEL_SCORE_VIOLATION: float = 20.0          # 违反帧得分
-ACCEL_SCORE_ISLAND_INTERIOR: float = 10.0    # 孤岛内部帧得分
-
-# ═══════════════════ 部分数字扩展参数 ═══════════════════
-MAX_PARTIAL_WILDCARDS: int = 2         # expand_partial 最大通配符数

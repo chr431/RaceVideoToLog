@@ -1,4 +1,4 @@
-"""RaceVideoToLog v2.9.0 — 赛车视频速度 OCR 提取工具。
+"""RaceVideoToLog v2.13.0 — 赛车视频速度 OCR 提取工具。
 
 从车载视频中实时 OCR 识别速度数字，支持 TensorRT / CPU 两种后端（自动选择），
 输出时间-速度-距离 CSV 文件。
@@ -32,26 +32,29 @@ def main() -> None:
     parser.add_argument("video", nargs="?", help="视频文件路径")
     parser.add_argument("--roi", nargs=4, type=int, metavar=("X1","Y1","X2","Y2"), help="识别范围")
     parser.add_argument("--format", choices=["m/s","km/h","mile/h"], default=config.DEFAULT_SPEED_FORMAT)
-    parser.add_argument("--div", type=int, default=config.DEFAULT_FRAME_DIV, choices=list(range(1, 11)))
+    parser.add_argument("--buffer", type=int, default=config.DEFAULT_BUFFER_SIZE,
+        help="解码∥OCR 流水线队列缓冲（段数）")
     parser.add_argument("--max-speed", type=float, default=config.DEFAULT_MAX_SPEED)
     parser.add_argument("--max-accel", type=float, default=config.DEFAULT_MAX_ACCEL)
     parser.add_argument("--target-h", type=int, default=config.DEFAULT_TARGET_H)
     parser.add_argument("--pad", type=int, default=config.DEFAULT_PAD)
     parser.add_argument("--max-width", type=int, default=None,
         help="预处理最大宽度 px（0=不限）。扁宽字体设为 96 可改善识别")
-    parser.add_argument("--buffer", type=int, default=config.DEFAULT_BUFFER_SIZE)
-    parser.add_argument("--backend", choices=config.BACKEND_KEYS, default=config.DEFAULT_BACKEND)
-    parser.add_argument("--ocr-model", choices=["v6_tiny", "v6_small"], default=config.DEFAULT_OCR_MODEL,
-        help="主 OCR 模型 (默认 tiny)")
-    parser.add_argument("--reocr-model", choices=["v6_tiny", "v6_small"], default=config.DEFAULT_REOCR_MODEL,
-        help="重 OCR 模型 (默认 small，推荐 tiny+small 组合)")
+    parser.add_argument("--decode-backend", choices=config.DECODE_BACKEND_KEYS,
+        default=config.DEFAULT_DECODE_BACKEND,
+        help="解码后端（auto/cpu/nvdec，默认 auto 自动选 GPU）")
+    parser.add_argument("--ocr-backend", choices=config.OCR_BACKEND_KEYS,
+        default=config.DEFAULT_OCR_BACKEND,
+        help="OCR 推理后端（auto/cpu/tensorrt，默认 auto 自动选 GPU）")
     parser.add_argument("-o", "--output", type=str)
     parser.add_argument("--frame-start", type=int, metavar="N")
     parser.add_argument("--frame-end", type=int, metavar="N")
     parser.add_argument("--log-level", choices=["normal","detailed","debug"],
         default=config.DEFAULT_LOG_LEVEL, help="日志级别 (默认 normal)")
-    parser.add_argument("--mode", choices=["auto","manual"], default="auto",
-        help="纠错模式 (默认 auto)")
+    parser.add_argument("--no-monitor", action="store_true",
+        help="禁用资源监控（内存/CPU/GPU 采样；默认启用，RVTOL_MONITOR=0 等效）")
+    parser.add_argument("--monitor-interval", type=float, default=None,
+        metavar="SEC", help="资源采样间隔秒（默认 1.0，RVTOL_MONITOR_INTERVAL 等效）")
     parser.add_argument("--from-csv", type=str, metavar="PATH",
         help="从已有 CSV 文件头导入设置（可被显式参数覆盖）")
     args = parser.parse_args()

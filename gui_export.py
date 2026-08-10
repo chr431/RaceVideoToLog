@@ -12,6 +12,17 @@ from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import QWidget
 
 
+def _to_int_or_none(s: str) -> int | None:
+    """空串/非法 → None（段管线 frame_start/end 需要 int|None）。"""
+    s = (s or "").strip()
+    if not s:
+        return None
+    try:
+        return int(float(s))
+    except ValueError:
+        return None
+
+
 
 class _CancelExport(Exception):
     """内部异常：用户取消了导出任务。"""
@@ -37,20 +48,17 @@ class ExportThread(QThread):
             roi: tuple,
             max_speed_kmh: float,
             max_accel_mps2: float,
-            frame_div: int,
+            buffer_size: int,
+            decode_backend: str,
+            ocr_backend: str,
             target_h: int,
             pad_px: int,
-            buffer_size: int,
-            backend: str,
-            ocr_model: str,
-            reocr_model: str | None,
             speed_format: str,
             frame_start: str,
             frame_end: str,
-            log_level: str,
             max_width: int,
-            correction_mode: str,
             output_path: Path,
+            monitor_enabled: bool = True,
             parent: QWidget | None = None,
         ) -> None:
         super().__init__(parent)
@@ -58,60 +66,56 @@ class ExportThread(QThread):
         self._roi = roi
         self._max_speed_kmh = max_speed_kmh
         self._max_accel_mps2 = max_accel_mps2
-        self._frame_div = frame_div
+        self._buffer_size = buffer_size
+        self._decode_backend = decode_backend
+        self._ocr_backend = ocr_backend
         self._target_h = target_h
         self._pad_px = pad_px
-        self._buffer_size = buffer_size
-        self._backend = backend
-        self._ocr_model = ocr_model
-        self._reocr_model = reocr_model
         self._speed_format = speed_format
-        self._frame_start = frame_start
-        self._frame_end = frame_end
-        self._log_level = log_level
+        self._frame_start = _to_int_or_none(frame_start)
+        self._frame_end = _to_int_or_none(frame_end)
         self._max_width = max_width
-        self._correction_mode = correction_mode
+        self._monitor_enabled = monitor_enabled
         self._output_path = output_path
         self._cancel_flag = False
 
     def run(self) -> None:
         """Run Pipeline in a native threading.Thread, wait for completion."""
-        from pipeline import ProcessingPipeline
+        from segment_flow import SegmentPipeline
 
         done = threading.Event()
         error_container: list[Exception] = []
         result_container: dict = {}
 
         def _worker() -> None:
+            import config
+            import monitor as _monitor
             try:
+                if self._monitor_enabled:
+                    _monitor.start(interval_s=config.MONITOR_INTERVAL_S,
+                                   with_gpu=config.MONITOR_GPU)
                 self._check_cancel()
-                pipeline = ProcessingPipeline(
-                    video_path=self._video_path,
+                pipeline = SegmentPipeline(
+                    video_path=str(self._video_path),
                     roi=self._roi,
-                    max_speed=self._max_speed_kmh,
-                    max_accel=self._max_accel_mps2,
-                    frame_div=self._frame_div,
+                    max_speed_kmh=self._max_speed_kmh,
+                    max_accel_mps2=self._max_accel_mps2,
+                    buffer_size=self._buffer_size,
+                    decode_backend=self._decode_backend,
+                    ocr_backend=self._ocr_backend,
                     target_h=self._target_h,
                     pad=self._pad_px,
-                    buffer_size=self._buffer_size,
-                    backend=self._backend,
-                    ocr_model=self._ocr_model,
-                    reocr_model=self._reocr_model,
                     speed_format=self._speed_format,
                     frame_start=self._frame_start,
                     frame_end=self._frame_end,
                     progress_cb=self._emit_progress,
-                    cancel_check=self._check_cancel,
-                    log_level=self._log_level,
                     max_width=self._max_width,
+                    fps=None,
+                    cancel_check=self._check_cancel,
                 )
-                mode = self._correction_mode
-                if mode == "auto":
-                    pipeline.run_auto(self._output_path, mode="auto")
-                    result_container["mode"] = "auto"
-                else:
-                    pipeline.run_auto(self._output_path, mode="manual")
-                    result_container["mode"] = "review"
+                pipeline.run(self._output_path)
+                result_container["mode"] = "auto"
+                result_container["timing"] = pipeline.timing_flat()
                 self.pipeline_ready.emit(pipeline, self._output_path)
             except _CancelExport:
                 result_container["cancelled"] = True
@@ -120,6 +124,12 @@ class ExportThread(QThread):
                 traceback.print_exc()
                 error_container.append(exc)
             finally:
+                # 取消/异常路径也必须停止监测（finally 兜底，幂等）
+                if self._monitor_enabled:
+                    _stats = _monitor.stop()
+                    if _stats:
+                        _monitor.log_run(self._video_path.name, _stats,
+                                         result_container.get("timing"))
                 done.set()
 
         t = threading.Thread(target=_worker, daemon=True)

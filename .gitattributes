@@ -1,0 +1,3 @@
+# Windows 批处理文件：cmd 解析需要 CRLF（GitHub Actions 构建 / setup_venv.bat 必须）
+# blob 统一存 LF（text 属性自动归一化），检出时强制 CRLF，避免 runner autocrlf 差异。
+*.bat text eol=crlf

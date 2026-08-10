@@ -1,4 +1,4 @@
-# RaceVideoToLog v2.9.0
+# RaceVideoToLog v2.13.0
 
 从赛车视频中提取速度数据，生成时间-速度-距离 CSV 文件。
 
@@ -6,7 +6,7 @@
 
 - Python 3.11+
 - NVIDIA 显卡 + 最新驱动（GPU 视频解码；无 GPU 自动使用 CPU 软件解码，性能差异约 15%）
-- （可选）CUDA Toolkit + TensorRT 10.x（GPU OCR 推理；无则自动使用 CPU）
+- （可选）CUDA Toolkit 13.x + TensorRT 11.x（GPU OCR 推理；无则自动使用 CPU）
 
 ## 一键安装
 
@@ -18,15 +18,14 @@ setup_venv.bat
 
 1. 创建 `.venv` 虚拟环境
 2. `pip install -e .` 安装所有 Python 依赖
-3. 检测 `_decord_build\` 目录，若存在则安装自建 decord（GPU 解码 + 内存修复）
+3. 从 `_decord_build\` 安装自建 decord（必需，GPU 解码 + 内存修复；缺失则报错退出）
 4. 安装 TensorRT / cuda-python Python 绑定
 
-### 自建 decord（推荐）
+### 自建 decord（必需）
 
-PyPI 版 decord 是 CPU-only 且没有 `next_roi` / `get_codec`。自建版本支持 NVDEC GPU 硬解码 + CPU 软件解码，且只传输识别 ROI（解码提速 ~45%，编码信息直接来自 decord）。
+本项目**不依赖 PyPI decord**（CPU-only、无 `next_roi` / `get_codec`、CPU 解码内存溢出）。自建 fork（chr431/decord）支持 NVDEC GPU 硬解码 + CPU 软件解码，只传输识别 ROI（解码提速 ~45%，编码信息直接来自 decord），且 GPU API 运行时动态加载 —— 无 NVIDIA 设备自动回退 CPU 解码。
 
-1. 按 [decord wiki](https://github.com/chr431/decord)（feat/perf-deep 分支）构建 decord
-2. 将构建产物放入 `_decord_build\`：
+获取 decord 发布产物（推荐）：运行 [chr431/decord](https://github.com/chr431/decord) 的 **Release workflow**（Actions → Release → Run workflow，输入版本号如 `0.7.0`），它会构建并发布 `decord-<ver>-win64-gpu.zip`。解压到本仓库 `_decord_build\`：
 
 ```text
 _decord_build\
@@ -44,9 +43,9 @@ _decord_build\
 └── python\decord\          （fork 的 Python 层：next_roi / get_codec）
 ```
 
-3. 重新运行 `setup_venv.bat`
+然后重新运行 `setup_venv.bat`。
 
-如无 `_decord_build\`，安装脚本会使用 PyPI decord（无 GPU 解码、无 ROI 优化，功能正常但较慢）。
+> 没有 `_decord_build\` 时 `setup_venv.bat` 会报错退出（**无 PyPI 回退**）—— 必须先获取自建 decord 产物。
 
 ## 使用
 
@@ -65,7 +64,7 @@ _decord_build\
 ## 输出格式
 
 ```csv
-# RaceVideoToLog v2.9.0
+# RaceVideoToLog v2.13.0
 # video_hash=..., video=test5.mp4, fps=59.767, codec=h264
 # roi=843,993,948,1025, format=km/h, frame_start=362, frame_end=7585
 # max_speed=400.0, max_accel=40.0, div=1, target_h=48, pad=0, buffer=16
@@ -103,9 +102,7 @@ python RaceVideoToLog.py [video] [options]
   --pad N                        边缘填充 px (默认: 0)
   --buffer N                     缓冲队列大小 (默认: 16)
   --backend {auto,tensorrt,cpu}  OCR 后端 (默认: auto)
-  --ocr-model {v6_tiny,v6_small} 主 OCR 模型 (默认: v6_tiny)
-  --reocr-model {v6_tiny,v6_small} 重 OCR 模型 (默认: v6_small)
-  --mode {auto,manual}           纠错模式 (默认: auto)
+  --ocr-model {v6_tiny,v6_small} 主 OCR 模型 (默认: v6_tiny)；重 OCR 自动推导：tiny→small / small→无
   --log-level {normal,detailed,debug} 日志级别 (默认: normal)
   --frame-start N                起始帧号
   --frame-end N                  结束帧号
@@ -123,7 +120,7 @@ build_exe.bat
 
 ## 变更记录
 
-完整发布日志（v2.7.1 → v2.9.0）见 [release_notes.md](release_notes.md)。
+完整发布日志（v2.7.1 → v2.13.0）见 [release_notes.md](release_notes.md)。
 
 ## 运行时缓存（卸载时需删除）
 

@@ -1,4 +1,4 @@
-# 上游依赖跟踪（v2.9.0）
+# 上游依赖跟踪（v2.13.0）
 
 ## 核心依赖
 
@@ -10,14 +10,15 @@
 | PySide6-Fluent-Widgets | 1.11 | PyPI | Fluent Design 组件库 |
 | pyqtgraph | 0.14 | PyPI | 分析/检查图表（替代 matplotlib） |
 | cuda-python | — | PyPI | CUDA Python 绑定（TRT 执行 + decord GPU DLL 注册） |
-| tensorrt_cu13_bindings | 10 | PyPI | TensorRT Python 绑定（~1MB） |
+| tensorrt_cu13_bindings | 11 | PyPI | TensorRT Python 绑定（~1MB） |
+| psutil | 6 | PyPI | 资源监测 RSS / CPU%（可选：缺失时降级为 None，GPU 采样不受影响） |
 | decord | 自建 | 自建仓库 chr431/decord（feat/perf-deep） | NVDEC 硬解 + CPU 软件解码；FFmpeg 8.x DLL。**PyPI 版不支持 next_roi / CPU ROI 优化**，见 setup_venv.bat |
 
 ## GPU 加速（运行时，不打包）
 
 | 组件 | 来源 | 备注 |
 | --- | --- | --- |
-| CUDA Toolkit | NVIDIA 官网 | cudart/cublas 等 DLL，需在 PATH |
+| CUDA Toolkit 13.x | NVIDIA 官网 | cudart/cublas 等 DLL，需在 PATH；与 tensorrt_cu13_bindings / decord（全栈统一 CUDA 13）一致 |
 | TensorRT | NVIDIA 官网 | nvinfer DLL，需在 PATH；首次运行自动构建引擎缓存到 `%LOCALAPPDATA%/RaceVideoToLog/ocr_engines/` |
 
 `tensorrt` 元包与 `tensorrt_cu13_libs`（~2.2GB DLL）被有意排除 —— 运行时 DLL 从系统 PATH 加载。
@@ -37,9 +38,14 @@
 ### onnxruntime
 - TRT/CUDA provider DLL 已从 EXE 排除（TRT 由 OcrEngine 直接调用，不走 ORT provider）
 
-### tensorrt 10.x
+### tensorrt 11.x
 - `find_lib()` 只搜 `os.environ["PATH"]`，不认 `os.add_dll_directory()` —— `gpu_setup` 已同时更新 PATH
-- 首次构建引擎 FP32 ~80s，缓存于用户目录；FP16 构建 2.2x 慢且推理无提升，不推荐
+- 首次构建引擎 FP32 ~1min，缓存于用户目录；FP16 构建 2.2x 慢且推理无提升，不推荐
+- TRT 引擎与**构建版本不兼容**（10 产物无法被 11 加载）—— 升级后旧缓存自动重建
+  （`_init_trt` 反序列化失败即删除重建，不会静默回退 ONNX）
+- **GPTuner（Global Performance Tuner）Windows 不可用**：`--tuneBuildRoutes` /
+  `--setBuildRoute` 报 "not supported on Windows (no fork())"，Python
+  `config.all_build_routes` 返回空 —— 调优路线只能走 Linux 或默认路线
 
 ## 检查更新
 
@@ -54,3 +60,57 @@ pip list --outdated
 3. 运行测试：`python -m pytest tests/ -v`
 4. 端到端验证：`python RaceVideoToLog.py test.mp4 --roi 862 945 957 1003 ...`
 5. 若通过则合并到 dev，更新本文件中的版本号
+
+## 版本与发布
+
+**单一事实源：`config.py` 的 `__version__`**（运行时写 CSV 头/控制台）。所有其它引用
+（pyproject.toml、CLI docstring、README 标题/CSV 示例/变更记录区间、本文件标题、
+EXE 版本资源）都由 `tools/version.py` 同步，不手工改。
+
+### 版本号规则（SemVer）
+
+- `MAJOR`：破坏性变更（CSV 格式不兼容、GUI 交互重做、删除用户功能）
+- `MINOR`：新功能（新增设置项、新算法、性能优化）—— 大部分迭代走这里
+- `PATCH`：纯修复（行为不变，只修 bug）
+- 当前发布只接受纯 `X.Y.Z`，不带 `-dev`/`-rc` 后缀（如需要请扩展
+  `tools/version.py` 的 `SEMVER_RE` 并同步 CI）
+
+### 发布流程（一次发布 = 一次 `bump`）
+
+```bash
+# 1. 在 dev 分支完成改动，确认测试通过
+python -m pytest tests/ -v
+
+# 2. 升版本：同步全部引用 + 在 release_notes.md 顶部插入新节
+#    （已是目标版本时只同步不一致的引用，不会重复插节）
+python tools/version.py bump 2.11.0 "标题"
+
+# 3. 填 release_notes.md 新节（bump 只生成骨架 "### 待补充"）
+
+# 4. 校验全部引用一致（CI 的 version-check job 也跑这个，退出码 1 = 不一致）
+python tools/version.py
+
+# 5. 回归：pytest + 基准（tools/bench_decoder.py 至少跑一次）
+python -m pytest tests/ -v
+
+# 6. 构建 EXE（build_exe.bat 内置版本一致性检查，失败即中止；
+#    版本号写入 EXE 文件属性 → 右键属性/详细信息可见）
+build_exe.bat
+
+# 7. 提交 + 合并到 master（master 是发布分支，不跑 tests/）
+git add -A && git commit -m "release: v2.11.0 ..."
+git checkout master && git merge dev && git push
+```
+
+### 一键发布（GitHub Action）
+
+合并到 master 后，Actions → **Release** → Run workflow（默认 `ref: master`），自动完成：
+
+1. 校验版本引用一致性（`tools/version.py`，不一致即中止）
+2. 读取 `config.__version__`，确认 tag `v<版本>` 不存在
+3. 下载 decord fork 发布产物 `decord-<ver>-win64-gpu.zip`（`decord-version` 输入，默认 `0.7.0`）到 `_decord_build\`
+4. `setup_venv.bat --ci` + `build_exe.bat --ci` 构建 EXE（跳过 pause）
+5. 打包 `RaceVideoToLog.<版本>.zip`（dist 布局与现有 release 一致）
+6. 打 tag `v<版本>` + push，创建 GitHub Release（notes 取自 `release_notes.md` 对应节）
+
+发布后如需小修：继续 `bump` 到下一个 PATCH，不回改已发布的版本号。

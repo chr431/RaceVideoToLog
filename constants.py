@@ -4,20 +4,23 @@ import re
 
 
 class Flag:
-    """速度数据 flag 值 — 统一标记每帧数据的来源和可信度。
+    """速度数据 flag 值 — 标记每段数据的来源和可信度（段级，段内帧共享）。
 
     信任层级（由低到高）:
-        RAW (0)           — 原始 OCR 值，未经修正
-        REOCR_AUTO (11)   — 重 OCR 自动修正
-        FILL_INTERP (12)  — 物理插值填充
-        PARTIAL_AUTO (13) — 部分数字模式推断修正
-        HIGH_TRUST (21)   — Viterbi+物理验证，自动高可信帧
-        PINNED (22)       — 用户手动修正，绝对真值
+        RAW (0)           — OCR 原始值，未被纠正且未通过验证（少数）
+        DP_CORRECTED (11) — 段级 DP 稠密纠正（平滑误读尖峰）
+        FILL_INTERP (12)  — OCR 未读出（None）段的锚点插值填充
+        HIGH_TRUST (21)   — 段级验证（conf ≥ 锚定阈值）通过、未纠正的可信段
+                            （绝大多数）
+        PINNED (22)       — 用户手动修正（GUI review），绝对真值
+
+    区间语义（供 GUI 绘图按 flag 着色）：
+        10-19 = 自动纠错帧（is_corrected，标红）；20-29 = 高可信帧
+        （is_trusted，标绿）。
     """
     RAW: int = 0
-    REOCR_AUTO: int = 11
+    DP_CORRECTED: int = 11
     FILL_INTERP: int = 12
-    PARTIAL_AUTO: int = 13
     HIGH_TRUST: int = 21
     PINNED: int = 22
 

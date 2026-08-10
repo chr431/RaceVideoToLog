@@ -25,6 +25,8 @@ PROJECT = Path(__file__).parent.parent
 VIDEO_DIR = Path("D:/Videos/racelog_test")
 OUT_DIR = PROJECT / "outputs"
 
+import config  # noqa: E402  (DECODE_BACKEND_KEYS)
+
 
 def resolve(video_name: str) -> tuple[str, str]:
     """Return (video_path, truth_csv_path) for a video name."""
@@ -40,19 +42,14 @@ def resolve(video_name: str) -> tuple[str, str]:
 
 
 def run(video: str, truth: str, backend: str, out_csv: str,
-        cpu_decord: bool = False, ocr_model: str = "v6_tiny",
-        reocr_model: str = "v6_small") -> dict:
+        decode_backend: str = "auto") -> dict:
     """Run headless pipeline, parse timing + actual backend from output CSV/stdout.
 
-    ocr_model/reocr_model 必须显式传给 CLI —— truth CSV 头的 model= 字段
-    可能是别的模型（如 test5_ref 记录 v6_small），不传时 from-csv 会覆盖
-    默认值，主 OCR 被静默换成 small（实测 infer 26.5s vs tiny 6.4s）。
+    OCR 模型固定 v6_small（v2.14 起移除模型选择）。
     """
     Path(out_csv).unlink(missing_ok=True)  # stale CSV from a prior run must not be parsed
     t0 = time.perf_counter()
     env = dict(os.environ)
-    if cpu_decord:
-        env["DECORD_FORCE_CPU"] = "1"
     # 子进程 RSS 采样（教训：速度测试必须同时监测内存 —— CPU 解码的
     # 视图引用泄漏曾让 3000 帧吃掉 18GB）
     try:
@@ -66,14 +63,16 @@ def run(video: str, truth: str, backend: str, out_csv: str,
     stderr_log = Path(out_csv).with_suffix(".stderr.txt")
     fo = open(stdout_log, "w", encoding="utf-8", errors="replace")
     fe = open(stderr_log, "w", encoding="utf-8", errors="replace")
+    cli_args = [sys.executable, str(PROJECT / "RaceVideoToLog.py"),
+                video, "--from-csv", truth,
+                "--log-level", "detailed"]
+    if backend != "auto":
+        cli_args += ["--ocr-backend", backend]
+    if decode_backend != "auto":
+        cli_args += ["--decode-backend", decode_backend]
+    cli_args += ["-o", out_csv]
     child = subprocess.Popen(
-        [sys.executable, str(PROJECT / "RaceVideoToLog.py"),
-         video, "--from-csv", truth,
-         "--backend", backend,
-         "--ocr-model", ocr_model,
-         "--reocr-model", reocr_model,
-         "--log-level", "detailed",
-         "-o", out_csv],
+        cli_args,
         cwd=str(PROJECT), stdout=fo, stderr=fe, env=env,
     )
     peak_rss, cur_rss = 0.0, 0.0
@@ -109,17 +108,20 @@ def run(video: str, truth: str, backend: str, out_csv: str,
         timing["peak_rss_mb"] = round(peak_rss)
         timing["end_rss_mb"] = round(cur_rss)
     # logger goes to stderr (Python logging default), prints go to stdout —
-    # scan both. "OCR 完成: N 帧 (decord/gpu), ..." gives frames + backend.
+    # scan both. 段管线（v2.13）输出 "[decord/GPU] 解码+分段: 0/7223" 与
+    # "总耗时: X.Xs"；backend 从 CSV 头 "# backend=decord/GPU" 读。
     text = (r.stdout or "") + "\n" + (r.stderr or "")
-    for line in text.splitlines():
-        m = re.search(r"(\d+) 帧 \((\S+)\),", line)
-        if m:
-            timing["frames"] = int(m.group(1))
-            timing["actual_backend"] = m.group(2)
-            break
-    # Total pipeline time: "流水线完成: 总计 X.Xs (ocr=.., ...)" (CSV header
-    # has no total= field).
-    m = re.search(r"流水线完成: 总计 ([\d.]+)s", text)
+    m = re.search(r"\[decord/(\w+)\]", text)
+    if m:
+        timing["actual_backend"] = m.group(1)
+    # 帧数 = CSV 数据行数（比解析 stdout 更稳）
+    n_frames = sum(1 for _l in open(out_csv, encoding="utf-8-sig",
+                                    errors="replace")
+                   if _l.strip() and not _l.startswith("#"))
+    if n_frames:
+        timing["frames"] = n_frames
+    # Total pipeline time: 段管线 stdout "总耗时: X.Xs"（CSV 头无 total=）。
+    m = re.search(r"总耗时: ([\d.]+)s", text)
     if m:
         timing["total_pipeline_s"] = float(m.group(1))
     # Stage timing from the CSV header (written by _write_csv):
@@ -129,8 +131,15 @@ def run(video: str, truth: str, backend: str, out_csv: str,
             if line.startswith("# timing:"):
                 for part in line.split(":", 1)[1].split(","):
                     k, _, v = part.strip().partition("=")
+                    key = k.strip()
+                    # 外部 RSS 采样已提供 peak_rss_mb（int，进程树口径），不覆盖
+                    if key in timing:
+                        continue
                     try:
-                        timing[k.strip() + "_s"] = float(v.rstrip("s"))
+                        # peak_*/gpu_* 前缀不带 _s 后缀（与 JSON record 键一致）；
+                        # gpu_name 字符串 float() 失败自然跳过。
+                        suffix = "" if (key.startswith("peak_") or key.startswith("gpu_")) else "_s"
+                        timing[key + suffix] = float(v.rstrip("s"))
                     except ValueError:
                         pass
                 break
@@ -141,17 +150,20 @@ def run(video: str, truth: str, backend: str, out_csv: str,
     return timing
 
 
-def accuracy(out_csv: str, truth: str) -> dict:
-    """Compare pipeline output against truth (verify_accuracy module)."""
-    sys.path.insert(0, str(PROJECT))
-    from tools.verify_accuracy import compare, load_truth
-    stats = compare(load_truth(truth), out_csv)
-    return {
-        "matched": stats["matched"],
-        "wrong": stats["wrong"],
-        "error_rate": round(stats["error_rate"], 3),
-        "false_trusted": stats["false_trusted_count"],
-    }
+def accuracy(out_csv: str, truth: str) -> dict | None:
+    """Compare pipeline output against truth (best-effort; module may be gone)."""
+    try:
+        sys.path.insert(0, str(PROJECT))
+        from tools.verify_accuracy import compare, load_truth
+        stats = compare(load_truth(truth), out_csv)
+        return {
+            "matched": stats["matched"],
+            "wrong": stats["wrong"],
+            "error_rate": round(stats["error_rate"], 3),
+            "false_trusted": stats["false_trusted_count"],
+        }
+    except (ImportError, Exception):
+        return None
 
 
 def print_row(label: str, t: dict, acc: dict | None = None) -> None:
@@ -175,13 +187,9 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--video", default="test4", help="video name (resolved under D:/Videos/racelog_test)")
     ap.add_argument("--backend", default="tensorrt", choices=["tensorrt", "cpu", "auto"])
-    ap.add_argument("--cpu-decord", action="store_true",
-                    help="force decord CPU decoder (DECORD_FORCE_CPU=1)")
-    ap.add_argument("--ocr-model", default="v6_tiny", choices=["v6_tiny", "v6_small"],
-                    help="main OCR model (explicit — otherwise from-csv may "
-                         "override with the truth CSV's model= value)")
-    ap.add_argument("--reocr-model", default="v6_small", choices=["v6_tiny", "v6_small"],
-                    help="re-OCR model (explicit, same reason)")
+    ap.add_argument("--decode-backend", default="auto",
+                    choices=config.DECODE_BACKEND_KEYS,
+                    help="decord 解码后端 (auto/cpu/nvdec)")
     ap.add_argument("--runs", type=int, default=2, help="runs (last one used for stats)")
     ap.add_argument("--json", type=str, default="", help="save record to JSON (default outputs/bench_<video>.json)")
     args = ap.parse_args()
@@ -192,18 +200,17 @@ def main() -> None:
 
     print(f"Video: {video}")
     print(f"Truth: {truth}")
-    print(f"Backend: {args.backend}, decord: {'CPU' if args.cpu_decord else 'auto'}, runs: {args.runs}")
+    print(f"Backend: {args.backend}, decord: {args.decode_backend}, runs: {args.runs}")
 
     record: dict = {"video": args.video, "backend": args.backend,
-                    "cpu_decord": args.cpu_decord,
-                    "ocr_model": args.ocr_model, "reocr_model": args.reocr_model,
+                    "decode_backend": args.decode_backend,
                     "runs": []}
     for run_i in range(args.runs):
         out_csv = str(OUT_DIR / f"bench_{args.video}_r{run_i + 1}.csv")
         label = f"run {run_i + 1}"
         print(f"  Running {label}...", end=" ", flush=True)
-        t = run(video, truth, args.backend, out_csv, cpu_decord=args.cpu_decord,
-                ocr_model=args.ocr_model, reocr_model=args.reocr_model)
+        t = run(video, truth, args.backend, out_csv,
+                decode_backend=args.decode_backend)
         acc = accuracy(out_csv, truth) if "frames" in t else None
         if run_i == args.runs - 1:  # warm run -> report + record
             print_row(label, t, acc)
@@ -211,7 +218,12 @@ def main() -> None:
                                 ("frames", "actual_backend", "wall_s",
                                  "ocr_s", "decode_s", "inference_s",
                                  "correction_s", "total_pipeline_s",
-                                 "peak_rss_mb", "end_rss_mb")}
+                                 "engine_load_s", "video_open_s", "phase1_s",
+                                 "prewarm_s", "finalize_integrate_s",
+                                 "finalize_csv_s", "finalize_report_s",
+                                 "peak_rss_mb", "peak_cpu_pct",
+                                 "peak_gpu_util_pct", "peak_vram_mb",
+                                 "end_rss_mb")}
             record["accuracy"] = acc
         else:
             print_row(label, t)
