@@ -99,9 +99,11 @@ datas = [(s, d) for s, d in datas
 # ── OCR 模型资产（onnx + 字符表）──
 # TRT .engine 不随 EXE 分发（GPU 架构绑定）：首次运行时本地自动构建，
 # 缓存到 %LOCALAPPDATA%/RaceVideoToLog/ocr_engines/
+# 只打包 v6_small（v2.13 起唯一模型，GUI/CLI 无模型选择）—— tiny onnx
+# 已无用，排除省 ~4.3MB（源码 assets/ 保留，tools 实验脚本仍可用）。
 for _root, _dirs, _files in os.walk('assets/ocr_models'):
     for _f in _files:
-        if _f.endswith('.engine'):
+        if _f.endswith('.engine') or 'tiny' in _f:
             continue
         datas.append((os.path.join(_root, _f),
                       os.path.join('ocr_models', os.path.relpath(_root, 'assets/ocr_models'))))
@@ -145,6 +147,12 @@ a = Analysis(
         'onnxruntime.quantization', 'onnxruntime.quantization.*',
         'onnxruntime.datasets', 'onnxruntime.datasets.*',
         'onnxruntime.backend',
+        # pywin32：PyInstaller 在 Windows 的构建依赖（版本资源/图标处理），
+        # 其全局 win32com hook 会把整个 pywin32 + pythoncom.dll + mfc140u.dll
+        # (~9MB) 带进 dist。运行时不 import win32com（项目零引用），排除可
+        # 安全瘦身。构建阶段（spec 执行）不受 excludes 影响。
+        'win32com', 'win32com.*', 'pythonwin', 'pywin32',
+        'pywin32_system32', 'pythoncom', 'pywintypes',
         # scipy: 已用纯 numpy 替代 savgol_filter，完全排除
         'scipy', 'tkinter', '_tkinter',
         # PaddlePaddle (rapidocr 时代遗留；~1.1GB)
@@ -216,6 +224,14 @@ _EXCLUDE_BINARIES = {
     'DirectML.dll', 'onnxruntime_providers_tensorrt.dll',
     'onnxruntime_providers_cuda.dll',
     'tcl86t.dll', 'tk86t.dll', '_tkinter.pyd',
+    # pywin32 二进制（PyInstaller 构建依赖，运行时无引用；excludes 不拦
+    # binaries，按文件名过滤覆盖 3.11/3.12/3.13）—— 省 ~9MB（win32 pyd +
+    # pythoncom.dll + mfc140u.dll）
+    'pywintypes311.dll', 'pywintypes312.dll', 'pywintypes313.dll',
+    'pythoncom311.dll', 'pythoncom312.dll', 'pythoncom313.dll',
+    'win32api.pyd', 'win32gui.pyd', 'win32pdh.pyd', 'win32print.pyd',
+    'win32event.pyd', 'win32trace.pyd', '_win32sysloader.pyd',
+    'win32ui.pyd', 'mfc140u.dll',
     # Qt6 未使用模块（仅用 Widgets/Core/Gui）
     # Qt6OpenGL* 必须保留：pyqtgraph 0.14 OpenGLHelpers import PySide6.QtOpenGL
     'opengl32sw.dll', 'avcodec-61.dll',
