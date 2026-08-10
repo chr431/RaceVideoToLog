@@ -632,7 +632,8 @@ class RaceVideoToLogApp(QMainWindow):
                 for si, v in corrections.items():
                     if 0 <= si < len(vals):
                         vals[si] = v
-                pipeline.finalize(out, vals)
+                pipeline.finalize(out, vals,
+                                  pinned_indices=set(corrections.keys()))
             else:
                 pipeline.finalize(out)
             _t("final_check: finalize done")

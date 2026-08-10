@@ -156,6 +156,7 @@ class SegmentPipeline:
         self._segs: list = []
         self._frames: list = []
         self._ocr_vals: list = []
+        self._pinned: set = set()          # 用户手动修正的段索引（finalize 时设）
 
     def _open_vr(self):
         """按 decode_backend 打开 decord 解码器（auto/cpu/nvdec）。
@@ -594,7 +595,7 @@ class SegmentPipeline:
         conf = self._confidence(seg_vals, seg_times,
                                 [len(s) for s in segs])
         corr, self._n_corr = self._dense_correct(seg_vals, seg_times, conf)
-        self.rows = self._build_rows(frames, segs, corr)
+        self.rows = self._build_rows(frames, segs, corr, raw=seg_vals)
         self._store_run_state(frames, self.crops, segs, seg_vals, rep_frames, corr)
         self._write_csv(self.rows, output_path)
         self.timing["total"] = time.perf_counter() - t_total
@@ -783,12 +784,16 @@ class SegmentPipeline:
         return {k: v for k, v in self.timing.items()
                 if isinstance(v, (int, float))}
 
-    def finalize(self, output_path, segment_values=None):
+    def finalize(self, output_path, segment_values=None, pinned_indices=None):
         """从（可能被用户编辑的）段值重建 rows 并重写 CSV。
 
         segment_values: 与 self.segments 等长的段修正值；None = 用 run() 的
         纠正结果。GUI 段级 review 改值后调用，single-pass 重写输出。
+        pinned_indices: 用户手动修正的段索引集合（标 Flag.PINNED），
+        覆盖 DP/插值 flag 判定。
         """
+        if pinned_indices:
+            self._pinned = set(pinned_indices)
         if segment_values is None:
             vals = self._corr_vals
         else:
@@ -804,12 +809,31 @@ class SegmentPipeline:
         return self.rows
 
     # ── 阶段 5：构建 rows + 写 CSV ──
-    def _build_rows(self, frames, segs, corr):
+    def _build_rows(self, frames, segs, corr, raw=None, pinned=None):
+        """构建输出行 [frame, dist, speed, flag]。
+
+        flag 按段来源推理（段内帧共享）：
+        - pinned（用户手动修正）→ PINNED
+        - raw None（OCR 未读出）→ FILL_INTERP
+        - 值被改（corr != raw）→ DP_CORRECTED
+        - 其余 → RAW
+        """
+        if raw is None:
+            raw = self._ocr_vals
+        if pinned is None:
+            pinned = getattr(self, "_pinned", set())
         rows = []
-        for seg, val in zip(segs, corr):
+        for i, (seg, val) in enumerate(zip(segs, corr)):
+            if i in pinned:
+                flag = Flag.PINNED
+            elif i < len(raw) and raw[i] is None:
+                flag = Flag.FILL_INTERP
+            elif i < len(raw) and val is not None and val != raw[i]:
+                flag = Flag.DP_CORRECTED
+            else:
+                flag = Flag.RAW
             for fi in seg:
-                rows.append([fi, 0.0, val if val is not None else -1,
-                             Flag.RAW if val is not None else Flag.RAW])
+                rows.append([fi, 0.0, val if val is not None else -1, flag])
         rows.sort(key=lambda r: r[0])
         # 距离积分
         dist = 0.0

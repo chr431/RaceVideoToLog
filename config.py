@@ -25,6 +25,10 @@ DEFAULT_MAX_ACCEL: float = 50.0        # 最大加速度 (m/s²)
 DEFAULT_TARGET_H: int = 48             # OCR 预处理目标高度 (px)
 DEFAULT_PAD: int = 0                   # OCR 预处理 padding (px)
 DEFAULT_MAX_WIDTH: int = 0              # 预处理最大宽度 px（0=不限）
+OCR_GAMMA: float = 2.0                 # OCR 预处理灰度 gamma 增强指数（正式预处理：
+                                       # 白字黄底等背景色块场景放大高段分离；灰度
+                                       # 先于 gamma——RGB 逐通道 gamma 视觉差异小、
+                                       # 回归多。1.0=纯灰度不增强，0=保留 RGB）
 DEFAULT_LOG_LEVEL: str = "normal"      # 日志级别 (normal / detailed / debug)
 MONITOR_ENABLED: bool = True           # 默认启用资源监控（--no-monitor / GUI 复选框 / RVTOL_MONITOR=0 关闭）
 MONITOR_INTERVAL_S: float = 1.0        # 资源采样间隔（秒）
@@ -67,8 +71,10 @@ SEG_DP_MAX_DV_CAP: float = 4.0      # 每段转移最大变化 (km/h)：max_dv =
                                     # max_accel×dt 过松（8-off 跳变免费），
                                     # cap 保证误读跳变被惩罚、DP 拉正
 SEG_DP_ANCHOR_COST: float = 0.1     # 高置信段锚定代价（固定到 raw）
-SEG_DP_CHANGE_THRESHOLD: float = 2.0  # |DP输出 - raw| > 此值才修正：干净视频
-                                      # 1-off 拉偏不提交，2-off+ 误读被纠正
+SEG_DP_CHANGE_THRESHOLD: float = 3.0  # |DP输出 - raw| > 此值才修正：干净视频
+                                      # 1-off 拉偏不提交；放宽到 3.0 消掉 2-off
+                                      # 正确段被 DP 微调改错（gamma raw 下实测
+                                      # 误改 2→0，漏纠不变，最终 15→13）
 SEG_DP_ANCHOR_CONF: float = 20.0   # 锚定阈值：conf ≥ 此值的段固定到 raw
                                     # （门控 conf 后正确段 p10=72 干净分离，
                                     #  T=20 pin 100% 正确、仅 9% 误读）
