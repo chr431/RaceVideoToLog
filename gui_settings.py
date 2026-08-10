@@ -25,7 +25,7 @@ def build_settings_panel(parent) -> dict:
         format_ms, format_kmh, format_mph  -- RadioButton (speed format)
         max_speed_edit, max_accel_edit      -- LineEdit
         buffer_spin, target_h_spin, pad_spin, max_width_spin  -- CompactSpinBox
-        model_combo                         -- ComboBox (主 OCR 模型)
+        backend_combo                        -- ComboBox (解码后端 auto/cpu/nvdec)
         log_level_combo                     -- ComboBox
         monitor_checkbox                    -- CheckBox (资源监控开关)
         frame_start_edit, frame_end_edit    -- LineEdit
@@ -79,12 +79,13 @@ def build_settings_panel(parent) -> dict:
     pl.addWidget(BodyLabel("边缘填充 (px)"), 2, 2)
     widgets["pad_spin"] = make_int_spinbox(0, 64, config.DEFAULT_PAD, 70)
     pl.addWidget(widgets["pad_spin"], 2, 3)
-    pl.addWidget(BodyLabel("OCR 模型"), 3, 0)
-    widgets["model_combo"] = ComboBox()
-    widgets["model_combo"].addItems(["v6_small"])
-    widgets["model_combo"].setCurrentIndex(0)
-    widgets["model_combo"].setFixedWidth(95)
-    pl.addWidget(widgets["model_combo"], 3, 1)
+    pl.addWidget(BodyLabel("解码后端"), 3, 0)
+    widgets["backend_combo"] = ComboBox()
+    widgets["backend_combo"].addItems(
+        [config.DECODE_BACKEND_LABELS[k] for k in config.DECODE_BACKEND_KEYS])
+    widgets["backend_combo"].setCurrentIndex(0)
+    widgets["backend_combo"].setFixedWidth(95)
+    pl.addWidget(widgets["backend_combo"], 3, 1)
     pl.addWidget(BodyLabel("日志级别"), 3, 2)
     widgets["log_level_combo"] = ComboBox()
     widgets["log_level_combo"].addItems(["正常", "详细", "调试"])

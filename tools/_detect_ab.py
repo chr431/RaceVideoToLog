@@ -339,7 +339,7 @@ def main() -> None:
         roi, f_start, f_end, fps, ms, ma, mw, truth = load_meta(v)
         video = f"D:/Videos/racelog_test/{v}.mp4"
         pipe = SegmentPipeline(video, roi, ms, ma, fps, f_start, f_end,
-                               target_h=48, max_width=mw, ocr_model="v6_small")
+                               target_h=48, max_width=mw)
         frames, crops, grays, sharp = pipe._decode_all()
         segs = pipe._segment(frames, grays)
         seg_vals, rep_frames = pipe._ocr_segments(segs, crops, sharp)

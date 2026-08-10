@@ -40,8 +40,9 @@ def main() -> None:
     parser.add_argument("--pad", type=int, default=config.DEFAULT_PAD)
     parser.add_argument("--max-width", type=int, default=None,
         help="预处理最大宽度 px（0=不限）。扁宽字体设为 96 可改善识别")
-    parser.add_argument("--ocr-model", choices=["v6_small"], default=config.DEFAULT_OCR_MODEL,
-        help="OCR 模型（v2.13 起唯一 v6_small，无重 OCR）")
+    parser.add_argument("--decode-backend", choices=config.DECODE_BACKEND_KEYS,
+        default=config.DEFAULT_DECODE_BACKEND,
+        help="解码后端（auto/cpu/nvdec，默认 auto 自动选 GPU）")
     parser.add_argument("-o", "--output", type=str)
     parser.add_argument("--frame-start", type=int, metavar="N")
     parser.add_argument("--frame-end", type=int, metavar="N")

@@ -510,7 +510,10 @@ class RaceVideoToLogApp(QMainWindow):
 
         # ── 下拉框字段 ──
         _combo_map = {
-            "model":        (s["model_combo"],         {"v6_small": 0}),
+            "backend": (s["backend_combo"], {
+                "auto": 0, "cpu": 1, "nvdec": 2,
+                "decord/cpu": 1, "decord/gpu": 2,
+            }),
         }
         for key, (combo, mapping) in _combo_map.items():
             val = parse_csv_setting(key, settings.get(key, ""))
@@ -567,9 +570,9 @@ class RaceVideoToLogApp(QMainWindow):
             video_path=self.video_path,
             roi=roi,
             max_speed_kmh=ms, max_accel_mps2=ma,
-            buffer_size=bu, target_h=th, pad_px=pp,
+            buffer_size=bu, decode_backend=config.DECODE_BACKEND_KEYS[
+                s["backend_combo"].currentIndex()], target_h=th, pad_px=pp,
             max_width=mw,
-            ocr_model=s["model_combo"].currentText(),
             speed_format=self.speed_format,
             frame_start=s["frame_start_edit"].text(),
             frame_end=s["frame_end_edit"].text(),

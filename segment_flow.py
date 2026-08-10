@@ -93,7 +93,8 @@ class SegmentPipeline:
     def __init__(self, video_path: str, roi: tuple, max_speed_kmh: float,
                  max_accel_mps2: float, fps: float | None, frame_start: int | None,
                  frame_end: int | None, target_h: int, max_width: int,
-                 ocr_model: str, speed_format: str = "km/h",
+                 speed_format: str = "km/h",
+                 decode_backend: str = "auto",
                  buffer_size: int = config.DEFAULT_BUFFER_SIZE, pad: int = 0,
                  C: float = config.SEG_C, win: int = config.SEG_WIN,
                  mult: float = config.SEG_MULT,
@@ -121,7 +122,8 @@ class SegmentPipeline:
         self._frame_end = frame_end
         self._target_h = target_h
         self._max_width = max_width
-        self._ocr_model = ocr_model
+        self._ocr_model = config.DEFAULT_OCR_MODEL  # 唯一模型 v6_small（v2.14 移除选择）
+        self._decode_backend = decode_backend
         self._speed_format = speed_format
         self._buffer_size = buffer_size
         self._pad = pad
@@ -153,22 +155,34 @@ class SegmentPipeline:
         self._frames: list = []
         self._ocr_vals: list = []
 
-    # ── 阶段 1：解码 + 特征（diff/清晰度）──
-    def _decode_all(self):
+    def _open_vr(self):
+        """按 decode_backend 打开 decord 解码器（auto/cpu/nvdec）。
+
+        auto: 尝试 GPU (NVDEC) 失败回退 CPU。cpu: 强制 CPU。
+        nvdec: 强制 GPU（失败回退 CPU 并警告）。替代旧 DECORD_FORCE_CPU env。
+        """
         from decord import VideoReader, gpu, cpu
+        backend = (self._decode_backend or "auto").lower()
         vr = None
         label = "CPU"
-        _force = _os.environ.get("DECORD_FORCE_CPU", "").strip() == "1"
-        if not _force:
+        if backend in ("auto", "nvdec"):
             try:
                 from decord import gpu as _g
                 vr = VideoReader(str(self._video_path), ctx=_g(0))
                 label = "GPU"
             except Exception:
                 vr = None
+                if backend == "nvdec":
+                    logger.warning("NVDEC 解码不可用，回退 CPU")
         if vr is None:
             vr = VideoReader(str(self._video_path), ctx=cpu(0))
+            label = "CPU"
         self._backend = f"decord/{label}"
+        return vr
+
+    # ── 阶段 1：解码 + 特征（diff/清晰度）──
+    def _decode_all(self):
+        vr = self._open_vr()
         # fps 未指定时从解码器推导（CLI/GUI 无需传 fps）
         if self._fps is None:
             for m in ("get_avg_fps", "get_fps"):
@@ -598,20 +612,7 @@ class SegmentPipeline:
         from ocr_engine import extract_speed_value
 
         # ── 打开解码器 + fps ──
-        from decord import VideoReader, gpu, cpu
-        vr = None
-        label = "CPU"
-        _force = _os.environ.get("DECORD_FORCE_CPU", "").strip() == "1"
-        if not _force:
-            try:
-                from decord import gpu as _g
-                vr = VideoReader(str(self._video_path), ctx=_g(0))
-                label = "GPU"
-            except Exception:
-                vr = None
-        if vr is None:
-            vr = VideoReader(str(self._video_path), ctx=cpu(0))
-        self._backend = f"decord/{label}"
+        vr = self._open_vr()
         if self._fps is None:
             for m in ("get_avg_fps", "get_fps"):
                 fn = getattr(vr, m, None)

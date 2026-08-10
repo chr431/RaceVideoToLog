@@ -8,8 +8,7 @@ from segment_flow import SegmentPipeline, _cluster_win3, _otsu, _gray
 def _pipe(**kw):
     defaults = dict(video_path="x", roi=(0, 0, 10, 10), max_speed_kmh=400.0,
                     max_accel_mps2=50.0, fps=30.0, frame_start=None,
-                    frame_end=None, target_h=48, max_width=0,
-                    ocr_model="v6_small")
+                    frame_end=None, target_h=48, max_width=0)
     defaults.update(kw)
     return SegmentPipeline(**defaults)
 

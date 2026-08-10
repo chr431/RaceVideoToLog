@@ -71,7 +71,7 @@ def main() -> None:
         t0 = time.perf_counter()
         pipe = segment_flow.SegmentPipeline(
             video, roi, ms, ma, fps, f_start, f_end,
-            target_h=48, max_width=mw, ocr_model="v6_small",
+            target_h=48, max_width=mw,
             speed_format="km/h", pad=0)
         out = str(PROJECT / "outputs" / f"_segment_{v}.csv")
         pipe.run(out)

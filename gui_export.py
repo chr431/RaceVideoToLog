@@ -49,9 +49,9 @@ class ExportThread(QThread):
             max_speed_kmh: float,
             max_accel_mps2: float,
             buffer_size: int,
+            decode_backend: str,
             target_h: int,
             pad_px: int,
-            ocr_model: str,
             speed_format: str,
             frame_start: str,
             frame_end: str,
@@ -66,9 +66,9 @@ class ExportThread(QThread):
         self._max_speed_kmh = max_speed_kmh
         self._max_accel_mps2 = max_accel_mps2
         self._buffer_size = buffer_size
+        self._decode_backend = decode_backend
         self._target_h = target_h
         self._pad_px = pad_px
-        self._ocr_model = ocr_model
         self._speed_format = speed_format
         self._frame_start = _to_int_or_none(frame_start)
         self._frame_end = _to_int_or_none(frame_end)
@@ -99,9 +99,9 @@ class ExportThread(QThread):
                     max_speed_kmh=self._max_speed_kmh,
                     max_accel_mps2=self._max_accel_mps2,
                     buffer_size=self._buffer_size,
+                    decode_backend=self._decode_backend,
                     target_h=self._target_h,
                     pad=self._pad_px,
-                    ocr_model=self._ocr_model,
                     speed_format=self._speed_format,
                     frame_start=self._frame_start,
                     frame_end=self._frame_end,

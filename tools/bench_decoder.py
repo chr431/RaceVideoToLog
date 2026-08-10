@@ -40,19 +40,14 @@ def resolve(video_name: str) -> tuple[str, str]:
 
 
 def run(video: str, truth: str, backend: str, out_csv: str,
-        cpu_decord: bool = False, ocr_model: str = "v6_tiny") -> dict:
+        decode_backend: str = "auto") -> dict:
     """Run headless pipeline, parse timing + actual backend from output CSV/stdout.
 
-    ocr_model 必须显式传给 CLI —— truth CSV 头的 model= 字段可能是别的
-    模型（如 test5_ref 记录 v6_small），不传时 from-csv 会覆盖默认值，主
-    OCR 被静默换成 small（实测 infer 26.5s vs tiny 6.4s）。重 OCR 由
-    pipeline 自动推导（tiny→small / small→无），无需显式指定。
+    OCR 模型固定 v6_small（v2.14 起移除模型选择）。
     """
     Path(out_csv).unlink(missing_ok=True)  # stale CSV from a prior run must not be parsed
     t0 = time.perf_counter()
     env = dict(os.environ)
-    if cpu_decord:
-        env["DECORD_FORCE_CPU"] = "1"
     # 子进程 RSS 采样（教训：速度测试必须同时监测内存 —— CPU 解码的
     # 视图引用泄漏曾让 3000 帧吃掉 18GB）
     try:
@@ -66,12 +61,14 @@ def run(video: str, truth: str, backend: str, out_csv: str,
     stderr_log = Path(out_csv).with_suffix(".stderr.txt")
     fo = open(stdout_log, "w", encoding="utf-8", errors="replace")
     fe = open(stderr_log, "w", encoding="utf-8", errors="replace")
+    cli_args = [sys.executable, str(PROJECT / "RaceVideoToLog.py"),
+                video, "--from-csv", truth,
+                "--log-level", "detailed"]
+    if decode_backend != "auto":
+        cli_args += ["--decode-backend", decode_backend]
+    cli_args += ["-o", out_csv]
     child = subprocess.Popen(
-        [sys.executable, str(PROJECT / "RaceVideoToLog.py"),
-         video, "--from-csv", truth,
-         "--ocr-model", ocr_model,
-         "--log-level", "detailed",
-         "-o", out_csv],
+        cli_args,
         cwd=str(PROJECT), stdout=fo, stderr=fe, env=env,
     )
     peak_rss, cur_rss = 0.0, 0.0
@@ -180,12 +177,9 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--video", default="test4", help="video name (resolved under D:/Videos/racelog_test)")
     ap.add_argument("--backend", default="tensorrt", choices=["tensorrt", "cpu", "auto"])
-    ap.add_argument("--cpu-decord", action="store_true",
-                    help="force decord CPU decoder (DECORD_FORCE_CPU=1)")
-    ap.add_argument("--ocr-model", default="v6_tiny", choices=["v6_tiny", "v6_small"],
-                    help="main OCR model (explicit — otherwise from-csv may "
-                         "override with the truth CSV's model= value; re-OCR "
-                         "auto-derives: tiny→small / small→none)")
+    ap.add_argument("--decode-backend", default="auto",
+                    choices=config.DECODE_BACKEND_KEYS,
+                    help="decord 解码后端 (auto/cpu/nvdec)")
     ap.add_argument("--runs", type=int, default=2, help="runs (last one used for stats)")
     ap.add_argument("--json", type=str, default="", help="save record to JSON (default outputs/bench_<video>.json)")
     args = ap.parse_args()
@@ -196,18 +190,17 @@ def main() -> None:
 
     print(f"Video: {video}")
     print(f"Truth: {truth}")
-    print(f"Backend: {args.backend}, decord: {'CPU' if args.cpu_decord else 'auto'}, runs: {args.runs}")
+    print(f"Backend: {args.backend}, decord: {args.decode_backend}, runs: {args.runs}")
 
     record: dict = {"video": args.video, "backend": args.backend,
-                    "cpu_decord": args.cpu_decord,
-                    "ocr_model": args.ocr_model,
+                    "decode_backend": args.decode_backend,
                     "runs": []}
     for run_i in range(args.runs):
         out_csv = str(OUT_DIR / f"bench_{args.video}_r{run_i + 1}.csv")
         label = f"run {run_i + 1}"
         print(f"  Running {label}...", end=" ", flush=True)
-        t = run(video, truth, args.backend, out_csv, cpu_decord=args.cpu_decord,
-                ocr_model=args.ocr_model)
+        t = run(video, truth, args.backend, out_csv,
+                decode_backend=args.decode_backend)
         acc = accuracy(out_csv, truth) if "frames" in t else None
         if run_i == args.runs - 1:  # warm run -> report + record
             print_row(label, t, acc)
