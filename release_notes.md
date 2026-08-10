@@ -1,5 +1,22 @@
 # Release Notes
 
+## v2.13.1（2026-08-10）— EXE 瘦身（排除 tiny onnx + pywin32）
+
+> 本节面向使用者：只讲你能直接感知到的变化。技术细节见下方各节。
+
+### 📦 体积减小
+
+- **安装包从 v2.13.0 的 166.6MB 减到 ~160MB**（-7MB）
+- 打包排除不再使用的 tiny OCR 模型（v2.13 起固定 v6_small）+ PyInstaller 构建
+  依赖意外带入的 pywin32 运行时组件（win32 / pythoncom / mfc140u，项目零引用）
+- 功能不变：OCR 精度、GUI、全部流程与 v2.13.0 一致（仅体积优化）
+
+### 🔧 内部
+
+- spec 打包过滤 tiny onnx（源码 assets 保留，实验工具不受影响）
+- spec 排除 win32com/pywin32 纯模块 + 按文件名过滤 win32 binaries
+  （excludes 拦不住 hook 收集的 binaries，需二次过滤）
+
 ## v2.13.0（2026-08-10）— gray+gamma OCR 正式化 + 段级纠错完善 + flag 重设计
 
 > 本节面向使用者：只讲你能直接感知到的变化。技术细节见下方各节。
