@@ -101,7 +101,7 @@ def build_settings_panel(parent) -> dict:
     widgets["log_level_combo"].setFixedWidth(120)
     pl.addWidget(widgets["log_level_combo"], 4, 1)
     pl.addWidget(BodyLabel("资源监控"), 4, 2)
-    widgets["monitor_checkbox"] = CheckBox("内存 / CPU / GPU 采样")
+    widgets["monitor_checkbox"] = CheckBox("")
     widgets["monitor_checkbox"].setChecked(config.MONITOR_ENABLED)
     pl.addWidget(widgets["monitor_checkbox"], 4, 3)
 

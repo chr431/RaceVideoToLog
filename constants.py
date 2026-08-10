@@ -7,17 +7,21 @@ class Flag:
     """速度数据 flag 值 — 标记每段数据的来源和可信度（段级，段内帧共享）。
 
     信任层级（由低到高）:
-        RAW (0)           — OCR 原始值，未被纠正
+        RAW (0)           — OCR 原始值，未被纠正且未通过验证（少数）
         DP_CORRECTED (11) — 段级 DP 稠密纠正（平滑误读尖峰）
         FILL_INTERP (12)  — OCR 未读出（None）段的锚点插值填充
+        HIGH_TRUST (21)   — 段级验证（conf ≥ 锚定阈值）通过、未纠正的可信段
+                            （绝大多数）
         PINNED (22)       — 用户手动修正（GUI review），绝对真值
 
     区间语义（供 GUI 绘图按 flag 着色）：
-        10-19 = 自动纠错帧（is_corrected）；20-29 = 高可信帧（is_trusted）。
+        10-19 = 自动纠错帧（is_corrected，标红）；20-29 = 高可信帧
+        （is_trusted，标绿）。
     """
     RAW: int = 0
     DP_CORRECTED: int = 11
     FILL_INTERP: int = 12
+    HIGH_TRUST: int = 21
     PINNED: int = 22
 
     @classmethod
@@ -27,7 +31,7 @@ class Flag:
 
     @classmethod
     def is_trusted(cls, flag: int) -> bool:
-        """是否为高可信帧 — PINNED (20-29)。"""
+        """是否为高可信帧 — HIGH_TRUST / PINNED (20-29)。"""
         return 20 <= flag <= 29
 
 OCR_NUMBER_RE = re.compile(r"\d+(?:[\.,]\d+)?")  # noqa: E305

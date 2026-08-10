@@ -156,6 +156,7 @@ class SegmentPipeline:
         self._segs: list = []
         self._frames: list = []
         self._ocr_vals: list = []
+        self._conf_vals: list = []        # 每段置信度（run 后填充，flag 判定用）
         self._pinned: set = set()          # 用户手动修正的段索引（finalize 时设）
 
     def _open_vr(self):
@@ -594,8 +595,10 @@ class SegmentPipeline:
         seg_times = [seg[len(seg) // 2] for seg in segs]
         conf = self._confidence(seg_vals, seg_times,
                                 [len(s) for s in segs])
+        self._conf_vals = list(conf)       # 供 finalize/flag 判定复用
         corr, self._n_corr = self._dense_correct(seg_vals, seg_times, conf)
-        self.rows = self._build_rows(frames, segs, corr, raw=seg_vals)
+        self.rows = self._build_rows(frames, segs, corr, raw=seg_vals,
+                                     conf=conf)
         self._store_run_state(frames, self.crops, segs, seg_vals, rep_frames, corr)
         self._write_csv(self.rows, output_path)
         self.timing["total"] = time.perf_counter() - t_total
@@ -809,17 +812,21 @@ class SegmentPipeline:
         return self.rows
 
     # ── 阶段 5：构建 rows + 写 CSV ──
-    def _build_rows(self, frames, segs, corr, raw=None, pinned=None):
+    def _build_rows(self, frames, segs, corr, raw=None, conf=None,
+                    pinned=None):
         """构建输出行 [frame, dist, speed, flag]。
 
         flag 按段来源推理（段内帧共享）：
         - pinned（用户手动修正）→ PINNED
         - raw None（OCR 未读出）→ FILL_INTERP
         - 值被改（corr != raw）→ DP_CORRECTED
-        - 其余 → RAW
+        - 值未被改但 conf ≥ 锚定阈值（物理验证通过）→ HIGH_TRUST（绝大多数）
+        - 其余（未验证的原始值）→ RAW
         """
         if raw is None:
             raw = self._ocr_vals
+        if conf is None:
+            conf = getattr(self, "_conf_vals", None)
         if pinned is None:
             pinned = getattr(self, "_pinned", set())
         rows = []
@@ -830,6 +837,9 @@ class SegmentPipeline:
                 flag = Flag.FILL_INTERP
             elif i < len(raw) and val is not None and val != raw[i]:
                 flag = Flag.DP_CORRECTED
+            elif conf is not None and i < len(conf) \
+                    and conf[i] >= self._dp_anchor_conf:
+                flag = Flag.HIGH_TRUST
             else:
                 flag = Flag.RAW
             for fi in seg:
