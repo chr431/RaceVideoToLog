@@ -41,6 +41,32 @@ SEG_SINGLE_FLOOR: float = 2.0   # 单帧段专用带宽下限：单帧段误读�
                                 #  需配合纠错保守化（下一步）才可放宽）
 SEG_ANCHOR_MAX_FRAMES: float = 120.0  # 纠错锚点最大帧距离：近锚点才插值（防远锚点误插值）
 
+# ═══════════════════ 段级置信度（中值偏差 + 急动度加权，供 DP 锚定） ═══════════════════
+SEG_CONF_W_MED: float = 0.7       # 中值偏差信号权重（主导锚定：紧邻误读的
+                                  # 正确段中值分高 → 被 pin，防 DP 平滑拖走）
+SEG_CONF_W_JERK: float = 0.3      # 急动度信号权重：辅助区分（刹车中值低但
+                                  # 急动度高 → conf 中，raw 观测保其不变）
+SEG_CONF_JERK_SCALE: float = 3.0  # 急动度分指数尺度 (km/h)：100*exp(-jerk/scale)
+
+# ═══════════════════ 段级稠密格点 DP 纠正（对齐旧 viterbi_dense） ═══════════════════
+# 观测 = 纯惩罚偏离 raw（旧系统 ref 来自重 OCR，重 OCR 已删 → ref 删除）。
+# 观测存在的意义：惩罚任何改动，防止把正确的改错。DP 只在转移平滑性
+# （加速度约束）强烈要求时移动值。
+SEG_DP_OBS_WEIGHT: float = 1.0      # 观测权重：非锚点填向局部锚点插值（曲线），
+                                    # 高权重让 DP 输出精确贴合曲线（锚点插值
+                                    # 本身给基线，DP 再加全局平滑处理运行）
+SEG_DP_ACCEL_WEIGHT: float = 1.0    # 转移权重：超加速度约束的二次惩罚
+SEG_DP_MAX_DV_CAP: float = 4.0      # 每段转移最大变化 (km/h)：max_dv = min(
+                                    # max_accel×dt×3.6, cap)。长段间距时
+                                    # max_accel×dt 过松（8-off 跳变免费），
+                                    # cap 保证误读跳变被惩罚、DP 拉正
+SEG_DP_ANCHOR_COST: float = 0.1     # 高置信段锚定代价（固定到 raw）
+SEG_DP_CHANGE_THRESHOLD: float = 2.0  # |DP输出 - raw| > 此值才修正：干净视频
+                                      # 1-off 拉偏不提交，2-off+ 误读被纠正
+SEG_DP_ANCHOR_CONF: float = 20.0   # 锚定阈值：conf ≥ 此值的段固定到 raw
+                                    # （门控 conf 后正确段 p10=72 干净分离，
+                                    #  T=20 pin 100% 正确、仅 9% 误读）
+
 # ═══════════════════ OCR 输入 pad 宽度下限 ═══════════════════
 # 速度数字是窄图（48 高后 78-160 宽）。v6_small 在宽 pad 更准
 # （test6：224→err 0.09%，192→0.16%，48~96→0.69~1.19%；256 精度相同但更慢）。

@@ -102,6 +102,15 @@ class SegmentPipeline:
                  detect_floor: float = config.SEG_DETECT_FLOOR,
                  single_floor: float = config.SEG_SINGLE_FLOOR,
                  anchor_max: float = config.SEG_ANCHOR_MAX_FRAMES,
+                 conf_w_med: float = config.SEG_CONF_W_MED,
+                 conf_w_jerk: float = config.SEG_CONF_W_JERK,
+                 conf_jerk_scale: float = config.SEG_CONF_JERK_SCALE,
+                 dp_obs_weight: float = config.SEG_DP_OBS_WEIGHT,
+                 dp_accel_weight: float = config.SEG_DP_ACCEL_WEIGHT,
+                 dp_max_dv_cap: float = config.SEG_DP_MAX_DV_CAP,
+                 dp_anchor_cost: float = config.SEG_DP_ANCHOR_COST,
+                 dp_change_threshold: float = config.SEG_DP_CHANGE_THRESHOLD,
+                 dp_anchor_conf: float = config.SEG_DP_ANCHOR_CONF,
                  progress_cb=None, cancel_check=None):
         self._video_path = Path(video_path)
         self._roi = tuple(roi)
@@ -124,6 +133,15 @@ class SegmentPipeline:
         self._detect_floor = detect_floor
         self._single_floor = single_floor
         self._anchor_max = anchor_max
+        self._conf_w_med = conf_w_med
+        self._conf_w_jerk = conf_w_jerk
+        self._conf_jerk_scale = conf_jerk_scale
+        self._dp_obs_weight = dp_obs_weight
+        self._dp_accel_weight = dp_accel_weight
+        self._dp_max_dv_cap = dp_max_dv_cap
+        self._dp_anchor_cost = dp_anchor_cost
+        self._dp_change_threshold = dp_change_threshold
+        self._dp_anchor_conf = dp_anchor_conf
         self._progress = progress_cb or (lambda m, p: None)
         self._cancel = cancel_check or (lambda: None)
         self.rows: list = []
@@ -342,6 +360,208 @@ class SegmentPipeline:
                     n_corr += 1
         return out, n_corr
 
+    def _confidence(self, seg_vals, seg_times, seg_lens=None):
+        """中值偏差 + 急动度加权置信度 [0,100]（门控急动度）。
+
+        med_score = 100·exp(-dev/bw)：贴合曲线程度。**门控**：贴合曲线
+        （med_score ≥ 50）的段 conf 直接取中值分——急动度会被邻居误读
+        污染，贴合曲线的正确段不应被拉低（这是 conf 准确度的关键修复，
+        实测 145 vs 中值 144 的正确段此前因污染 conf=50 不锚定被 DP 拖走）。
+        偏离曲线的段才让急动度参与：刹车（平滑）高分、误读（尖锐）低分。
+        边缘段保守 100；None 段 0（必纠正）。
+        """
+        n = len(seg_vals)
+        if n >= 2:
+            gaps = np.diff(seg_times)
+            med_gap = float(np.median(gaps)) if len(gaps) else 1.0
+        else:
+            med_gap = 1.0
+        win_frames = min(self._win * max(med_gap, 1.0), 120.0)
+        st = np.asarray(seg_times, dtype=np.float64)
+        bw_raw = [0.0] * n
+        for i in range(n):
+            ti = seg_times[i]
+            lo = int(np.searchsorted(st, ti - win_frames, side="left"))
+            hi = int(np.searchsorted(st, ti + win_frames, side="right"))
+            dvs = [abs(seg_vals[j] - seg_vals[j - 1])
+                   for j in range(lo + 1, hi)
+                   if seg_vals[j] is not None and seg_vals[j - 1] is not None]
+            bw_raw[i] = float(np.median(dvs)) if dvs else 0.0
+        conf = [0.0] * n
+        for i in range(n):
+            if seg_vals[i] is None:
+                conf[i] = 0.0
+                continue
+            lo = max(0, i - self._med_k)
+            hi = min(n, i + self._med_k + 1)
+            nbrs = [seg_vals[j] for j in range(lo, hi) if seg_vals[j] is not None]
+            if len(nbrs) < 3:
+                conf[i] = 30.0
+                continue
+            lefts = any(seg_vals[j] is not None for j in range(lo, i))
+            rights = any(seg_vals[j] is not None for j in range(i + 1, hi))
+            if not (lefts and rights):
+                conf[i] = 100.0
+                continue
+            med = float(np.median(nbrs))
+            dev = abs(seg_vals[i] - med)
+            bw = max(bw_raw[i], self._detect_floor)
+            med_score = 100.0 * np.exp(-dev / bw)
+            # 贴合曲线 → 直接中值分（忽略被污染的急动度）
+            if med_score >= 50.0:
+                conf[i] = med_score
+                continue
+            # 偏离曲线 → 急动度分辨刹车 vs 误读
+            jl = seg_vals[i - 1] if i - 1 >= 0 else None
+            jr = seg_vals[i + 1] if i + 1 < n else None
+            if jl is not None and jr is not None:
+                jerk = abs(jr - 2 * seg_vals[i] + jl)
+                jerk_score = 100.0 * np.exp(-jerk / self._conf_jerk_scale)
+                conf[i] = (self._conf_w_med * med_score
+                           + self._conf_w_jerk * jerk_score)
+            else:
+                conf[i] = med_score
+        return conf
+
+    def _median_values(self, seg_vals, seg_times):
+        """每段局部中值（±med_k 窗口内非 None），None 段 → None。"""
+        n = len(seg_vals)
+        meds: list = [None] * n
+        for i in range(n):
+            lo = max(0, i - self._med_k)
+            hi = min(n, i + self._med_k + 1)
+            nbrs = [seg_vals[j] for j in range(lo, hi)
+                    if seg_vals[j] is not None]
+            if nbrs:
+                meds[i] = float(np.median(nbrs))
+        return meds
+
+    def _fill_values(self, seg_vals, seg_times, is_anchor):
+        """每段的局部锚点插值（最近左右锚点的时间线性插值）。
+
+        ±10 窗口的中值在加速斜坡区被斜坡污染（实测段48 中值 84.5 vs 局部
+        87）。非锚点段（suspect，可能是误读）的观测目标用锚点插值——贴合
+        局部曲线，而非错误 raw 或污染的窗口。
+        """
+        n = len(seg_vals)
+        fill: list = [None] * n
+        for i in range(n):
+            la = None
+            for j in range(i - 1, -1, -1):
+                if is_anchor[j] and seg_vals[j] is not None:
+                    if seg_times[i] - seg_times[j] <= self._anchor_max:
+                        la = j
+                    break
+            ra = None
+            for j in range(i + 1, n):
+                if is_anchor[j] and seg_vals[j] is not None:
+                    if seg_times[j] - seg_times[i] <= self._anchor_max:
+                        ra = j
+                    break
+            if la is not None and ra is not None:
+                span = seg_times[ra] - seg_times[la]
+                frac = (seg_times[i] - seg_times[la]) / span if span > 1e-3 else 0.5
+                fill[i] = (seg_vals[la]
+                           + (seg_vals[ra] - seg_vals[la]) * frac)
+            elif la is not None:
+                fill[i] = seg_vals[la]
+            elif ra is not None:
+                fill[i] = seg_vals[ra]
+        return fill
+
+    def _dense_correct(self, seg_vals, seg_times, conf):
+        """段级稠密格点 DP 纠正（对齐旧 viterbi_dense，无 ref）。
+
+        锚点 = conf ≥ SEG_DP_ANCHOR_CONF 的段（门控 conf 后正确段高分
+        可靠锚定）。其余段跑 DP：观测 = 纯惩罚偏离 raw（重 OCR 已删 → ref
+        删除；观测的意义是惩罚改动，防把正确的改错），转移 = 加速度约束。
+        """
+        n = len(seg_vals)
+        out = list(seg_vals)
+        n_corr = 0
+        # 无效 raw（None/0）段的填充目标：局部锚点插值（非 ±10 中值，
+        # 后者在加速斜坡区被污染）
+        is_anchor = [c >= self._dp_anchor_conf and v is not None
+                     for c, v in zip(conf, seg_vals)]
+        fill = self._fill_values(seg_vals, seg_times, is_anchor)
+        i = 0
+        while i < n:
+            if is_anchor[i]:
+                i += 1
+                continue
+            j = i
+            while j + 1 < n and not is_anchor[j + 1]:
+                j += 1
+            lo = i - 1 if i > 0 else i
+            hi = j + 1 if j + 1 < n else j
+            if lo != hi or not is_anchor[lo]:
+                path = self._dp_run(lo, hi, seg_vals, seg_times, is_anchor,
+                                    fill)
+                for k in range(hi - lo + 1):
+                    idx = lo + k
+                    v = seg_vals[idx]
+                    val = float(path[k])
+                    if v is None:
+                        out[idx] = round(val)
+                        n_corr += 1
+                    elif abs(val - v) > self._dp_change_threshold:
+                        out[idx] = round(val)
+                        n_corr += 1
+            i = j + 1
+        return out, n_corr
+
+    def _dp_run(self, lo, hi, seg_vals, seg_times, is_anchor, fill=None):
+        """稠密 DP：观测=罚偏离 raw（无效 raw 填向局部锚点插值），转移=加速度约束。"""
+        V = int(self._max_speed) + 1
+        grid = np.arange(V, dtype=np.float64)
+        n = hi - lo + 1
+        obs_list = []
+        for k in range(lo, hi + 1):
+            v = seg_vals[k]
+            if is_anchor[k]:
+                o = np.full(V, np.inf)
+                if v is not None and 0 <= v < V:
+                    o[int(round(v))] = self._dp_anchor_cost
+                obs_list.append(o)
+            else:
+                o = np.full(V, self._dp_obs_weight)
+                # 非锚点（suspect）：填向局部锚点插值（fill）——错误 raw 不可信，
+                # 观测目标应是曲线；无 fill 时回退到 raw。
+                r = fill[k] if fill else None
+                if r is not None and r > 0:
+                    ratio = np.abs(grid - r) / max(1.0, abs(r))
+                    np.minimum(1.0, ratio, out=ratio)
+                    o = self._dp_obs_weight * ratio
+                elif v is not None and v > 0:
+                    ratio = np.abs(grid - v) / max(1.0, abs(v))
+                    np.minimum(1.0, ratio, out=ratio)
+                    o = self._dp_obs_weight * ratio
+                obs_list.append(o)
+        dp = obs_list[0].copy()
+        back = []
+        for k in range(1, n):
+            fi = lo + k
+            dt = (seg_times[fi] - seg_times[fi - 1]) / max(self._fps, 1.0)
+            if dt <= 0:
+                dt = 1.0 / max(self._fps, 1.0)
+            max_dv = min(self._max_accel * dt * 3.6, self._dp_max_dv_cap)
+            # O(V²) 转移：T[v] = min_w (dp[w] + accel*max(0,|v-w|-max_dv)^2)
+            w = grid[:, None]
+            vv = grid[None, :]
+            cost = (self._dp_accel_weight
+                    * np.maximum(0.0, np.abs(vv - w) - max_dv) ** 2)
+            T = dp[:, None] + cost
+            best = T.min(axis=0)
+            back.append(T.argmin(axis=0))
+            dp = best + obs_list[k]
+        path = np.zeros(n)
+        cur = int(np.argmin(dp))
+        for k in range(n - 1, -1, -1):
+            path[k] = grid[cur]
+            if k > 0:
+                cur = int(back[k - 1][cur])
+        return path
+
     # ── 主入口（流水线：解码∥分段∥段OCR 重叠 → 检测纠正 → CSV）──
     def run(self, output_path):
         t_total = time.perf_counter()
@@ -350,9 +570,9 @@ class SegmentPipeline:
         self._cancel()
         self._progress("检测纠正...", 88.0)
         seg_times = [seg[len(seg) // 2] for seg in segs]
-        suspect = self._detect(seg_vals, seg_times,
-                               [len(s) for s in segs])
-        corr, self._n_corr = self._correct(seg_vals, seg_times, suspect)
+        conf = self._confidence(seg_vals, seg_times,
+                                [len(s) for s in segs])
+        corr, self._n_corr = self._dense_correct(seg_vals, seg_times, conf)
         self.rows = self._build_rows(frames, segs, corr)
         self._store_run_state(frames, self.crops, segs, seg_vals, rep_frames, corr)
         self._write_csv(self.rows, output_path)
