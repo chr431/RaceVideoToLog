@@ -5,7 +5,7 @@ v2.13 起：分段流水线（segment_flow.py）为唯一管线，原逐帧纠�
 """
 from __future__ import annotations
 
-__version__ = "2.13.0"
+__version__ = "2.13.1"
 
 # ═══════════════════ 物理常量 ═══════════════════
 MPS_TO_KMH: float = 3.6          # m/s → km/h 转换因子
