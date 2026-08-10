@@ -50,6 +50,7 @@ class ExportThread(QThread):
             max_accel_mps2: float,
             buffer_size: int,
             decode_backend: str,
+            ocr_backend: str,
             target_h: int,
             pad_px: int,
             speed_format: str,
@@ -67,6 +68,7 @@ class ExportThread(QThread):
         self._max_accel_mps2 = max_accel_mps2
         self._buffer_size = buffer_size
         self._decode_backend = decode_backend
+        self._ocr_backend = ocr_backend
         self._target_h = target_h
         self._pad_px = pad_px
         self._speed_format = speed_format
@@ -100,6 +102,7 @@ class ExportThread(QThread):
                     max_accel_mps2=self._max_accel_mps2,
                     buffer_size=self._buffer_size,
                     decode_backend=self._decode_backend,
+                    ocr_backend=self._ocr_backend,
                     target_h=self._target_h,
                     pad=self._pad_px,
                     speed_format=self._speed_format,

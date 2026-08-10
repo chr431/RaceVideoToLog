@@ -95,6 +95,7 @@ class SegmentPipeline:
                  frame_end: int | None, target_h: int, max_width: int,
                  speed_format: str = "km/h",
                  decode_backend: str = "auto",
+                 ocr_backend: str = "auto",
                  buffer_size: int = config.DEFAULT_BUFFER_SIZE, pad: int = 0,
                  C: float = config.SEG_C, win: int = config.SEG_WIN,
                  mult: float = config.SEG_MULT,
@@ -124,6 +125,7 @@ class SegmentPipeline:
         self._max_width = max_width
         self._ocr_model = config.DEFAULT_OCR_MODEL  # 唯一模型 v6_small（v2.14 移除选择）
         self._decode_backend = decode_backend
+        self._ocr_backend = ocr_backend
         self._speed_format = speed_format
         self._buffer_size = buffer_size
         self._pad = pad
@@ -179,6 +181,11 @@ class SegmentPipeline:
             label = "CPU"
         self._backend = f"decord/{label}"
         return vr
+
+    def _ocr_engine_type(self) -> str:
+        """OCR 推理后端：auto/tensorrt → tensorrt（OcrEngine 失败回退 onnx），cpu → onnxruntime。"""
+        return "onnxruntime" if (self._ocr_backend or "auto").lower() == "cpu" \
+            else "tensorrt"
 
     # ── 阶段 1：解码 + 特征（diff/清晰度）──
     def _decode_all(self):
@@ -253,7 +260,7 @@ class SegmentPipeline:
     def _ocr_segments(self, segs, crops, sharp):
         from ocr_native import OcrEngine
         from video_utils import _preprocess_standard
-        eng = OcrEngine(self._ocr_model, "tensorrt")
+        eng = OcrEngine(self._ocr_model, self._ocr_engine_type())
         seg_vals = []
         rep_frames = []
         t0 = time.perf_counter()
@@ -655,7 +662,7 @@ class SegmentPipeline:
         def ocr_worker() -> None:
             t0 = time.perf_counter()
             try:
-                eng = OcrEngine(self._ocr_model, "tensorrt")
+                eng = OcrEngine(self._ocr_model, self._ocr_engine_type())
                 B = 16
                 b_idx, b_reps, b_crops = [], [], []
 

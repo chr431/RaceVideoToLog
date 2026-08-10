@@ -571,7 +571,10 @@ class RaceVideoToLogApp(QMainWindow):
             roi=roi,
             max_speed_kmh=ms, max_accel_mps2=ma,
             buffer_size=bu, decode_backend=config.DECODE_BACKEND_KEYS[
-                s["backend_combo"].currentIndex()], target_h=th, pad_px=pp,
+                s["backend_combo"].currentIndex()],
+            ocr_backend=config.OCR_BACKEND_KEYS[
+                s["ocr_backend_combo"].currentIndex()],
+            target_h=th, pad_px=pp,
             max_width=mw,
             speed_format=self.speed_format,
             frame_start=s["frame_start_edit"].text(),

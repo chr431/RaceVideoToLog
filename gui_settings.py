@@ -26,6 +26,7 @@ def build_settings_panel(parent) -> dict:
         max_speed_edit, max_accel_edit      -- LineEdit
         buffer_spin, target_h_spin, pad_spin, max_width_spin  -- CompactSpinBox
         backend_combo                        -- ComboBox (解码后端 auto/cpu/nvdec)
+        ocr_backend_combo                    -- ComboBox (OCR 后端 auto/cpu/tensorrt)
         log_level_combo                     -- ComboBox
         monitor_checkbox                    -- CheckBox (资源监控开关)
         frame_start_edit, frame_end_edit    -- LineEdit
@@ -86,16 +87,23 @@ def build_settings_panel(parent) -> dict:
     widgets["backend_combo"].setCurrentIndex(0)
     widgets["backend_combo"].setFixedWidth(95)
     pl.addWidget(widgets["backend_combo"], 3, 1)
-    pl.addWidget(BodyLabel("日志级别"), 3, 2)
+    pl.addWidget(BodyLabel("OCR 后端"), 3, 2)
+    widgets["ocr_backend_combo"] = ComboBox()
+    widgets["ocr_backend_combo"].addItems(
+        [config.OCR_BACKEND_LABELS[k] for k in config.OCR_BACKEND_KEYS])
+    widgets["ocr_backend_combo"].setCurrentIndex(0)
+    widgets["ocr_backend_combo"].setFixedWidth(95)
+    pl.addWidget(widgets["ocr_backend_combo"], 3, 3)
+    pl.addWidget(BodyLabel("日志级别"), 4, 0)
     widgets["log_level_combo"] = ComboBox()
     widgets["log_level_combo"].addItems(["正常", "详细", "调试"])
     widgets["log_level_combo"].setCurrentIndex(0)
     widgets["log_level_combo"].setFixedWidth(120)
-    pl.addWidget(widgets["log_level_combo"], 3, 3)
-    pl.addWidget(BodyLabel("资源监控"), 4, 0)
+    pl.addWidget(widgets["log_level_combo"], 4, 1)
+    pl.addWidget(BodyLabel("资源监控"), 4, 2)
     widgets["monitor_checkbox"] = CheckBox("内存 / CPU / GPU 采样")
     widgets["monitor_checkbox"].setChecked(config.MONITOR_ENABLED)
-    pl.addWidget(widgets["monitor_checkbox"], 4, 1, 1, 2)
+    pl.addWidget(widgets["monitor_checkbox"], 4, 3)
 
     # ── Timeline range card ──
     time_card = make_static_card(parent)

@@ -43,6 +43,9 @@ def main() -> None:
     parser.add_argument("--decode-backend", choices=config.DECODE_BACKEND_KEYS,
         default=config.DEFAULT_DECODE_BACKEND,
         help="解码后端（auto/cpu/nvdec，默认 auto 自动选 GPU）")
+    parser.add_argument("--ocr-backend", choices=config.OCR_BACKEND_KEYS,
+        default=config.DEFAULT_OCR_BACKEND,
+        help="OCR 推理后端（auto/cpu/tensorrt，默认 auto 自动选 GPU）")
     parser.add_argument("-o", "--output", type=str)
     parser.add_argument("--frame-start", type=int, metavar="N")
     parser.add_argument("--frame-end", type=int, metavar="N")

@@ -64,6 +64,8 @@ def run(video: str, truth: str, backend: str, out_csv: str,
     cli_args = [sys.executable, str(PROJECT / "RaceVideoToLog.py"),
                 video, "--from-csv", truth,
                 "--log-level", "detailed"]
+    if backend != "auto":
+        cli_args += ["--ocr-backend", backend]
     if decode_backend != "auto":
         cli_args += ["--decode-backend", decode_backend]
     cli_args += ["-o", out_csv]

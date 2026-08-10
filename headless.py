@@ -75,6 +75,7 @@ def run_headless(args: argparse.Namespace) -> None:
         max_accel_mps2=args.max_accel,
         buffer_size=args.buffer,
         decode_backend=args.decode_backend,
+        ocr_backend=args.ocr_backend,
         target_h=args.target_h,
         pad=args.pad,
         speed_format=args.format,
