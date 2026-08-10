@@ -13,7 +13,7 @@ MPS_TO_KMH: float = 3.6          # m/s → km/h 转换因子
 # ═══════════════════ 用户可配置默认值 ═══════════════════
 DEFAULT_OCR_MODEL: str = "v6_small"     # 唯一 OCR 模型（v2.13 起移除 tiny / 重 OCR）
 DEFAULT_SPEED_FORMAT: str = "km/h"     # 速度单位 (km/h / m/s / mile/h)
-DEFAULT_FRAME_DIV: int = 2             # 采样间隔 (1=每帧, 2=隔帧)
+DEFAULT_BUFFER_SIZE: int = 64          # 解码∥OCR 流水线队列缓冲（段数）
 DEFAULT_MAX_SPEED: float = 400.0       # 最大速度 (km/h)
 DEFAULT_MAX_ACCEL: float = 50.0        # 最大加速度 (m/s²)
 DEFAULT_TARGET_H: int = 48             # OCR 预处理目标高度 (px)

@@ -94,7 +94,7 @@ class SegmentPipeline:
                  max_accel_mps2: float, fps: float | None, frame_start: int | None,
                  frame_end: int | None, target_h: int, max_width: int,
                  ocr_model: str, speed_format: str = "km/h",
-                 frame_div: int = 1, pad: int = 0,
+                 buffer_size: int = config.DEFAULT_BUFFER_SIZE, pad: int = 0,
                  C: float = config.SEG_C, win: int = config.SEG_WIN,
                  mult: float = config.SEG_MULT,
                  min_dev: float = config.SEG_MIN_DEV,
@@ -123,7 +123,7 @@ class SegmentPipeline:
         self._max_width = max_width
         self._ocr_model = ocr_model
         self._speed_format = speed_format
-        self._frame_div = frame_div
+        self._buffer_size = buffer_size
         self._pad = pad
         self._C = C
         self._win = win
@@ -187,7 +187,7 @@ class SegmentPipeline:
         end = min(self._frame_end or total, total)
         if self._frame_start > 0:
             vr.seek_accurate(self._frame_start)
-        frames = list(range(self._frame_start, end, self._frame_div))
+        frames = list(range(self._frame_start, end))
         crops = {}
         grays = {}
         sharp = {}
@@ -629,7 +629,7 @@ class SegmentPipeline:
         end = min(self._frame_end or total, total)
         if self._frame_start > 0:
             vr.seek_accurate(self._frame_start)
-        frames = list(range(self._frame_start, end, self._frame_div))
+        frames = list(range(self._frame_start, end))
 
         # ── 阈值校准：缓冲前 50 帧（seek 校准每次 seek_accurate ~30ms，
         # 50 次加 ~1.5s 得不偿失；前 50 帧 Otsu 阈值与全片抽样一致）──
@@ -646,7 +646,7 @@ class SegmentPipeline:
         self._bin_thresh = th
 
         # ── OCR 工作线程：批处理闭合段代表帧 ──
-        q: Queue = Queue(maxsize=64)  # 有界：OCR 慢时背压解码（防内存膨胀）
+        q: Queue = Queue(maxsize=max(1, self._buffer_size))  # 有界：OCR 慢时背压解码（防内存膨胀）
         results: dict = {}
         ocr_err: list = []
         ocr_wall = [0.0]
@@ -825,7 +825,7 @@ class SegmentPipeline:
                      f", frame_start={self._frame_start or ''}"
                      f", frame_end={self._frame_end or ''}\n")
             fh.write(f"# max_speed={self._max_speed}, max_accel={self._max_accel}"
-                     f", div={self._frame_div}, target_h={self._target_h}"
+                     f", target_h={self._target_h}"
                      f", max_width={self._max_width}, pad={self._pad}\n")
             fh.write(f"# backend={self._backend}, model={self._ocr_model}\n")
             fh.write(f"# segments={self._n_segments}, corrected={self._n_corr}\n")

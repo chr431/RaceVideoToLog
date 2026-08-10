@@ -146,4 +146,3 @@ def test_write_csv_header_parsable(tmp_path):
     assert s, "CSV 头应能被解析"
     assert parse_csv_setting("roi", s["roi"]) == [0, 0, 10, 10]
     assert float(s["max_speed"]) == 400.0
-    assert int(s["div"]) == 1  # frame_div 默认 1

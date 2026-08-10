@@ -24,7 +24,7 @@ def build_settings_panel(parent) -> dict:
     Returns dict keys:
         format_ms, format_kmh, format_mph  -- RadioButton (speed format)
         max_speed_edit, max_accel_edit      -- LineEdit
-        div_spin, target_h_spin, pad_spin, max_width_spin  -- CompactSpinBox
+        buffer_spin, target_h_spin, pad_spin, max_width_spin  -- CompactSpinBox
         model_combo                         -- ComboBox (主 OCR 模型)
         log_level_combo                     -- ComboBox
         monitor_checkbox                    -- CheckBox (资源监控开关)
@@ -67,9 +67,9 @@ def build_settings_panel(parent) -> dict:
     perf_card = make_static_card(parent)
     pl = QGridLayout(perf_card)
     pl.addWidget(StrongBodyLabel("性能"), 0, 0, 1, 4)
-    pl.addWidget(BodyLabel("采样率 1/"), 1, 0)
-    widgets["div_spin"] = make_int_spinbox(1, 10, config.DEFAULT_FRAME_DIV, 70)
-    pl.addWidget(widgets["div_spin"], 1, 1)
+    pl.addWidget(BodyLabel("队列缓冲"), 1, 0)
+    widgets["buffer_spin"] = make_int_spinbox(4, 256, config.DEFAULT_BUFFER_SIZE, 70)
+    pl.addWidget(widgets["buffer_spin"], 1, 1)
     pl.addWidget(BodyLabel("OCR 高度 (px)"), 1, 2)
     widgets["target_h_spin"] = make_int_spinbox(8, 256, config.DEFAULT_TARGET_H, 70)
     pl.addWidget(widgets["target_h_spin"], 1, 3)

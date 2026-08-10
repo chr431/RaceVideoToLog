@@ -48,7 +48,7 @@ class ExportThread(QThread):
             roi: tuple,
             max_speed_kmh: float,
             max_accel_mps2: float,
-            frame_div: int,
+            buffer_size: int,
             target_h: int,
             pad_px: int,
             ocr_model: str,
@@ -65,7 +65,7 @@ class ExportThread(QThread):
         self._roi = roi
         self._max_speed_kmh = max_speed_kmh
         self._max_accel_mps2 = max_accel_mps2
-        self._frame_div = frame_div
+        self._buffer_size = buffer_size
         self._target_h = target_h
         self._pad_px = pad_px
         self._ocr_model = ocr_model
@@ -98,7 +98,7 @@ class ExportThread(QThread):
                     roi=self._roi,
                     max_speed_kmh=self._max_speed_kmh,
                     max_accel_mps2=self._max_accel_mps2,
-                    frame_div=self._frame_div,
+                    buffer_size=self._buffer_size,
                     target_h=self._target_h,
                     pad=self._pad_px,
                     ocr_model=self._ocr_model,

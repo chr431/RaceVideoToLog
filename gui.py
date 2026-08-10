@@ -499,7 +499,7 @@ class RaceVideoToLogApp(QMainWindow):
                 widget.setText(str(val))
 
         _spin_fields = {
-            "div": s["div_spin"], "target_h": s["target_h_spin"],
+            "buffer": s["buffer_spin"], "target_h": s["target_h_spin"],
             "max_width": s["max_width_spin"],
             "pad": s["pad_spin"],
         }
@@ -542,7 +542,7 @@ class RaceVideoToLogApp(QMainWindow):
         try:
             ms = float(s["max_speed_edit"].text())
             ma = float(s["max_accel_edit"].text())
-            fd = s["div_spin"].value(); th = s["target_h_spin"].value()
+            bu = s["buffer_spin"].value(); th = s["target_h_spin"].value()
             mw = s["max_width_spin"].value()
             pp = s["pad_spin"].value()
             monitor_enabled = s["monitor_checkbox"].isChecked()
@@ -567,7 +567,7 @@ class RaceVideoToLogApp(QMainWindow):
             video_path=self.video_path,
             roi=roi,
             max_speed_kmh=ms, max_accel_mps2=ma,
-            frame_div=fd, target_h=th, pad_px=pp,
+            buffer_size=bu, target_h=th, pad_px=pp,
             max_width=mw,
             ocr_model=s["model_combo"].currentText(),
             speed_format=self.speed_format,

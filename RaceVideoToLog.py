@@ -32,7 +32,8 @@ def main() -> None:
     parser.add_argument("video", nargs="?", help="视频文件路径")
     parser.add_argument("--roi", nargs=4, type=int, metavar=("X1","Y1","X2","Y2"), help="识别范围")
     parser.add_argument("--format", choices=["m/s","km/h","mile/h"], default=config.DEFAULT_SPEED_FORMAT)
-    parser.add_argument("--div", type=int, default=config.DEFAULT_FRAME_DIV, choices=list(range(1, 11)))
+    parser.add_argument("--buffer", type=int, default=config.DEFAULT_BUFFER_SIZE,
+        help="解码∥OCR 流水线队列缓冲（段数）")
     parser.add_argument("--max-speed", type=float, default=config.DEFAULT_MAX_SPEED)
     parser.add_argument("--max-accel", type=float, default=config.DEFAULT_MAX_ACCEL)
     parser.add_argument("--target-h", type=int, default=config.DEFAULT_TARGET_H)

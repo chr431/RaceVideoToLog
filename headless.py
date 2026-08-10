@@ -54,7 +54,6 @@ def run_headless(args: argparse.Namespace) -> None:
 
     print(f"视频: {video_path}")
     print(f"识别范围: {region}")
-    print(f"采样间隔: 1/{args.div}")
     print(f"最大速度: {args.max_speed} km/h, 最大加速度: {args.max_accel} m/s^2")
     print(f"分段流水线: diff分段 → 段值OCR → 段级纠错")
 
@@ -74,7 +73,7 @@ def run_headless(args: argparse.Namespace) -> None:
         roi=region,
         max_speed_kmh=args.max_speed,
         max_accel_mps2=args.max_accel,
-        frame_div=args.div,
+        buffer_size=args.buffer,
         target_h=args.target_h,
         pad=args.pad,
         ocr_model=args.ocr_model,
