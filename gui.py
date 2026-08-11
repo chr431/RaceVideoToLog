@@ -62,7 +62,7 @@ for _watcher_cls in (_qfw_ss.CustomStyleSheetWatcher,
 
 
 def _t(mark: str) -> None:
-    """GUI 计时打点：写 %LOCALAPPDATA%/RaceVideoToLog/gui_timing.log（排查 EXE 卡顿）。"""
+    """GUI 计时打点：写 <程序目录>/logs/gui_timing.log（排查 EXE 卡顿）。"""
     from monitor import gui_mark
     gui_mark(mark)
 

@@ -46,6 +46,10 @@ outputs/
 *_no_digital*.csv
 *_clean.csv
 
+# 运行时数据目录（程序目录内，免安装设计——不写 %LOCALAPPDATA%）
+logs/
+ocr_engines/
+
 # ROI 复查产物（由 tools/_extract_roi.py 生成，~400MB 逐帧 PNG，不入库）
 ground_truth_roi/
 444.csv
