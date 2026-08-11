@@ -4,10 +4,11 @@
 #   1. 校验版本引用一致性（tools/version.py，退出码 1 = 不一致即中止）
 #   2. 读取 config.__version__（单一事实源），确认 tag v<版本> 不存在
 #   3. 下载 decord fork 发布产物 decord-<ver>-win64-gpu.zip（chr431/decord，
-#      decord-version 输入，默认 0.7.0）解压到 _decord_build\
+#      decord-version 输入，默认 0.7.1）解压到 _decord_build\
 #   4. setup_venv.bat --ci + build_exe.bat --ci 构建 EXE（--ci 跳过 pause）
-#   5. 打包 RaceVideoToLog.<版本>.zip —— 布局与现有 release 一致
-#      （RaceVideoToLog.exe 在 zip 根 + _internal/，无文件夹包裹）
+#   5. 打包 RaceVideoToLog.<版本>.7z（7-Zip LZMA2 mx=9 最大压缩，win-latest
+#      runner 预装 7z）—— 布局与现有 release 一致（RaceVideoToLog.exe 在
+#      7z 根 + _internal/，无文件夹包裹；.7z 比 .zip 小 ~26%，Win11 原生解压）
 #   6. 打 tag v<版本> + push，创建 GitHub Release（notes 取自 release_notes.md 对应节）
 #
 # 版本号不通过输入指定 —— 始终发布当前 ref 的 config.__version__（tools/version.py
@@ -123,22 +124,34 @@ jobs:
             exit 1
           }
 
-      - name: Package release zip
+      - name: Package release archive (7z, max compression)
         shell: pwsh
         run: |
           $ver = "${{ steps.ver.outputs.version }}"
-          Compress-Archive -Path "dist/RaceVideoToLog/*" -DestinationPath "RaceVideoToLog.$ver.zip" -CompressionLevel Optimal
-          # 校验布局与现有 release（v2.9.0）一致：exe 在 zip 根 + _internal/ 子目录
-          Add-Type -AssemblyName System.IO.Compression.FileSystem
-          $zip = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path "RaceVideoToLog.$ver.zip"))
-          $rootExe = $zip.Entries | Where-Object { $_.FullName -eq "RaceVideoToLog.exe" }
-          $hasInternal = $zip.Entries | Where-Object { $_.FullName -like "_internal/*" }
-          $zip.Dispose()
-          if (-not $rootExe -or -not $hasInternal) {
-            Write-Error "zip 布局不符：需 RaceVideoToLog.exe（根）+ _internal/（与现有 release 一致）"
+          $sz = "C:\Program Files\7-Zip\7z.exe"
+          if (-not (Test-Path $sz)) {
+            Write-Error "7-Zip 未找到（windows-latest runner 预装，见 https://github.com/actions/runner-images）"
             exit 1
           }
-          Write-Host "zip ready: RaceVideoToLog.$ver.zip"
+          # 在 dist/RaceVideoToLog 内打包：* 使 RaceVideoToLog.exe 位于 7z 根
+          # 参数：-mx=9 最大压缩；-m0=LZMA2 默认强熵编码；-mmt=on 多线程
+          Push-Location "dist/RaceVideoToLog"
+          try {
+            & $sz a -t7z -mx=9 -m0=LZMA2 -mmt=on "..\..\RaceVideoToLog.$ver.7z" "*"
+            if ($LASTEXITCODE -ne 0) { throw "7z 打包失败 (exit $LASTEXITCODE)" }
+          } finally { Pop-Location }
+          # 校验布局与现有 release 一致：exe 在根 + _internal/ 子目录
+          $sl = & $sz l -slt "RaceVideoToLog.$ver.7z"
+          $paths = $sl | Where-Object { $_ -match "^Path = " } | `
+                   ForEach-Object { ($_ -replace "^Path = ", "").Trim() }
+          $hasRootExe = $paths -contains "RaceVideoToLog.exe"
+          $hasInternal = [bool]($paths | Where-Object {
+              $_ -like "_internal\*" -or $_ -like "_internal/*" })
+          if (-not $hasRootExe -or -not $hasInternal) {
+            Write-Error "7z 布局不符：需 RaceVideoToLog.exe（根）+ _internal/（与现有 release 一致）"
+            exit 1
+          }
+          Write-Host "archive ready: RaceVideoToLog.$ver.7z"
 
       - name: Create tag + push
         shell: pwsh
@@ -177,6 +190,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "v${{ steps.ver.outputs.version }}" "RaceVideoToLog.${{ steps.ver.outputs.version }}.zip" `
+          gh release create "v${{ steps.ver.outputs.version }}" "RaceVideoToLog.${{ steps.ver.outputs.version }}.7z" `
             --title "v${{ steps.ver.outputs.version }}" `
             --notes-file notes.md
