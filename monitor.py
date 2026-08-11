@@ -21,6 +21,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+import config
+
 logger = logging.getLogger("RaceVideoToLog.monitor")
 
 # psutil 可选：缺失时 RSS/CPU 降级为 None（不阻塞其他功能）。
@@ -397,9 +399,13 @@ def format_stats(stats: dict) -> str:
 
 
 def log_run(label: str, stats: dict | None, timing: dict | None = None) -> None:
-    """把一次运行写入 %LOCALAPPDATA%\\RaceVideoToLog\\monitor.log（追加，失败静默）。"""
+    """把一次运行写入 <程序目录>/logs/monitor.log（追加，失败静默）。
+
+    程序目录 = 免安装软件所在文件夹（config.app_logs_dir），不写
+    %LOCALAPPDATA% —— 卸载/移动时删除程序目录即清理。
+    """
     try:
-        log_dir = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "RaceVideoToLog"
+        log_dir = config.app_logs_dir()
         log_dir.mkdir(parents=True, exist_ok=True)
         path = log_dir / "monitor.log"
         lines = [f"=== {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} === {label}"]
@@ -416,9 +422,9 @@ def log_run(label: str, stats: dict | None, timing: dict | None = None) -> None:
 
 
 def gui_mark(mark: str) -> None:
-    """GUI 时间标记（原 gui.py _t() 的实体）：追加到 gui_timing.log。"""
+    """GUI 时间标记（原 gui.py _t() 的实体）：追加到 <程序目录>/logs/gui_timing.log。"""
     try:
-        log_dir = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "RaceVideoToLog"
+        log_dir = config.app_logs_dir()
         log_dir.mkdir(parents=True, exist_ok=True)
         path = log_dir / "gui_timing.log"
         with open(path, "a", encoding="utf-8") as f:

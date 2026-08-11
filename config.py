@@ -5,7 +5,30 @@ v2.13 起：分段流水线（segment_flow.py）为唯一管线，原逐帧纠�
 """
 from __future__ import annotations
 
+import os
+import sys
+from pathlib import Path
+
 __version__ = "2.13.1"
+
+# ═══════════════════ 数据目录 ═══════════════════
+
+def app_data_dir() -> Path:
+    """程序数据目录（本文件夹内，免安装/portable 设计）。
+
+    引擎缓存（ocr_engines/）与运行日志（logs/）都放这里 —— 不写
+    %LOCALAPPDATA%，卸载/移动时删除整个程序目录即清理干净。
+
+    frozen: exe 所在目录；源码运行: 项目根目录。
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+def app_logs_dir() -> Path:
+    """运行日志目录（本目录/logs，与数据目录一致）。"""
+    return app_data_dir() / "logs"
 
 # ═══════════════════ 物理常量 ═══════════════════
 MPS_TO_KMH: float = 3.6          # m/s → km/h 转换因子

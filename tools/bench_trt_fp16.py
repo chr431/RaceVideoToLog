@@ -98,8 +98,8 @@ def main() -> None:
     args = ap.parse_args()
 
     size = args.variant.replace("v6_", "")
-    cache = Path(__import__("os").environ.get("LOCALAPPDATA",
-                                              str(Path.home()))) / "RaceVideoToLog" / "ocr_engines"
+    import config
+    cache = config.app_data_dir() / "ocr_engines"
     fp32_path = cache / f"multi_PP-OCRv6_rec_{size}_sm89_fp32_tf32unset.engine"
     fp16_path = cache / f"multi_PP-OCRv6_rec_{size}_sm89_fp16.engine"
 

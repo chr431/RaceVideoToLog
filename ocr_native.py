@@ -103,21 +103,26 @@ class OcrEngine:
 
     @staticmethod
     def _engine_candidates(size: str) -> list[Path]:
-        """engine 查找顺序：模型目录（本机构建）→ 用户缓存（自动构建产物）。"""
+        """engine 查找顺序：模型目录（本机构建）→ 本目录缓存 → 旧 LOCALAPPDATA。
+
+        - [0] 模型目录（打包只读，通常不存在）
+        - [1] 本目录缓存（可写，构建目标 —— 免安装设计，不写 %LOCALAPPDATA%）
+        - [2] 旧版本（≤v2.13）LOCALAPPDATA 缓存（只读兼容：已发布版本用户
+          首次运行新版本可复用，避免重建；不写入）
+        """
         name = f"multi_PP-OCRv6_rec_{size}_sm89_fp32_tf32unset.engine"
         cands = [_models_dir() / "models" / name]
-        if os.name == "nt":
-            cache = Path(os.environ.get("LOCALAPPDATA",
-                                        str(Path.home()))) / "RaceVideoToLog" / "ocr_engines"
-        else:
-            cache = Path.home() / ".cache" / "racevideotolog" / "ocr_engines"
-        cands.append(cache / name)
+        cands.append(config.app_data_dir() / "ocr_engines" / name)
+        legacy = (Path(os.environ.get("LOCALAPPDATA", str(Path.home())))
+                  / "RaceVideoToLog" / "ocr_engines" / name)
+        cands.append(legacy)
         return cands
 
     def _init_trt(self, models: Path, size: str) -> None:
         """加载或构建 TRT 引擎；任何失败回退 ONNX。
 
-        - engine 不存在 → 本地自动构建（首次运行，几分钟）并缓存到用户目录
+        - engine 不存在 → 本地自动构建（首次运行，几分钟）并缓存到
+          程序目录 ocr_engines/（免安装：不写 %LOCALAPPDATA%）
         - 版本不兼容的陈旧引擎（TRT 升级后旧产物，序列化版本号不匹配）或
           GPU 架构不匹配的引擎 → 删除并自动重建，避免静默回退 ONNX
         """
@@ -126,7 +131,7 @@ class OcrEngine:
 
         # 逐个候选尝试加载：已存在的引擎可能是 TRT 版本/GPU 架构不匹配的
         # 陈旧产物。加载失败 → 删除（可写目录），尝试下一个候选；
-        # 全部失败才进入重建（构建到可写的用户缓存目录）。
+        # 全部失败才进入重建（构建到本目录缓存，可写）。
         engine_path: Path | None = None
         for cand in self._engine_candidates(size):
             if not cand.exists():
@@ -145,7 +150,7 @@ class OcrEngine:
                     pass  # 只读目录（打包 EXE 内）删不掉，保留无害
         try:
             if engine_path is None:
-                engine_path = self._engine_candidates(size)[-1]  # 缓存目录
+                engine_path = self._engine_candidates(size)[1]  # 本目录缓存（可写）
                 if self._progress_cb:
                     self._progress_cb("TensorRT 引擎不存在，开始本地构建（首次运行，约 2 分钟）...")
                 log.info("TensorRT 引擎不存在，开始本地构建（首次运行，约几分钟）...")
