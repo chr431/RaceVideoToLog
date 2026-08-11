@@ -1,5 +1,33 @@
 # Release Notes
 
+## v2.13.2（2026-08-11）— 数据目录移入程序文件夹 + Release 附件改 7z
+
+> 本节面向使用者：只讲你能直接感知到的变化。技术细节见下方各节。
+
+### 📂 完全便携（免安装不留残留）
+
+- **不再向 `%LOCALAPPDATA%` 写任何东西**：TensorRT 引擎缓存、运行日志全部改为
+  写入**程序所在文件夹**（`ocr_engines/`、`logs/`）——卸载/移动时删除整个程序
+  文件夹即清理干净
+- 旧版用户升级：本机已有的 LOCALAPPDATA 引擎缓存仍会被自动复用（省去首次重建），
+  但新版本不会再往那里写入任何内容
+
+### 📦 安装包更小（.zip → .7z）
+
+- 发布附件从 `.zip` 改为 `.7z`（LZMA2 最大压缩）：**v2.13.1 的 158.7MB → 约 120MB
+  （-26%）**
+- Windows 11 23H2+ 原生支持解压 .7z（资源管理器直接解压）；Win10 及以下用户需
+  安装 7-Zip（免费，装机率很高）
+
+### 🔧 内部
+
+- config 新增 `app_data_dir()`/`app_logs_dir()` 统一数据/日志根目录
+- TRT 引擎缓存路径：`%LOCALAPPDATA%\RaceVideoToLog\ocr_engines` → 程序文件夹
+  `ocr_engines/`；旧路径保留为只读 fallback
+- release workflow 改用 windows-latest 预装的 7-Zip 打包（`-mx=9 -m0=LZMA2`），
+  布局校验同步（7z l -slt）
+
+
 ## v2.13.1（2026-08-10）— EXE 瘦身（排除 tiny onnx + pywin32）
 
 > 本节面向使用者：只讲你能直接感知到的变化。技术细节见下方各节。
