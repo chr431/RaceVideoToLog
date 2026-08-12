@@ -31,8 +31,13 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
 - OCR 预处理：resize 48 高 + **灰度 gamma 2.0**（config.OCR_GAMMA，正式预处理；
   分段/代表帧选择仍用 raw 灰度，已知不一致但已接受）
 - **pad 宽 224 最优**（降宽省推理但 +19 误读）；buffer 128 最优
-- 性能已到硬件限速：解码 NVDEC ~1000fps 是硬瓶颈；test5 GPU+TRT 8.8s 基线。
-  RVTOL_OCR_THREADS / RVTOL_OCR_GAMMA env 钩子用于实验
+- 性能基线（test5）：GPU+TRT 8.8s / GPU+CPU 10.1s / **CPU+CPU 12.3s**。
+  **CPU+CPU 是架构极限**（2026-08 全扫参证实）：OCR 8 线程 + FFmpeg 4
+  最优；双解码器分片无 OCR +66% 但完整流水线 14.0s（16 线程核挤退化）；
+  批量特征/攒批 B 调整有害。decode CAPI 延迟受限（单帧 ~1.26ms）。
+  **唯一剩余空间**：decord C++ 批量预取/ROI（预估 total → 8-8.5s，
+  跨仓库大工程未授权）。RVTOL_OCR_THREADS / RVTOL_OCR_GAMMA env 钩子
+  用于实验
 - SEG_DP_CHANGE_THRESHOLD=3.0（gamma raw 调参产物，消掉 DP 微调误改）
 - **A4 孤立尖峰豁免**（13→12）：SEG_DP_DEANCHOR_JERK_MIN/MAX=5/40 ——
   conf∈[20,50) 的锚定段若 jerk（二阶差分）∈带通则解锚交给 DP。判别实测：
