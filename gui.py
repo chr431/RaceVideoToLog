@@ -29,8 +29,8 @@ from ocr_engine import (
     VideoMetadata,
     format_duration,
 )
-from gui_analysis import AnalysisTab
-from gui_review import ReviewDialog
+# gui_analysis / gui_review 延迟导入（顶层 import pyqtgraph ~0.8s，
+# AnalysisTab 实例化另 ~0.6s —— 移出启动路径，首次用到时再加载）
 from gui_export import ExportThread
 from gui_preview import PreviewWidget
 from gui_settings import build_settings_panel
@@ -136,10 +136,24 @@ class RaceVideoToLogApp(QMainWindow):
         self._build_ocr_tab()
         self._tab_pivot.addItem('ocr', 'OCR 处理', lambda: self._tab_stack.setCurrentIndex(0))
 
-        # Tab 2: 数据分析
-        self._analysis_tab = AnalysisTab(self._tab_stack)
-        ThemeManager.register(lambda dark: self._analysis_tab._sync_figure_theme())
-        self._tab_pivot.addItem('analysis', '数据分析', lambda: self._tab_stack.setCurrentIndex(1))
+        # Tab 2: 数据分析（延迟创建：pyqtgraph 加载 + AnalysisTab 实例化
+        # ~1.4s 移出启动路径，首次切到该 tab 时才加载）
+        self._analysis_tab = None
+
+        def _ensure_analysis_tab():
+            if self._analysis_tab is None:
+                from gui_analysis import AnalysisTab
+                self._analysis_tab = AnalysisTab(self._tab_stack)
+            return self._analysis_tab
+
+        self._ensure_analysis_tab = _ensure_analysis_tab
+        ThemeManager.register(
+            lambda dark: self._analysis_tab._sync_figure_theme()
+            if self._analysis_tab else None)
+        self._tab_pivot.addItem(
+            'analysis', '数据分析',
+            lambda: (self._ensure_analysis_tab(),
+                     self._tab_stack.setCurrentWidget(self._analysis_tab)))
         self._tab_pivot.setCurrentItem('ocr')
         self._tab_pivot.currentItemChanged.connect(self._on_pivot)
 
@@ -614,6 +628,7 @@ class RaceVideoToLogApp(QMainWindow):
         if pipeline is None or out is None:
             return
         # 段级 review：段值 + 代表帧预览，用户可改段值（段内不混速度，改段=改全段）
+        from gui_review import ReviewDialog  # 延迟导入（pyqtgraph ~0.8s）
         dlg = ReviewDialog(self, pipeline.segments,
                            pipeline._max_speed, pipeline._max_accel,
                            pipeline._fps or 1.0)
