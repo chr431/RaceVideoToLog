@@ -65,22 +65,21 @@ _decord_build\
 
 ```csv
 # RaceVideoToLog v2.13.2
-# video_hash=..., video=test5.mp4, fps=59.767, codec=h264
+# video=test5.mp4, fps=59.767
 # roi=843,993,948,1025, format=km/h, frame_start=362, frame_end=7585
-# max_speed=400.0, max_accel=40.0, div=1, force_aspect=1.5, pad=0, buffer=16
-# backend=TensorRT, model=v6_tiny, reocr_model=v6_small, video_backend=decord/GPU
-# stats: total=7223, trusted=7090, corrected=118
-# timing: ocr=13.5s, decode=6.4s, inference=12.7s, correction=0.9s
+# max_speed=400.0, max_accel=50.0, force_aspect=0.0, fill_width=224
+# backend=decord/GPU, model=v6_small
+# segments=2533, corrected=118
+# timing: decode=6.4s, ocr=13.5s, correction=0.9s, total=22.0s
 362,0.00,257,21
 ```
 
 | Flag | 含义 |
 |------|------|
 | 0    | 原始 OCR 值 |
-| 11   | 自动修正 |
-| 12   | 插值填充 |
-| 13   | 部分数字推断修正 |
-| 21   | 高可信帧 |
+| 11   | 自动修正（DP 稠密纠正） |
+| 12   | 插值填充（OCR 未读出） |
+| 21   | 高可信帧（conf 通过锚定阈值） |
 | 22   | 用户手动修正 |
 
 ## CLI 参数
@@ -94,18 +93,19 @@ python RaceVideoToLog.py [video] [options]
 可选参数:
   --roi X1 Y1 X2 Y2              识别范围（CLI 必需）
   --format {m/s,km/h,mile/h}     速度单位 (默认: km/h)
-  --div N                        采样间隔 1/N (默认: 2)
   --max-speed N                  最大速度 km/h (默认: 400)
   --max-accel N                  最大加速度 m/s² (默认: 50)
-  --force-aspect N               强制宽高比 (默认: 0=自动；>0 宽度=48×此值)
-  --pad N                        边缘填充 px (默认: 0)
-  --buffer N                     缓冲队列大小 (默认: 16)
-  --backend {auto,tensorrt,cpu}  OCR 后端 (默认: auto)
-  --ocr-model {v6_tiny,v6_small} 主 OCR 模型 (默认: v6_tiny)；重 OCR 自动推导：tiny→small / small→无
+  --force-aspect N               强制宽高比 (默认: 0=不启用；>0 宽度=48×此值)
+  --fill-width N                 预处理 pad 宽度下限 px (默认: 224；速度窄图更准)
+  --buffer N                     解码∥OCR 流水线队列缓冲，段数 (默认: 128)
+  --decode-backend {auto,cpu,nvdec}  解码后端 (默认: auto 自动选 GPU)
+  --ocr-backend {auto,cpu,tensorrt}  OCR 推理后端 (默认: auto 自动选 GPU)
   --log-level {normal,detailed,debug} 日志级别 (默认: normal)
   --frame-start N                起始帧号
   --frame-end N                  结束帧号
-  --from-csv PATH                从 CSV 文件头导入设置
+  --no-monitor                   禁用资源监控（内存/CPU/GPU 采样）
+  --monitor-interval SEC         资源采样间隔秒 (默认: 1.0)
+  --from-csv PATH                从 CSV 文件头导入设置（显式参数优先）
   -o, --output PATH              输出 CSV 路径
 ```
 

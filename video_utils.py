@@ -10,8 +10,13 @@ import numpy as np
 
 from config import OCR_GAMMA as _OCR_GAMMA_DEFAULT
 
-# OCR 预处理灰度权重（与 segment_flow._gray 一致）。
+# OCR 预处理灰度权重（segment_flow._gray 共用）。
 _GRAY_W = np.array([0.299, 0.587, 0.114], dtype=np.float32)
+
+
+def _gray(crop: np.ndarray) -> np.ndarray:
+    """RGB → 灰度（uint8）。权重与 _GRAY_W 一致（分段与 OCR 预处理共用）。"""
+    return (crop.astype(np.float32) @ _GRAY_W).astype(np.uint8)
 
 
 @dataclass
@@ -159,10 +164,12 @@ def _preprocess_standard(crop: "np.ndarray", force_aspect: float = 0.0,
     new_w = max(1, int(w * target_h / h)) if h > 0 else w
     if force_aspect > 0:
         new_w = max(1, int(round(target_h * force_aspect)))
-    if abs(target_h / h - 1.0) > 0.02:
-        resized = _np_resize(crop, new_w, target_h)
-    else:
+    if new_w == w and abs(target_h - h) <= 0.02 * target_h:
+        # 目标尺寸已一致（或高差 ≤2%）→ 跳过无谓 resize；宽高任一需变
+        # 都必须走 _np_resize（force_aspect 改宽时不能只比高度）
         resized = crop.astype(np.float32)
+    else:
+        resized = _np_resize(crop, new_w, target_h)
     if gamma is None:
         _env = _os.environ.get("RVTOL_OCR_GAMMA")
         gamma = float(_env) if _env else float(_OCR_GAMMA_DEFAULT)

@@ -9,6 +9,9 @@
 - 段值：每段最清晰代表帧 OCR（sharpness=灰度std），OCR 线程批处理闭合段
 - 段级检测：中值滤波（跟随弯曲，误读=尖峰被中值剔除）
 - 段级纠正：可信锚点插值（锚点距离上界，跳过曲线正确段）
+
+注意：_decode_all/_segment/_ocr_segments/_detect/_correct 是串行参考路径
+（仅 tools/ 与测试使用），生产 run() 走 _run_pipelined + _dense_correct。
 """
 from __future__ import annotations
 import csv
@@ -24,18 +27,9 @@ import config
 from constants import Flag
 from monitor import STAGE
 from ocr_engine import extract_speed_value
+from video_utils import _gray
 
 logger = logging.getLogger("RaceVideoToLog.segment_flow")
-
-_GRAY_W = np.array([0.299, 0.587, 0.114], dtype=np.float32)
-
-
-def _gray(crop: np.ndarray) -> np.ndarray:
-    return (crop.astype(np.float32) @ _GRAY_W).astype(np.uint8)
-
-
-def _sharpness(crop: np.ndarray) -> float:
-    return float(_gray(crop).std())
 
 
 def _otsu(g: np.ndarray) -> int:
@@ -289,21 +283,12 @@ class SegmentPipeline:
         return seg_vals, rep_frames
 
     # ── 阶段 4：段级检测 + 纠正 ──
-    def _detect(self, seg_vals, seg_times, seg_lens=None):
-        """中值滤波检测：平滑值曲线（跟随弯曲），误读=尖峰被中值剔除。
+    def _local_bandwidth(self, seg_vals, seg_times):
+        """每段局部带宽：帧窗口内相邻差绝对值的中位数（未加 floor）。
 
-        对每段 i，smoothed = 局部非 None 值的中位数（段索引窗口 ±med_k）。
-        正确段贴合中值（偏差 ≤ 局部带宽），误读尖峰偏差大。门限 =
-        max(局部相邻差中位数, floor) × mult。边缘段（左右一侧无上下文）
-        不 flag —— 中值在单调上升/下降区滞后，视频起止的低/高速段会被窗口
-        拉偏误判（test2 起始 5→8→12 回归源）。None 段恒 suspect。
-
-        单帧段（seg_lens[i]==1）用更紧 floor：误读率 4.2% vs 多帧 0.3%
-        （12.6×，80% 误读是单帧段——过渡/模糊帧难 OCR 又易成单帧段），
-        平缓区门限降到 4 抓小偏差误读，弯曲区仍按实际带宽放宽。
+        _detect 与 _confidence 共用（两者原为逐行相同的重复循环）。
         """
         n = len(seg_vals)
-        # 局部带宽（相邻差中位数，帧窗口内，未加 floor）
         if n >= 2:
             gaps = np.diff(seg_times)
             med_gap = float(np.median(gaps)) if len(gaps) else 1.0
@@ -320,6 +305,23 @@ class SegmentPipeline:
                    for j in range(lo + 1, hi)
                    if seg_vals[j] is not None and seg_vals[j - 1] is not None]
             bw_raw[i] = float(np.median(dvs)) if dvs else 0.0
+        return bw_raw
+
+    def _detect(self, seg_vals, seg_times, seg_lens=None):
+        """中值滤波检测：平滑值曲线（跟随弯曲），误读=尖峰被中值剔除。
+
+        对每段 i，smoothed = 局部非 None 值的中位数（段索引窗口 ±med_k）。
+        正确段贴合中值（偏差 ≤ 局部带宽），误读尖峰偏差大。门限 =
+        max(局部相邻差中位数, floor) × mult。边缘段（左右一侧无上下文）
+        不 flag —— 中值在单调上升/下降区滞后，视频起止的低/高速段会被窗口
+        拉偏误判（test2 起始 5→8→12 回归源）。None 段恒 suspect。
+
+        单帧段（seg_lens[i]==1）用更紧 floor：误读率 4.2% vs 多帧 0.3%
+        （12.6×，80% 误读是单帧段——过渡/模糊帧难 OCR 又易成单帧段），
+        平缓区门限降到 4 抓小偏差误读，弯曲区仍按实际带宽放宽。
+        """
+        n = len(seg_vals)
+        bw_raw = self._local_bandwidth(seg_vals, seg_times)
         suspect = [False] * n
         for i in range(n):
             if seg_vals[i] is None:
@@ -395,22 +397,7 @@ class SegmentPipeline:
         边缘段保守 100；None 段 0（必纠正）。
         """
         n = len(seg_vals)
-        if n >= 2:
-            gaps = np.diff(seg_times)
-            med_gap = float(np.median(gaps)) if len(gaps) else 1.0
-        else:
-            med_gap = 1.0
-        win_frames = min(self._win * max(med_gap, 1.0), 120.0)
-        st = np.asarray(seg_times, dtype=np.float64)
-        bw_raw = [0.0] * n
-        for i in range(n):
-            ti = seg_times[i]
-            lo = int(np.searchsorted(st, ti - win_frames, side="left"))
-            hi = int(np.searchsorted(st, ti + win_frames, side="right"))
-            dvs = [abs(seg_vals[j] - seg_vals[j - 1])
-                   for j in range(lo + 1, hi)
-                   if seg_vals[j] is not None and seg_vals[j - 1] is not None]
-            bw_raw[i] = float(np.median(dvs)) if dvs else 0.0
+        bw_raw = self._local_bandwidth(seg_vals, seg_times)
         conf = [0.0] * n
         for i in range(n):
             if seg_vals[i] is None:
@@ -446,19 +433,6 @@ class SegmentPipeline:
             else:
                 conf[i] = med_score
         return conf
-
-    def _median_values(self, seg_vals, seg_times):
-        """每段局部中值（±med_k 窗口内非 None），None 段 → None。"""
-        n = len(seg_vals)
-        meds: list = [None] * n
-        for i in range(n):
-            lo = max(0, i - self._med_k)
-            hi = min(n, i + self._med_k + 1)
-            nbrs = [seg_vals[j] for j in range(lo, hi)
-                    if seg_vals[j] is not None]
-            if nbrs:
-                meds[i] = float(np.median(nbrs))
-        return meds
 
     def _fill_values(self, seg_vals, seg_times, is_anchor):
         """每段的局部锚点插值（最近左右锚点的时间线性插值）。
@@ -593,11 +567,13 @@ class SegmentPipeline:
         frames, segs, seg_vals, rep_frames = self._run_pipelined()
         self._cancel()
         self._progress("检测纠正...", 88.0)
+        t_corr = time.perf_counter()
         seg_times = [seg[len(seg) // 2] for seg in segs]
         conf = self._confidence(seg_vals, seg_times,
                                 [len(s) for s in segs])
         self._conf_vals = list(conf)       # 供 finalize/flag 判定复用
         corr, self._n_corr = self._dense_correct(seg_vals, seg_times, conf)
+        self.timing["correction"] = time.perf_counter() - t_corr
         self.rows = self._build_rows(frames, segs, corr, raw=seg_vals,
                                      conf=conf)
         self._store_run_state(frames, self.crops, segs, seg_vals, rep_frames, corr)
