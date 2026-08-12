@@ -49,10 +49,16 @@ class OcrEngine:
 
     def __init__(self, variant: str = "v6_small",
                  engine_type: str = "onnxruntime",
-                 progress_cb: "Callable[[str], None] | None" = None) -> None:
-        """progress_cb: 构建引擎等耗时阶段的进度消息回调 (str)。"""
+                 progress_cb: "Callable[[str], None] | None" = None,
+                 fill_width: int = 0) -> None:
+        """progress_cb: 构建引擎等耗时阶段的进度消息回调 (str)。
+
+        fill_width: OCR 输入 pad 宽度下限（px，替换固定 OCR_PAD_WIDTH_MIN）。
+        0 = 用 config 默认。速度窄图对宽 pad 更准，用户可调（GUI 160-320）。
+        """
         self._variant = variant
         self._progress_cb = progress_cb
+        self._fill_width = fill_width
         self._lock = threading.Lock()
         size = variant.replace("v6_", "")
         models = _models_dir()
@@ -386,15 +392,18 @@ class OcrEngine:
         order = np.argsort([im.shape[1] for im in img_list])
         # pad 宽度 = max(批内最大宽高比, 本模型下限/48)。旧代码强制 320/48
         # 下限：速度数字是窄图（48 高后 78-160 宽），pad 到 320 让 GPU 白算
-        # 2~4 倍宽度；但 v6 tiny 对输入宽度敏感（test5 max_width=72 在 72 宽
-        # 下精度 0.07%→0.54%），不能无下限。每模型下限查 OCR_PAD_WIDTH_MIN_
-        # BY_MODEL（实测平衡点），测试可用 RVTOL_PAD_TINY/SMALL 覆盖。
-        _floor = config.OCR_PAD_WIDTH_MIN_BY_MODEL.get(
-            self._variant, config.OCR_PAD_WIDTH_MIN)
-        _env = os.environ.get("RVTOL_PAD_TINY" if "tiny" in self._variant
-                              else "RVTOL_PAD_SMALL")
-        if _env and _env.isdigit():
-            _floor = int(_env)
+        # 2~4 倍宽度；但 v6 tiny 对输入宽度敏感（test5 force_aspect=1.5 在 72 宽
+        # 下精度 0.07%→0.54%），不能无下限。下限优先级：用户 fill_width >
+        # env RVTOL_PAD_TINY/SMALL > config.OCR_PAD_WIDTH_MIN_BY_MODEL。
+        if self._fill_width > 0:
+            _floor = self._fill_width
+        else:
+            _floor = config.OCR_PAD_WIDTH_MIN_BY_MODEL.get(
+                self._variant, config.OCR_PAD_WIDTH_MIN)
+            _env = os.environ.get("RVTOL_PAD_TINY" if "tiny" in self._variant
+                                  else "RVTOL_PAD_SMALL")
+            if _env and _env.isdigit():
+                _floor = int(_env)
         max_wh = max(_floor / 48.0,
                      *(float(im.shape[1]) / im.shape[0] for im in img_list))
         batch_np = np.stack([self._resize_norm(img_list[i], max_wh, h0)

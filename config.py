@@ -9,7 +9,7 @@ import os
 import sys
 from pathlib import Path
 
-__version__ = "2.13.2"
+__version__ = "2.14.0"
 
 # ═══════════════════ 数据目录 ═══════════════════
 
@@ -48,9 +48,15 @@ OCR_BACKEND_KEYS: list[str] = ["auto", "cpu", "tensorrt"]
 OCR_BACKEND_LABELS: dict[str, str] = {"auto": "自动", "cpu": "CPU", "tensorrt": "TensorRT"}
 DEFAULT_MAX_SPEED: float = 400.0       # 最大速度 (km/h)
 DEFAULT_MAX_ACCEL: float = 50.0        # 最大加速度 (m/s²)
-DEFAULT_TARGET_H: int = 48             # OCR 预处理目标高度 (px)
-DEFAULT_PAD: int = 0                   # OCR 预处理 padding (px)
-DEFAULT_MAX_WIDTH: int = 0              # 预处理最大宽度 px（0=不限）
+DEFAULT_FORCE_ASPECT: float = 0.0      # 强制横向宽高比（0=不启用；>0 时宽度
+                                       # 强制 = 48×此值，纠正扁宽字体）
+DEFAULT_FILL_WIDTH: int = 224          # OCR 输入 pad 宽度下限（引擎 _resize_norm
+                                       # pad 到该总宽）。扫描（test2/5/6 全量）：
+                                       # 320 raw 最优 0.53% vs 224 0.67%（test5 7→2、
+                                       # test6 17→5），但端到端 224 最优（13 vs 16）
+                                       # ——test5/6 的 raw 提升被 DP 吸收，test2 宽
+                                       # pad 引入混杂邻域 DP 拉中间值（纠错 5）。
+                                       # GUI 可调 160-320，默认 224
 OCR_GAMMA: float = 2.0                 # OCR 预处理灰度 gamma 增强指数（正式预处理：
                                        # 白字黄底等背景色块场景放大高段分离；灰度
                                        # 先于 gamma——RGB 逐通道 gamma 视觉差异小、
@@ -104,6 +110,17 @@ SEG_DP_CHANGE_THRESHOLD: float = 3.0  # |DP输出 - raw| > 此值才修正：干
 SEG_DP_ANCHOR_CONF: float = 20.0   # 锚定阈值：conf ≥ 此值的段固定到 raw
                                     # （门控 conf 后正确段 p10=72 干净分离，
                                     #  T=20 pin 100% 正确、仅 9% 误读）
+
+# ═══════════════════ 孤立尖峰豁免（A4，13→12 实测） ═══════════════════
+# conf∈[20,50) 的锚定段若 jerk（二阶差分）中等 → 解除锚定交给 DP。
+# 判别依据（5 视频 722 段实测）：真刹车 jerk≈0（713 段全在 [0,9] 且
+# 绝大多数 [0,4]）、丢位邻居污染 jerk≥80（9 段）、孤立尖峰误读 jerk 中等
+# （如 test#74 raw=107 truth=103 jerk=9 —— 锚定会保留误读）。带通 [5,40]
+# 只抓尖峰：解锚 24 段中 23 误读 + 1 正确（正确段也未被改坏），13→12
+# 零误改。参数敏感性：下界 0 灾难（刹车全解锚，78 误改）、下界 3-8 ×
+# 上界 20-60 全部稳定 12。0=禁用豁免。
+SEG_DP_DEANCHOR_JERK_MIN: float = 5.0
+SEG_DP_DEANCHOR_JERK_MAX: float = 40.0
 
 # ═══════════════════ OCR 输入 pad 宽度下限 ═══════════════════
 # 速度数字是窄图（48 高后 78-160 宽）。v6_small 在宽 pad 更准

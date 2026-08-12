@@ -83,7 +83,7 @@ def main() -> None:
         seg_mid = []
         for seg in segs:
             rep = max(seg, key=lambda fi: sharpness(crops[fi]))
-            proc = _preprocess_standard(crops[rep], 48, 0, max_width=max_width)
+            proc = _preprocess_standard(crops[rep], 0, force_aspect=max_width)
             sv, _rt, _c = extract_speed_value(eng([proc])[0])
             seg_vals.append(int(sv) if sv is not None and sv >= 0 else None)
             seg_mid.append(seg[len(seg) // 2])

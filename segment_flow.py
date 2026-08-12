@@ -9,6 +9,9 @@
 - 段值：每段最清晰代表帧 OCR（sharpness=灰度std），OCR 线程批处理闭合段
 - 段级检测：中值滤波（跟随弯曲，误读=尖峰被中值剔除）
 - 段级纠正：可信锚点插值（锚点距离上界，跳过曲线正确段）
+
+注意：_decode_all/_segment/_ocr_segments/_detect/_correct 是串行参考路径
+（仅 tools/ 与测试使用），生产 run() 走 _run_pipelined + _dense_correct。
 """
 from __future__ import annotations
 import csv
@@ -24,18 +27,9 @@ import config
 from constants import Flag
 from monitor import STAGE
 from ocr_engine import extract_speed_value
+from video_utils import _gray, _GRAY_W
 
 logger = logging.getLogger("RaceVideoToLog.segment_flow")
-
-_GRAY_W = np.array([0.299, 0.587, 0.114], dtype=np.float32)
-
-
-def _gray(crop: np.ndarray) -> np.ndarray:
-    return (crop.astype(np.float32) @ _GRAY_W).astype(np.uint8)
-
-
-def _sharpness(crop: np.ndarray) -> float:
-    return float(_gray(crop).std())
 
 
 def _otsu(g: np.ndarray) -> int:
@@ -92,11 +86,12 @@ class SegmentPipeline:
 
     def __init__(self, video_path: str, roi: tuple, max_speed_kmh: float,
                  max_accel_mps2: float, fps: float | None, frame_start: int | None,
-                 frame_end: int | None, target_h: int, max_width: int,
+                 frame_end: int | None, force_aspect: float = 0.0,
                  speed_format: str = "km/h",
                  decode_backend: str = "auto",
                  ocr_backend: str = "auto",
-                 buffer_size: int = config.DEFAULT_BUFFER_SIZE, pad: int = 0,
+                 buffer_size: int = config.DEFAULT_BUFFER_SIZE,
+                 fill_width: int = config.DEFAULT_FILL_WIDTH,
                  C: float = config.SEG_C, win: int = config.SEG_WIN,
                  mult: float = config.SEG_MULT,
                  min_dev: float = config.SEG_MIN_DEV,
@@ -113,6 +108,8 @@ class SegmentPipeline:
                  dp_anchor_cost: float = config.SEG_DP_ANCHOR_COST,
                  dp_change_threshold: float = config.SEG_DP_CHANGE_THRESHOLD,
                  dp_anchor_conf: float = config.SEG_DP_ANCHOR_CONF,
+                 dp_deanchor_jerk_min: float = config.SEG_DP_DEANCHOR_JERK_MIN,
+                 dp_deanchor_jerk_max: float = config.SEG_DP_DEANCHOR_JERK_MAX,
                  progress_cb=None, cancel_check=None):
         self._video_path = Path(video_path)
         self._roi = tuple(roi)
@@ -121,14 +118,13 @@ class SegmentPipeline:
         self._fps = fps  # None → _decode_all 里从 decord 推导
         self._frame_start = frame_start or 0
         self._frame_end = frame_end
-        self._target_h = target_h
-        self._max_width = max_width
+        self._force_aspect = force_aspect      # 强制宽高比（0=不启用）
         self._ocr_model = config.DEFAULT_OCR_MODEL  # 唯一模型 v6_small（v2.14 移除选择）
         self._decode_backend = decode_backend
         self._ocr_backend = ocr_backend
         self._speed_format = speed_format
         self._buffer_size = buffer_size
-        self._pad = pad
+        self._fill_width = fill_width
         self._C = C
         self._win = win
         self._mult = mult
@@ -146,6 +142,8 @@ class SegmentPipeline:
         self._dp_anchor_cost = dp_anchor_cost
         self._dp_change_threshold = dp_change_threshold
         self._dp_anchor_conf = dp_anchor_conf
+        self._dp_deanchor_jerk_min = dp_deanchor_jerk_min
+        self._dp_deanchor_jerk_max = dp_deanchor_jerk_max
         self._progress = progress_cb or (lambda m, p: None)
         self._cancel = cancel_check or (lambda: None)
         self.rows: list = []
@@ -262,7 +260,8 @@ class SegmentPipeline:
     def _ocr_segments(self, segs, crops, sharp):
         from ocr_native import OcrEngine
         from video_utils import _preprocess_standard
-        eng = OcrEngine(self._ocr_model, self._ocr_engine_type())
+        eng = OcrEngine(self._ocr_model, self._ocr_engine_type(),
+                               fill_width=self._fill_width)
         seg_vals = []
         rep_frames = []
         t0 = time.perf_counter()
@@ -272,8 +271,8 @@ class SegmentPipeline:
         reps = [max(seg, key=lambda fi: sharp[fi]) for seg in segs]
         for k in range(0, len(segs), B):
             chunk = segs[k:k + B]
-            procs = [_preprocess_standard(crops[rep], self._target_h, self._pad,
-                                          max_width=self._max_width)
+            procs = [_preprocess_standard(crops[rep],
+                                          force_aspect=self._force_aspect)
                      for rep in reps[k:k + B]]
             results = eng(procs)
             for rep, res in zip(reps[k:k + B], results):
@@ -288,21 +287,12 @@ class SegmentPipeline:
         return seg_vals, rep_frames
 
     # ── 阶段 4：段级检测 + 纠正 ──
-    def _detect(self, seg_vals, seg_times, seg_lens=None):
-        """中值滤波检测：平滑值曲线（跟随弯曲），误读=尖峰被中值剔除。
+    def _local_bandwidth(self, seg_vals, seg_times):
+        """每段局部带宽：帧窗口内相邻差绝对值的中位数（未加 floor）。
 
-        对每段 i，smoothed = 局部非 None 值的中位数（段索引窗口 ±med_k）。
-        正确段贴合中值（偏差 ≤ 局部带宽），误读尖峰偏差大。门限 =
-        max(局部相邻差中位数, floor) × mult。边缘段（左右一侧无上下文）
-        不 flag —— 中值在单调上升/下降区滞后，视频起止的低/高速段会被窗口
-        拉偏误判（test2 起始 5→8→12 回归源）。None 段恒 suspect。
-
-        单帧段（seg_lens[i]==1）用更紧 floor：误读率 4.2% vs 多帧 0.3%
-        （12.6×，80% 误读是单帧段——过渡/模糊帧难 OCR 又易成单帧段），
-        平缓区门限降到 4 抓小偏差误读，弯曲区仍按实际带宽放宽。
+        _detect 与 _confidence 共用（两者原为逐行相同的重复循环）。
         """
         n = len(seg_vals)
-        # 局部带宽（相邻差中位数，帧窗口内，未加 floor）
         if n >= 2:
             gaps = np.diff(seg_times)
             med_gap = float(np.median(gaps)) if len(gaps) else 1.0
@@ -319,6 +309,23 @@ class SegmentPipeline:
                    for j in range(lo + 1, hi)
                    if seg_vals[j] is not None and seg_vals[j - 1] is not None]
             bw_raw[i] = float(np.median(dvs)) if dvs else 0.0
+        return bw_raw
+
+    def _detect(self, seg_vals, seg_times, seg_lens=None):
+        """中值滤波检测：平滑值曲线（跟随弯曲），误读=尖峰被中值剔除。
+
+        对每段 i，smoothed = 局部非 None 值的中位数（段索引窗口 ±med_k）。
+        正确段贴合中值（偏差 ≤ 局部带宽），误读尖峰偏差大。门限 =
+        max(局部相邻差中位数, floor) × mult。边缘段（左右一侧无上下文）
+        不 flag —— 中值在单调上升/下降区滞后，视频起止的低/高速段会被窗口
+        拉偏误判（test2 起始 5→8→12 回归源）。None 段恒 suspect。
+
+        单帧段（seg_lens[i]==1）用更紧 floor：误读率 4.2% vs 多帧 0.3%
+        （12.6×，80% 误读是单帧段——过渡/模糊帧难 OCR 又易成单帧段），
+        平缓区门限降到 4 抓小偏差误读，弯曲区仍按实际带宽放宽。
+        """
+        n = len(seg_vals)
+        bw_raw = self._local_bandwidth(seg_vals, seg_times)
         suspect = [False] * n
         for i in range(n):
             if seg_vals[i] is None:
@@ -394,22 +401,7 @@ class SegmentPipeline:
         边缘段保守 100；None 段 0（必纠正）。
         """
         n = len(seg_vals)
-        if n >= 2:
-            gaps = np.diff(seg_times)
-            med_gap = float(np.median(gaps)) if len(gaps) else 1.0
-        else:
-            med_gap = 1.0
-        win_frames = min(self._win * max(med_gap, 1.0), 120.0)
-        st = np.asarray(seg_times, dtype=np.float64)
-        bw_raw = [0.0] * n
-        for i in range(n):
-            ti = seg_times[i]
-            lo = int(np.searchsorted(st, ti - win_frames, side="left"))
-            hi = int(np.searchsorted(st, ti + win_frames, side="right"))
-            dvs = [abs(seg_vals[j] - seg_vals[j - 1])
-                   for j in range(lo + 1, hi)
-                   if seg_vals[j] is not None and seg_vals[j - 1] is not None]
-            bw_raw[i] = float(np.median(dvs)) if dvs else 0.0
+        bw_raw = self._local_bandwidth(seg_vals, seg_times)
         conf = [0.0] * n
         for i in range(n):
             if seg_vals[i] is None:
@@ -445,19 +437,6 @@ class SegmentPipeline:
             else:
                 conf[i] = med_score
         return conf
-
-    def _median_values(self, seg_vals, seg_times):
-        """每段局部中值（±med_k 窗口内非 None），None 段 → None。"""
-        n = len(seg_vals)
-        meds: list = [None] * n
-        for i in range(n):
-            lo = max(0, i - self._med_k)
-            hi = min(n, i + self._med_k + 1)
-            nbrs = [seg_vals[j] for j in range(lo, hi)
-                    if seg_vals[j] is not None]
-            if nbrs:
-                meds[i] = float(np.median(nbrs))
-        return meds
 
     def _fill_values(self, seg_vals, seg_times, is_anchor):
         """每段的局部锚点插值（最近左右锚点的时间线性插值）。
@@ -506,6 +485,21 @@ class SegmentPipeline:
         # 后者在加速斜坡区被污染）
         is_anchor = [c >= self._dp_anchor_conf and v is not None
                      for c, v in zip(conf, seg_vals)]
+        # 孤立尖峰豁免（A4）：conf∈[20,50) 的锚定段若 jerk（二阶差分）中等
+        # （孤立尖峰误读特征；真刹车 jerk≈0、丢位邻居污染 jerk≥80）→ 解除
+        # 锚定交给 DP，防误读被锚定保留（实测 13→12 零误改，参数见 config）
+        if self._dp_deanchor_jerk_min > 0:
+            for i in range(1, n - 1):
+                if not is_anchor[i] or conf[i] >= 50.0 \
+                        or seg_vals[i] is None:
+                    continue
+                jl, jr = seg_vals[i - 1], seg_vals[i + 1]
+                if jl is None or jr is None:
+                    continue
+                jerk = abs(jr - 2 * seg_vals[i] + jl)
+                if self._dp_deanchor_jerk_min <= jerk \
+                        <= self._dp_deanchor_jerk_max:
+                    is_anchor[i] = False
         fill = self._fill_values(seg_vals, seg_times, is_anchor)
         i = 0
         while i < n:
@@ -592,11 +586,13 @@ class SegmentPipeline:
         frames, segs, seg_vals, rep_frames = self._run_pipelined()
         self._cancel()
         self._progress("检测纠正...", 88.0)
+        t_corr = time.perf_counter()
         seg_times = [seg[len(seg) // 2] for seg in segs]
         conf = self._confidence(seg_vals, seg_times,
                                 [len(s) for s in segs])
         self._conf_vals = list(conf)       # 供 finalize/flag 判定复用
         corr, self._n_corr = self._dense_correct(seg_vals, seg_times, conf)
+        self.timing["correction"] = time.perf_counter() - t_corr
         self.rows = self._build_rows(frames, segs, corr, raw=seg_vals,
                                      conf=conf)
         self._store_run_state(frames, self.crops, segs, seg_vals, rep_frames, corr)
@@ -666,21 +662,41 @@ class SegmentPipeline:
         def ocr_worker() -> None:
             t0 = time.perf_counter()
             try:
-                eng = OcrEngine(self._ocr_model, self._ocr_engine_type())
+                eng = OcrEngine(self._ocr_model, self._ocr_engine_type(),
+                               fill_width=self._fill_width)
                 B = 16
+                # 预处理（单线程 numpy，持 GIL）与推理（ONNX 8 线程，
+                # session.run 释放 GIL）流水线重叠：主循环攒批预处理，
+                # 推理线程消费。原串行 flush（预处理→推理→预处理→…）
+                # 让 8 线程推理空转等单线程预处理（OCR 6.8s 中预处理
+                # ~2s），重叠后 OCR 总时长逼近推理本身。
+                infer_q: Queue = Queue(maxsize=4)
+
+                def infer_worker() -> None:
+                    while True:
+                        item = infer_q.get()
+                        if item is None:  # 哨兵
+                            return
+                        idxs, reps, procs = item
+                        res = eng(procs)
+                        for idx, rep, r in zip(idxs, reps, res):
+                            sv, _rt, _c = extract_speed_value(r)
+                            results[idx] = (
+                                int(sv) if sv is not None and sv >= 0
+                                else None, rep)
+
+                infer_thread = threading.Thread(target=infer_worker,
+                                                daemon=True)
+                infer_thread.start()
                 b_idx, b_reps, b_crops = [], [], []
 
                 def flush() -> None:
                     if not b_idx:
                         return
-                    procs = [_preprocess_standard(c, self._target_h, self._pad,
-                                                  max_width=self._max_width)
+                    procs = [_preprocess_standard(c,
+                                                  force_aspect=self._force_aspect)
                              for c in b_crops]
-                    res = eng(procs)
-                    for idx, rep, r in zip(b_idx, b_reps, res):
-                        sv, _rt, _c = extract_speed_value(r)
-                        results[idx] = (int(sv) if sv is not None and sv >= 0
-                                        else None, rep)
+                    infer_q.put((list(b_idx), list(b_reps), procs))
                     b_idx.clear(); b_reps.clear(); b_crops.clear()
 
                 while True:
@@ -692,6 +708,8 @@ class SegmentPipeline:
                     if len(b_idx) >= B:
                         flush()
                 flush()
+                infer_q.put(None)  # 推理线程哨兵
+                infer_thread.join()
             except Exception as e:
                 ocr_err.append(e)
             finally:
@@ -700,17 +718,35 @@ class SegmentPipeline:
         ocr_thread = threading.Thread(target=ocr_worker, daemon=True)
         ocr_thread.start()
 
-        # ── 生产者：解码 + 增量分段 + 发闭合段 ──
+        # ── 生产者：批量解码 + 批量特征 + 增量分段 + 发闭合段 ──
+        # 批量取帧（get_batch + ROI）摊薄逐帧 CAPI 往返的固定成本，让
+        # FFmpeg 帧线程真正并行（实测 CPU 软解：逐帧 next_roi 780fps vs
+        # 批量16 + FFmpeg 8 线程 1247fps）。帧序由 get_batch 顺序保证
+        # （内部 NextFrameImpl 顺序解码，批间无 seek）。特征计算按批
+        # 向量化（crops 天然是批量数组，一次大 numpy 自动释放 GIL）：
+        # 逐帧小 numpy（gray/std/二值化 ~0.3ms/帧）曾是批量后的新瓶颈。
+        # 分段状态机仍逐帧推进（仅索引/比较），行为与逐帧取帧一致。
+        DECODE_BATCH = 16
+
         def frame_stream():
-            """先产出缓冲的校准帧，再流式解码剩余帧。"""
-            for k in range(calib_n):
-                yield calib[k]
-            for k in range(calib_n, len(frames)):
-                c = vr.next_roi(x1, y1, x2 + 1, y2 + 1).asnumpy()
-                if c.shape[0] != y2 - y1 + 1 or c.shape[1] != x2 - x1 + 1:
-                    c = c[y1:y2 + 1, x1:x2 + 1]
-                g = _gray(c)
-                yield (frames[k], c, g, float(g.std()))
+            """先产出校准帧，再批量流式解码剩余帧。
+
+            yield (fi, crop, gray, sharp, bin) —— bin 为预计算的二值化。
+            """
+            for fi, c, g, s in calib:
+                yield (fi, c, g, s, g > th)
+            for bstart in range(calib_n, len(frames), DECODE_BATCH):
+                bend = min(bstart + DECODE_BATCH, len(frames))
+                crops = vr.get_batch(
+                    frames[bstart:bend], roi=(x1, y1, x2 + 1, y2 + 1)
+                ).asnumpy()
+                # 批量特征：一次 (B,H,W,3)@(3,) + std + 比较（大数组，
+                # numpy 释放 GIL，不与 OCR 预处理线程互斥）
+                g = (crops.astype(np.float32) @ _GRAY_W).astype(np.uint8)
+                sharp = g.std(axis=(1, 2))
+                bs = g > th
+                for k, gi in enumerate(range(bstart, bend)):
+                    yield (frames[gi], crops[k], g[k], float(sharp[k]), bs[k])
 
         segs: list = []
         rep_crops: dict = {}
@@ -722,8 +758,7 @@ class SegmentPipeline:
         prev_b = None
         t0 = time.perf_counter()
         try:
-            for k, (fi, c, g, sharp) in enumerate(frame_stream()):
-                b = g > th
+            for k, (fi, c, g, sharp, b) in enumerate(frame_stream()):
                 if prev_b is not None:
                     d = prev_b != b
                     if _cluster_win3(d) >= self._C:
@@ -867,8 +902,7 @@ class SegmentPipeline:
                      f", frame_start={self._frame_start or ''}"
                      f", frame_end={self._frame_end or ''}\n")
             fh.write(f"# max_speed={self._max_speed}, max_accel={self._max_accel}"
-                     f", target_h={self._target_h}"
-                     f", max_width={self._max_width}, pad={self._pad}\n")
+                     f", force_aspect={self._force_aspect}, fill_width={self._fill_width}\n")
             fh.write(f"# backend={self._backend}, model={self._ocr_model}\n")
             fh.write(f"# segments={self._n_segments}, corrected={self._n_corr}\n")
             tstr = ", ".join(f"{k}={v:.2f}" for k, v in self.timing.items())

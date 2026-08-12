@@ -40,7 +40,7 @@ def main() -> None:
     for v in args.videos:
         roi, f_start, f_end, fps, ms, ma, mw, truth = load_meta(v)
         pipe = SegmentPipeline(f"D:/Videos/racelog_test/{v}.mp4", roi, ms, ma,
-                               fps, f_start, f_end, 48, mw)
+                               fps, f_start, f_end, force_aspect=mw)
         pipe.run(str(PROJECT / "outputs" / f"_brk_{v}.csv"))
         sv = pipe._ocr_vals
         cv = pipe._corr_vals

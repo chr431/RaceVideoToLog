@@ -28,7 +28,7 @@ def load_meta(v: str):
     roi = f_start = f_end = fps = None
     max_speed = 400.0
     max_accel = 50.0
-    max_width = 0
+    force_aspect = 0.0
     for line in open(tpath, encoding="utf-8-sig"):
         m = re.search(r"roi=(\d+),(\d+),(\d+),(\d+)", line)
         if m:
@@ -48,9 +48,13 @@ def load_meta(v: str):
         m = re.search(r"max_accel=([\d.]+)", line)
         if m:
             max_accel = float(m.group(1))
-        m = re.search(r"max_width=(\d+)", line)
+        m = re.search(r"force_aspect=([\d.]+)", line)
         if m:
-            max_width = int(m.group(1))
+            force_aspect = float(m.group(1))
+        else:  # 旧头兼容
+            m = re.search(r"max_width=(\d+)", line)
+            if m:
+                force_aspect = round(int(m.group(1)) / 48.0, 2)
     truth = {}
     for line in open(tpath, encoding="utf-8-sig"):
         if line.startswith("#") or not line.strip():
@@ -60,7 +64,7 @@ def load_meta(v: str):
             truth[int(float(p[0]))] = float(p[2])
         except (ValueError, IndexError):
             pass
-    return roi, f_start, f_end, fps, max_speed, max_accel, max_width, truth
+    return roi, f_start, f_end, fps, max_speed, max_accel, force_aspect, truth
 
 
 def main() -> None:
@@ -79,7 +83,7 @@ def main() -> None:
     for v in args.videos:
         roi, f_start, f_end, fps, ms, ma, mw, truth = load_meta(v)
         pipe = SegmentPipeline(f"D:/Videos/racelog_test/{v}.mp4", roi, ms, ma,
-                               fps, f_start, f_end, 48, mw, "v6_small")
+                               fps, f_start, f_end, force_aspect=mw)
         frames, crops, grays, sharp = pipe._decode_all()
         segs = pipe._segment(frames, grays)
         seg_vals, rep_frames = pipe._ocr_segments(segs, crops, sharp)

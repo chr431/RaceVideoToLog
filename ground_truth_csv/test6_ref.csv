@@ -1,7 +1,7 @@
 ﻿# RaceVideoToLog v2.7.2,,,,,,
 # video_hash=ae607b505ca29cfe, video=test6.mp4, fps=59.926, codec=av1,,,
 # roi=841,994,949,1026, format=km/h, frame_start=139, frame_end=23580
-# max_speed=400.0, max_accel=25.0, div=1, target_h=48, max_width=72, pad=0, buffer=16
+# max_speed=400.0, max_accel=25.0, div=1, force_aspect=1.5, pad=0, buffer=16
 # backend=TensorRT, model=v6_small, video_backend=decord/GPU,,,,
 # stats: total=23441, trusted=21105, corrected=62,,,,
 # timing: ocr=50.3s, decode=43.1s, inference=49.5s, correction=1.0s, total=51.8s,,
