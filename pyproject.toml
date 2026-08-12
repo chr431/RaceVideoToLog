@@ -34,9 +34,7 @@ py-modules = [
     "analysis",
     "config",
     "constants",
-    "correction",
     "csv_io",
-    "error_detection",
     "gpu_setup",
     "gui",
     "gui_analysis",
@@ -49,11 +47,10 @@ py-modules = [
     "ocr_engine",
     "ocr_native",
     "ocr_text",
-    "pipeline",
+    "segment_flow",
     "signals",
     "theme_manager",
     "video_utils",
-    "viterbi",
     "widget_utils",
 ]
 

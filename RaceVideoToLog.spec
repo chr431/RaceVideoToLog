@@ -26,9 +26,9 @@ hiddenimports = [
     # decord
     'decord',
     # Project modules (force inclusion; auto-discovered but explicit is safer)
-    'pipeline', 'correction', 'config', 'constants', 'gpu_setup', 'ocr_engine',
-    'headless', 'analysis', 'gui_analysis', 'gui_review',
-    'gui_export', 'gui_settings', 'gui_preview', 'viterbi', 'error_detection',
+    'gui', 'headless', 'segment_flow', 'config', 'constants', 'gpu_setup', 'ocr_engine',
+    'analysis', 'gui_analysis', 'gui_review',
+    'gui_export', 'gui_settings', 'gui_preview',
     'widget_utils', 'theme_manager', 'csv_io', 'ocr_text', 'signals',
     'video_utils', 'tensorrt', 'ocr_native', 'monitor',
 ]
