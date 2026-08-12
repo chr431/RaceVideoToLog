@@ -499,10 +499,10 @@ class RaceVideoToLogApp(QMainWindow):
                 widget.setText(str(val))
 
         _spin_fields = {
-            "buffer": s["buffer_spin"], "target_h": s["target_h_spin"],
-            "max_width": s["max_width_spin"],
+            "buffer": s["buffer_spin"],
             "pad": s["pad_spin"],
         }
+        _text_fields = {"force_aspect": s["force_aspect_edit"]}
         for key, widget in _spin_fields.items():
             val = parse_csv_setting(key, settings.get(key, ""))
             if val is not None:
@@ -545,8 +545,8 @@ class RaceVideoToLogApp(QMainWindow):
         try:
             ms = float(s["max_speed_edit"].text())
             ma = float(s["max_accel_edit"].text())
-            bu = s["buffer_spin"].value(); th = s["target_h_spin"].value()
-            mw = s["max_width_spin"].value()
+            bu = s["buffer_spin"].value()
+            fa = float(s["force_aspect_edit"].text())
             pp = s["pad_spin"].value()
             monitor_enabled = s["monitor_checkbox"].isChecked()
         except ValueError:
@@ -574,8 +574,8 @@ class RaceVideoToLogApp(QMainWindow):
                 s["backend_combo"].currentIndex()],
             ocr_backend=config.OCR_BACKEND_KEYS[
                 s["ocr_backend_combo"].currentIndex()],
-            target_h=th, pad_px=pp,
-            max_width=mw,
+            pad_px=pp,
+            force_aspect=fa,
             speed_format=self.speed_format,
             frame_start=s["frame_start_edit"].text(),
             frame_end=s["frame_end_edit"].text(),

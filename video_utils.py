@@ -136,13 +136,13 @@ def _np_resize(img: "np.ndarray", new_w: int, new_h: int) -> "np.ndarray":
             wx3 * wy3 * f[y1[:, None], x1[None, :]])
 
 
-def _preprocess_standard(crop: "np.ndarray", target_h: int, pad: int,
-                         max_width: int = 0,
+def _preprocess_standard(crop: "np.ndarray", pad: int,
+                         force_aspect: float = 0.0,
                          gamma: "float | None" = None) -> "np.ndarray":
-    """标准预处理：resize（numpy 双线性）+ 可选宽度限制 + 灰度 gamma + 边缘填充。
+    """标准预处理：resize 到 48 高 + 可选强制宽高比 + 灰度 gamma + 边缘填充。
 
-    max_width > 0 时限制宽度上限（px），用于纠正扁宽字体
-    （如数字高度≈宽度时设为 96 可恢复 ~2:1 高宽比）。
+    force_aspect > 0 时强制横向宽度 = 48 × force_aspect（px，宽高比固定；
+    可能放大或缩小——"force" 语义，非上限）。0 = 按原宽高比 resize。
     主识别（pipeline）与 re-OCR（correction）共用，保证一致。
     输出 float32（与 cv2 路径数值差 <= 1e-5）。
 
@@ -152,12 +152,11 @@ def _preprocess_standard(crop: "np.ndarray", target_h: int, pad: int,
     gamma <= 0 跳过灰度变换（保留 RGB，回退旧行为）；
     灰度权重 [0.299,0.587,0.114] 与 segment_flow._gray 一致。
     """
+    target_h = 48                       # OCR 模型固定输入高度（v2.14 移除 target_h）
     h, w = crop.shape[:2]
-    if target_h < 8:
-        raise ValueError(f"target_h 必须 >= 8，当前为 {target_h}")
     new_w = max(1, int(w * target_h / h)) if h > 0 else w
-    if max_width > 0:
-        new_w = min(new_w, max_width)
+    if force_aspect > 0:
+        new_w = max(1, int(round(target_h * force_aspect)))
     if abs(target_h / h - 1.0) > 0.02:
         resized = _np_resize(crop, new_w, target_h)
     else:

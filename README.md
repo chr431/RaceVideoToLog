@@ -67,7 +67,7 @@ _decord_build\
 # RaceVideoToLog v2.13.2
 # video_hash=..., video=test5.mp4, fps=59.767, codec=h264
 # roi=843,993,948,1025, format=km/h, frame_start=362, frame_end=7585
-# max_speed=400.0, max_accel=40.0, div=1, target_h=48, pad=0, buffer=16
+# max_speed=400.0, max_accel=40.0, div=1, force_aspect=1.5, pad=0, buffer=16
 # backend=TensorRT, model=v6_tiny, reocr_model=v6_small, video_backend=decord/GPU
 # stats: total=7223, trusted=7090, corrected=118
 # timing: ocr=13.5s, decode=6.4s, inference=12.7s, correction=0.9s
@@ -97,8 +97,7 @@ python RaceVideoToLog.py [video] [options]
   --div N                        采样间隔 1/N (默认: 2)
   --max-speed N                  最大速度 km/h (默认: 400)
   --max-accel N                  最大加速度 m/s² (默认: 50)
-  --target-h N                   OCR 高度 px (默认: 48)
-  --max-width N                  最大宽度 px（0=不限；扁宽字体可设为 96）
+  --force-aspect N               强制宽高比 (默认: 0=自动；>0 宽度=48×此值)
   --pad N                        边缘填充 px (默认: 0)
   --buffer N                     缓冲队列大小 (默认: 16)
   --backend {auto,tensorrt,cpu}  OCR 后端 (默认: auto)

@@ -42,16 +42,16 @@ def _engine_factory(*a, **k):
 ocr_native.OcrEngine = _engine_factory
 
 
-def preproc(crop: np.ndarray, mode: str, target_h: int, pad: int,
-            mw: int) -> np.ndarray:
+def preproc(crop: np.ndarray, mode: str, pad: int,
+            fa: float) -> np.ndarray:
     """4 种固定预处理：全走 _preprocess_standard 保证 resize/pad 一致。"""
     if mode == "gamma2":
-        return _preprocess_standard(crop, target_h, pad, max_width=mw,
+        return _preprocess_standard(crop, pad, force_aspect=fa,
                                     gamma=2.0)   # 当前正式
     g = (crop.astype(np.float32) @ _GRAY_W).astype(np.uint8)
     if mode == "gray":
         g3 = np.stack([g] * 3, axis=-1)
-        return _preprocess_standard(g3, target_h, pad, max_width=mw,
+        return _preprocess_standard(g3, pad, force_aspect=fa,
                                     gamma=0.0)
     if mode == "stretch":   # 线性拉伸 5%-95% 分位
         lo, hi = np.percentile(g, (5, 95))
@@ -59,7 +59,7 @@ def preproc(crop: np.ndarray, mode: str, target_h: int, pad: int,
         enh = np.clip((g.astype(np.float32) - lo) * 255.0 / span,
                       0, 255).astype(np.uint8)
         return _preprocess_standard(np.stack([enh] * 3, axis=-1),
-                                    target_h, pad, max_width=mw, gamma=0.0)
+                                    pad, force_aspect=fa, gamma=0.0)
     if mode == "histeq":    # 直方图均衡
         hist, _ = np.histogram(g, bins=256, range=(0, 256))
         cdf = hist.cumsum()
@@ -67,7 +67,7 @@ def preproc(crop: np.ndarray, mode: str, target_h: int, pad: int,
         lut = ((cdf - cdf_min) * 255.0 /
                max(cdf[-1] - cdf_min, 1)).astype(np.uint8)
         return _preprocess_standard(np.stack([lut[g]] * 3, axis=-1),
-                                    target_h, pad, max_width=mw, gamma=0.0)
+                                    pad, force_aspect=fa, gamma=0.0)
     if mode == "w245":      # raw 灰度 + 亮度窗口 245（20 宽±5 过渡+线性映射）
         center = 245
         d = np.abs(g.astype(np.float32) - center)
@@ -81,7 +81,7 @@ def preproc(crop: np.ndarray, mode: str, target_h: int, pad: int,
             out = np.clip(out, 0.0, 255.0)
         return _preprocess_standard(np.stack([out.astype(np.uint8)] * 3,
                                              axis=-1),
-                                    target_h, pad, max_width=mw, gamma=0.0)
+                                    pad, force_aspect=fa, gamma=0.0)
     raise ValueError(mode)
 
 
@@ -99,7 +99,7 @@ def main() -> None:
     for v in args.videos:
         roi, f_start, f_end, fps, ms, ma, mw, truth = load_meta(v)
         pipe = SegmentPipeline(f"D:/Videos/racelog_test/{v}.mp4", roi, ms, ma,
-                               fps, f_start, f_end, 48, mw)
+                               fps, f_start, f_end, force_aspect=mw)
         pipe.run(str(PROJECT / "outputs" / f"_pfc_{v}.csv"))
         reps = [s["rep_frame"] for s in pipe.segments]
         crops = [pipe.crops[r] for r in reps]
@@ -108,8 +108,8 @@ def main() -> None:
         for mode in MODES:
             vals = []
             for k in range(0, len(crops), BATCH):
-                procs = [preproc(c, mode, pipe._target_h, pipe._pad,
-                                 pipe._max_width)
+                procs = [preproc(c, mode, pipe._pad,
+                                 pipe._force_aspect)
                          for c in crops[k:k + BATCH]]
                 for res in eng(procs):
                     sv, _rt, _c = extract_speed_value(res)

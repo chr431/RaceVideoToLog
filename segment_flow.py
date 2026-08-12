@@ -92,7 +92,7 @@ class SegmentPipeline:
 
     def __init__(self, video_path: str, roi: tuple, max_speed_kmh: float,
                  max_accel_mps2: float, fps: float | None, frame_start: int | None,
-                 frame_end: int | None, target_h: int, max_width: int,
+                 frame_end: int | None, force_aspect: float = 0.0,
                  speed_format: str = "km/h",
                  decode_backend: str = "auto",
                  ocr_backend: str = "auto",
@@ -121,8 +121,7 @@ class SegmentPipeline:
         self._fps = fps  # None → _decode_all 里从 decord 推导
         self._frame_start = frame_start or 0
         self._frame_end = frame_end
-        self._target_h = target_h
-        self._max_width = max_width
+        self._force_aspect = force_aspect      # 强制宽高比（0=不启用）
         self._ocr_model = config.DEFAULT_OCR_MODEL  # 唯一模型 v6_small（v2.14 移除选择）
         self._decode_backend = decode_backend
         self._ocr_backend = ocr_backend
@@ -272,8 +271,8 @@ class SegmentPipeline:
         reps = [max(seg, key=lambda fi: sharp[fi]) for seg in segs]
         for k in range(0, len(segs), B):
             chunk = segs[k:k + B]
-            procs = [_preprocess_standard(crops[rep], self._target_h, self._pad,
-                                          max_width=self._max_width)
+            procs = [_preprocess_standard(crops[rep], self._pad,
+                                          force_aspect=self._force_aspect)
                      for rep in reps[k:k + B]]
             results = eng(procs)
             for rep, res in zip(reps[k:k + B], results):
@@ -673,8 +672,8 @@ class SegmentPipeline:
                 def flush() -> None:
                     if not b_idx:
                         return
-                    procs = [_preprocess_standard(c, self._target_h, self._pad,
-                                                  max_width=self._max_width)
+                    procs = [_preprocess_standard(c, self._pad,
+                                                  force_aspect=self._force_aspect)
                              for c in b_crops]
                     res = eng(procs)
                     for idx, rep, r in zip(b_idx, b_reps, res):
@@ -867,8 +866,7 @@ class SegmentPipeline:
                      f", frame_start={self._frame_start or ''}"
                      f", frame_end={self._frame_end or ''}\n")
             fh.write(f"# max_speed={self._max_speed}, max_accel={self._max_accel}"
-                     f", target_h={self._target_h}"
-                     f", max_width={self._max_width}, pad={self._pad}\n")
+                     f", force_aspect={self._force_aspect}, pad={self._pad}\n")
             fh.write(f"# backend={self._backend}, model={self._ocr_model}\n")
             fh.write(f"# segments={self._n_segments}, corrected={self._n_corr}\n")
             tstr = ", ".join(f"{k}={v:.2f}" for k, v in self.timing.items())

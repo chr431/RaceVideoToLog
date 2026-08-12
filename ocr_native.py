@@ -386,7 +386,7 @@ class OcrEngine:
         order = np.argsort([im.shape[1] for im in img_list])
         # pad 宽度 = max(批内最大宽高比, 本模型下限/48)。旧代码强制 320/48
         # 下限：速度数字是窄图（48 高后 78-160 宽），pad 到 320 让 GPU 白算
-        # 2~4 倍宽度；但 v6 tiny 对输入宽度敏感（test5 max_width=72 在 72 宽
+        # 2~4 倍宽度；但 v6 tiny 对输入宽度敏感（test5 force_aspect=1.5 在 72 宽
         # 下精度 0.07%→0.54%），不能无下限。每模型下限查 OCR_PAD_WIDTH_MIN_
         # BY_MODEL（实测平衡点），测试可用 RVTOL_PAD_TINY/SMALL 覆盖。
         _floor = config.OCR_PAD_WIDTH_MIN_BY_MODEL.get(

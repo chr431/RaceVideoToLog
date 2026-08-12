@@ -120,12 +120,12 @@ def build_schemes(crop: np.ndarray) -> list[tuple[str, str, np.ndarray]]:
     return schemes
 
 
-def run_ocr(eng, crops3: list, target_h: int, pad: int, mw: int) -> list:
+def run_ocr(eng, crops3: list, pad: int, fa: float) -> list:
     """crops3: 3通道 RGB crop 列表 → 各方案 preprocess + OCR。"""
     outs = []
     for k in range(0, len(crops3), BATCH):
         chunk = crops3[k:k + BATCH]
-        procs = [_preprocess_standard(c, target_h, pad, max_width=mw,
+        procs = [_preprocess_standard(c, pad, force_aspect=fa,
                                       gamma=0.0) for c in chunk]
         for res in eng(procs):
             sv, _rt, _c = extract_speed_value(res)
@@ -144,7 +144,7 @@ def main() -> None:
     for v in args.videos:
         roi, f_start, f_end, fps, ms, ma, mw, truth = load_meta(v)
         pipe = SegmentPipeline(f"D:/Videos/racelog_test/{v}.mp4", roi, ms, ma,
-                               fps, f_start, f_end, 48, mw)
+                               fps, f_start, f_end, force_aspect=mw)
         pipe.run(str(PROJECT / "outputs" / f"_rps_{v}.csv"))
         # 误读段（原始读数 |ocr-truth|>1）
         mis = []
@@ -176,8 +176,7 @@ def main() -> None:
         # 逐帧逐方案 OCR（一次 preprocess 全方案）
         for rep, _ov, t, crop in mis:
             imgs3 = [img3 for _n, _lab, img3 in build_schemes(crop)]
-            res = run_ocr(eng, imgs3, pipe._target_h, pipe._pad,
-                          pipe._max_width)
+            res = run_ocr(eng, imgs3, pipe._pad, pipe._force_aspect)
             for name, r in zip(names, res):
                 vals[(rep, name)] = r
 

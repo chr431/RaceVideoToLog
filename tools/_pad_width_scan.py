@@ -49,11 +49,12 @@ def main() -> None:
     for v in args.videos:
         roi, f_start, f_end, fps, ms, ma, mw, truth = load_meta(v)
         pipe = SegmentPipeline(f"D:/Videos/racelog_test/{v}.mp4", roi, ms, ma,
-                               fps, f_start, f_end, 48, mw)
+                               fps, f_start, f_end, force_aspect=mw)
         pipe.run(str(PROJECT / "outputs" / f"_padw_{v}.csv"))
         reps = [s["rep_frame"] for s in pipe.segments]
         crops = [pipe.crops[r] for r in reps]
-        procs = [_preprocess_standard(c, 48, 0, max_width=mw) for c in crops]
+        procs = [_preprocess_standard(c, 0, force_aspect=mw)
+                 for c in crops]
         tv = [truth.get(r) for r in reps]
         per_video[v] = (len(reps), crops, procs, tv)
         print(f"{v}: {len(reps)} 段")

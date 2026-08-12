@@ -51,12 +51,11 @@ class ExportThread(QThread):
             buffer_size: int,
             decode_backend: str,
             ocr_backend: str,
-            target_h: int,
             pad_px: int,
             speed_format: str,
             frame_start: str,
             frame_end: str,
-            max_width: int,
+            force_aspect: float,
             output_path: Path,
             monitor_enabled: bool = True,
             parent: QWidget | None = None,
@@ -69,12 +68,11 @@ class ExportThread(QThread):
         self._buffer_size = buffer_size
         self._decode_backend = decode_backend
         self._ocr_backend = ocr_backend
-        self._target_h = target_h
         self._pad_px = pad_px
         self._speed_format = speed_format
         self._frame_start = _to_int_or_none(frame_start)
         self._frame_end = _to_int_or_none(frame_end)
-        self._max_width = max_width
+        self._force_aspect = force_aspect
         self._monitor_enabled = monitor_enabled
         self._output_path = output_path
         self._cancel_flag = False
@@ -103,13 +101,12 @@ class ExportThread(QThread):
                     buffer_size=self._buffer_size,
                     decode_backend=self._decode_backend,
                     ocr_backend=self._ocr_backend,
-                    target_h=self._target_h,
                     pad=self._pad_px,
                     speed_format=self._speed_format,
                     frame_start=self._frame_start,
                     frame_end=self._frame_end,
                     progress_cb=self._emit_progress,
-                    max_width=self._max_width,
+                    force_aspect=self._force_aspect,
                     fps=None,
                     cancel_check=self._check_cancel,
                 )

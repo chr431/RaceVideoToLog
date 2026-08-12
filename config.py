@@ -48,9 +48,9 @@ OCR_BACKEND_KEYS: list[str] = ["auto", "cpu", "tensorrt"]
 OCR_BACKEND_LABELS: dict[str, str] = {"auto": "自动", "cpu": "CPU", "tensorrt": "TensorRT"}
 DEFAULT_MAX_SPEED: float = 400.0       # 最大速度 (km/h)
 DEFAULT_MAX_ACCEL: float = 50.0        # 最大加速度 (m/s²)
-DEFAULT_TARGET_H: int = 48             # OCR 预处理目标高度 (px)
+DEFAULT_FORCE_ASPECT: float = 0.0      # 强制横向宽高比（0=不启用；>0 时宽度
+                                       # 强制 = 48×此值，纠正扁宽字体）
 DEFAULT_PAD: int = 0                   # OCR 预处理 padding (px)
-DEFAULT_MAX_WIDTH: int = 0              # 预处理最大宽度 px（0=不限）
 OCR_GAMMA: float = 2.0                 # OCR 预处理灰度 gamma 增强指数（正式预处理：
                                        # 白字黄底等背景色块场景放大高段分离；灰度
                                        # 先于 gamma——RGB 逐通道 gamma 视觉差异小、

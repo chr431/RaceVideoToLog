@@ -76,13 +76,12 @@ def run_headless(args: argparse.Namespace) -> None:
         buffer_size=args.buffer,
         decode_backend=args.decode_backend,
         ocr_backend=args.ocr_backend,
-        target_h=args.target_h,
         pad=args.pad,
         speed_format=args.format,
         frame_start=args.frame_start,
         frame_end=args.frame_end,
         progress_cb=_progress,
-        max_width=getattr(args, 'max_width', 0),
+        force_aspect=getattr(args, 'force_aspect', 0.0),
         fps=None,
     )
 

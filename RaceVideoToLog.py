@@ -36,10 +36,9 @@ def main() -> None:
         help="解码∥OCR 流水线队列缓冲（段数）")
     parser.add_argument("--max-speed", type=float, default=config.DEFAULT_MAX_SPEED)
     parser.add_argument("--max-accel", type=float, default=config.DEFAULT_MAX_ACCEL)
-    parser.add_argument("--target-h", type=int, default=config.DEFAULT_TARGET_H)
     parser.add_argument("--pad", type=int, default=config.DEFAULT_PAD)
-    parser.add_argument("--max-width", type=int, default=None,
-        help="预处理最大宽度 px（0=不限）。扁宽字体设为 96 可改善识别")
+    parser.add_argument("--force-aspect", type=float, default=None,
+        help="强制横向宽高比（0=不启用；>0 时宽度=48×此值）。扁宽字体设 1.5-2.0 可改善识别")
     parser.add_argument("--decode-backend", choices=config.DECODE_BACKEND_KEYS,
         default=config.DEFAULT_DECODE_BACKEND,
         help="解码后端（auto/cpu/nvdec，默认 auto 自动选 GPU）")
@@ -86,8 +85,8 @@ def main() -> None:
                 setattr(args, dest, parsed)
 
     # None = 未指定：归一化为配置默认值（显式传 0 必须保留，不能被 CSV 覆盖）
-    if args.max_width is None:
-        args.max_width = config.DEFAULT_MAX_WIDTH
+    if getattr(args, "force_aspect", None) is None:
+        args.force_aspect = config.DEFAULT_FORCE_ASPECT
 
     if args.video:
         from headless import run_headless

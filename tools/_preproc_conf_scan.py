@@ -60,7 +60,7 @@ def main() -> None:
     for v in args.videos:
         roi, f_start, f_end, fps, ms, ma, mw, truth = load_meta(v)
         pipe = SegmentPipeline(f"D:/Videos/racelog_test/{v}.mp4", roi, ms, ma,
-                               fps, f_start, f_end, 48, mw)
+                               fps, f_start, f_end, force_aspect=mw)
         pipe.run(str(PROJECT / "outputs" / f"_pcs_{v}.csv"))
         mis = []
         for i, seg in enumerate(pipe._segs):
@@ -78,8 +78,8 @@ def main() -> None:
         for rep, _ov, t, crop in mis:
             gammas = [g for g in args.gammas]
             imgs = [crop for _ in args.gammas]  # 同一 crop，preprocess 时传不同 gamma
-            procs = [_preprocess_standard(c, pipe._target_h, pipe._pad,
-                                          max_width=pipe._max_width, gamma=g)
+            procs = [_preprocess_standard(c, pipe._pad,
+                                          force_aspect=pipe._force_aspect, gamma=g)
                      for c, g in zip(imgs, gammas)]
             results = eng(procs)
             per = []

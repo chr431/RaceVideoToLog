@@ -73,8 +73,8 @@ def run_on_reps(pipe: SegmentPipeline, gamma: float) -> list:
     eng = ocr_native.OcrEngine(pipe._ocr_model, pipe._ocr_engine_type())
     for k in range(0, len(reps), BATCH):
         chunk = reps[k:k + BATCH]
-        procs = [_preprocess_standard(pipe.crops[r], pipe._target_h, pipe._pad,
-                                      max_width=pipe._max_width, gamma=gamma)
+        procs = [_preprocess_standard(pipe.crops[r], pipe._pad,
+                                      force_aspect=pipe._force_aspect, gamma=gamma)
                  for r in chunk]
         for r, res in zip(chunk, eng(procs)):
             sv, _rt, _c = extract_speed_value(res)
@@ -109,7 +109,7 @@ def main() -> None:
     for v in args.videos:
         roi, f_start, f_end, fps, ms, ma, mw, truth = load_meta(v)
         pipe = SegmentPipeline(f"D:/Videos/racelog_test/{v}.mp4", roi, ms, ma,
-                               fps, f_start, f_end, 48, mw)
+                               fps, f_start, f_end, force_aspect=mw)
         pipe.run(str(PROJECT / "outputs" / f"_gb_{v}.csv"))
         bv = run_on_reps(pipe, 0.0)        # 基线：纯 RGB
         gv = run_on_reps(pipe, GAMMA)      # gamma：灰度+gamma

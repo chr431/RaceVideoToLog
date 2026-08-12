@@ -41,7 +41,7 @@ def main() -> None:
     for v in args.videos:
         roi, f_start, f_end, fps, ms, ma, mw, truth = load_meta(v)
         pipe = SegmentPipeline(f"D:/Videos/racelog_test/{v}.mp4", roi, ms, ma,
-                               fps, f_start, f_end, 48, mw)
+                               fps, f_start, f_end, force_aspect=mw)
         pipe.run(str(PROJECT / "outputs" / f"_graw_{v}.csv"))
         gv = pipe._ocr_vals                    # 正式 gray+gamma 2.0
         bv = run_on_reps(pipe, 0.0)            # 基线：纯 RGB

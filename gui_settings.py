@@ -24,7 +24,7 @@ def build_settings_panel(parent) -> dict:
     Returns dict keys:
         format_ms, format_kmh, format_mph  -- RadioButton (speed format)
         max_speed_edit, max_accel_edit      -- LineEdit
-        buffer_spin, target_h_spin, pad_spin, max_width_spin  -- CompactSpinBox
+        buffer_spin, pad_spin  -- CompactSpinBox; force_aspect_edit -- LineEdit
         backend_combo                        -- ComboBox (解码后端 auto/cpu/nvdec)
         ocr_backend_combo                    -- ComboBox (OCR 后端 auto/cpu/tensorrt)
         log_level_combo                     -- ComboBox
@@ -71,15 +71,15 @@ def build_settings_panel(parent) -> dict:
     pl.addWidget(BodyLabel("队列缓冲"), 1, 0)
     widgets["buffer_spin"] = make_int_spinbox(4, 256, config.DEFAULT_BUFFER_SIZE, 70)
     pl.addWidget(widgets["buffer_spin"], 1, 1)
-    pl.addWidget(BodyLabel("OCR 高度 (px)"), 1, 2)
-    widgets["target_h_spin"] = make_int_spinbox(8, 256, config.DEFAULT_TARGET_H, 70)
-    pl.addWidget(widgets["target_h_spin"], 1, 3)
-    pl.addWidget(BodyLabel("最大宽度 (px)"), 2, 0)
-    widgets["max_width_spin"] = make_int_spinbox(0, 512, config.DEFAULT_MAX_WIDTH, 70)
-    pl.addWidget(widgets["max_width_spin"], 2, 1)
-    pl.addWidget(BodyLabel("边缘填充 (px)"), 2, 2)
+    pl.addWidget(BodyLabel("宽高比"), 1, 2)
+    widgets["force_aspect_edit"] = LineEdit()
+    widgets["force_aspect_edit"].setText(str(config.DEFAULT_FORCE_ASPECT))
+    widgets["force_aspect_edit"].setFixedWidth(70)
+    pl.addWidget(widgets["force_aspect_edit"], 1, 3)
+    pl.addWidget(BodyLabel("边缘填充 (px)"), 2, 0)
     widgets["pad_spin"] = make_int_spinbox(0, 64, config.DEFAULT_PAD, 70)
-    pl.addWidget(widgets["pad_spin"], 2, 3)
+    pl.addWidget(widgets["pad_spin"], 2, 1)
+    pl.addWidget(CaptionLabel("宽高比：0=自动；>0 宽度=48×此值"), 2, 2, 1, 2)
     pl.addWidget(BodyLabel("解码后端"), 3, 0)
     widgets["backend_combo"] = ComboBox()
     widgets["backend_combo"].addItems(
