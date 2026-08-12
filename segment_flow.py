@@ -27,7 +27,7 @@ import config
 from constants import Flag
 from monitor import STAGE
 from ocr_engine import extract_speed_value
-from video_utils import _gray
+from video_utils import _gray, _GRAY_W
 
 logger = logging.getLogger("RaceVideoToLog.segment_flow")
 
@@ -665,6 +665,29 @@ class SegmentPipeline:
                 eng = OcrEngine(self._ocr_model, self._ocr_engine_type(),
                                fill_width=self._fill_width)
                 B = 16
+                # 预处理（单线程 numpy，持 GIL）与推理（ONNX 8 线程，
+                # session.run 释放 GIL）流水线重叠：主循环攒批预处理，
+                # 推理线程消费。原串行 flush（预处理→推理→预处理→…）
+                # 让 8 线程推理空转等单线程预处理（OCR 6.8s 中预处理
+                # ~2s），重叠后 OCR 总时长逼近推理本身。
+                infer_q: Queue = Queue(maxsize=4)
+
+                def infer_worker() -> None:
+                    while True:
+                        item = infer_q.get()
+                        if item is None:  # 哨兵
+                            return
+                        idxs, reps, procs = item
+                        res = eng(procs)
+                        for idx, rep, r in zip(idxs, reps, res):
+                            sv, _rt, _c = extract_speed_value(r)
+                            results[idx] = (
+                                int(sv) if sv is not None and sv >= 0
+                                else None, rep)
+
+                infer_thread = threading.Thread(target=infer_worker,
+                                                daemon=True)
+                infer_thread.start()
                 b_idx, b_reps, b_crops = [], [], []
 
                 def flush() -> None:
@@ -673,11 +696,7 @@ class SegmentPipeline:
                     procs = [_preprocess_standard(c,
                                                   force_aspect=self._force_aspect)
                              for c in b_crops]
-                    res = eng(procs)
-                    for idx, rep, r in zip(b_idx, b_reps, res):
-                        sv, _rt, _c = extract_speed_value(r)
-                        results[idx] = (int(sv) if sv is not None and sv >= 0
-                                        else None, rep)
+                    infer_q.put((list(b_idx), list(b_reps), procs))
                     b_idx.clear(); b_reps.clear(); b_crops.clear()
 
                 while True:
@@ -689,6 +708,8 @@ class SegmentPipeline:
                     if len(b_idx) >= B:
                         flush()
                 flush()
+                infer_q.put(None)  # 推理线程哨兵
+                infer_thread.join()
             except Exception as e:
                 ocr_err.append(e)
             finally:
@@ -697,17 +718,35 @@ class SegmentPipeline:
         ocr_thread = threading.Thread(target=ocr_worker, daemon=True)
         ocr_thread.start()
 
-        # ── 生产者：解码 + 增量分段 + 发闭合段 ──
+        # ── 生产者：批量解码 + 批量特征 + 增量分段 + 发闭合段 ──
+        # 批量取帧（get_batch + ROI）摊薄逐帧 CAPI 往返的固定成本，让
+        # FFmpeg 帧线程真正并行（实测 CPU 软解：逐帧 next_roi 780fps vs
+        # 批量16 + FFmpeg 8 线程 1247fps）。帧序由 get_batch 顺序保证
+        # （内部 NextFrameImpl 顺序解码，批间无 seek）。特征计算按批
+        # 向量化（crops 天然是批量数组，一次大 numpy 自动释放 GIL）：
+        # 逐帧小 numpy（gray/std/二值化 ~0.3ms/帧）曾是批量后的新瓶颈。
+        # 分段状态机仍逐帧推进（仅索引/比较），行为与逐帧取帧一致。
+        DECODE_BATCH = 16
+
         def frame_stream():
-            """先产出缓冲的校准帧，再流式解码剩余帧。"""
-            for k in range(calib_n):
-                yield calib[k]
-            for k in range(calib_n, len(frames)):
-                c = vr.next_roi(x1, y1, x2 + 1, y2 + 1).asnumpy()
-                if c.shape[0] != y2 - y1 + 1 or c.shape[1] != x2 - x1 + 1:
-                    c = c[y1:y2 + 1, x1:x2 + 1]
-                g = _gray(c)
-                yield (frames[k], c, g, float(g.std()))
+            """先产出校准帧，再批量流式解码剩余帧。
+
+            yield (fi, crop, gray, sharp, bin) —— bin 为预计算的二值化。
+            """
+            for fi, c, g, s in calib:
+                yield (fi, c, g, s, g > th)
+            for bstart in range(calib_n, len(frames), DECODE_BATCH):
+                bend = min(bstart + DECODE_BATCH, len(frames))
+                crops = vr.get_batch(
+                    frames[bstart:bend], roi=(x1, y1, x2 + 1, y2 + 1)
+                ).asnumpy()
+                # 批量特征：一次 (B,H,W,3)@(3,) + std + 比较（大数组，
+                # numpy 释放 GIL，不与 OCR 预处理线程互斥）
+                g = (crops.astype(np.float32) @ _GRAY_W).astype(np.uint8)
+                sharp = g.std(axis=(1, 2))
+                bs = g > th
+                for k, gi in enumerate(range(bstart, bend)):
+                    yield (frames[gi], crops[k], g[k], float(sharp[k]), bs[k])
 
         segs: list = []
         rep_crops: dict = {}
@@ -719,8 +758,7 @@ class SegmentPipeline:
         prev_b = None
         t0 = time.perf_counter()
         try:
-            for k, (fi, c, g, sharp) in enumerate(frame_stream()):
-                b = g > th
+            for k, (fi, c, g, sharp, b) in enumerate(frame_stream()):
                 if prev_b is not None:
                     d = prev_b != b
                     if _cluster_win3(d) >= self._C:
