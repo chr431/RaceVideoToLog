@@ -32,6 +32,16 @@ from video_utils import _gray, _GRAY_W
 logger = logging.getLogger("RaceVideoToLog.segment_flow")
 
 
+def _gray_batch(crops: np.ndarray) -> np.ndarray:
+    """批量灰度：(B,H,W,3) → (B,H,W)；decord gray 输出 (B,H,W,1) 直接取通道。
+
+    gray_output 模式下（CPU 解码）crops 已是 1 通道，跳过 matmul。
+    """
+    if crops.shape[-1] == 1:
+        return crops[..., 0]
+    return (crops.astype(np.float32) @ _GRAY_W).astype(np.uint8)
+
+
 def _otsu(g: np.ndarray) -> int:
     hist, _ = np.histogram(g, bins=256, range=(0, 256))
     total = int(g.size)
@@ -110,7 +120,8 @@ class SegmentPipeline:
                  dp_anchor_conf: float = config.SEG_DP_ANCHOR_CONF,
                  dp_deanchor_jerk_min: float = config.SEG_DP_DEANCHOR_JERK_MIN,
                  dp_deanchor_jerk_max: float = config.SEG_DP_DEANCHOR_JERK_MAX,
-                 progress_cb=None, cancel_check=None):
+                 progress_cb=None, cancel_check=None,
+                 gray_output: bool = False):
         self._video_path = Path(video_path)
         self._roi = tuple(roi)
         self._max_speed = max_speed_kmh
@@ -144,6 +155,9 @@ class SegmentPipeline:
         self._dp_anchor_conf = dp_anchor_conf
         self._dp_deanchor_jerk_min = dp_deanchor_jerk_min
         self._dp_deanchor_jerk_max = dp_deanchor_jerk_max
+        # 灰度输出（decord output_format='gray'，仅 CPU 解码路径生效）：
+        # 跳过 RGB→灰转换（sws 转换量 1/3 + Python 侧 matmul 省去）
+        self._gray_output = gray_output
         self._progress = progress_cb or (lambda m, p: None)
         self._cancel = cancel_check or (lambda: None)
         self.rows: list = []
@@ -177,7 +191,9 @@ class SegmentPipeline:
                 if backend == "nvdec":
                     logger.warning("NVDEC 解码不可用，回退 CPU")
         if vr is None:
-            vr = VideoReader(str(self._video_path), ctx=cpu(0))
+            vr = VideoReader(str(self._video_path), ctx=cpu(0),
+                             output_format='gray' if self._gray_output
+                             else 'rgb')
             label = "CPU"
         self._backend = f"decord/{label}"
         return vr
@@ -741,8 +757,9 @@ class SegmentPipeline:
                     frames[bstart:bend], roi=(x1, y1, x2 + 1, y2 + 1)
                 ).asnumpy()
                 # 批量特征：一次 (B,H,W,3)@(3,) + std + 比较（大数组，
-                # numpy 释放 GIL，不与 OCR 预处理线程互斥）
-                g = (crops.astype(np.float32) @ _GRAY_W).astype(np.uint8)
+                # numpy 释放 GIL，不与 OCR 预处理线程互斥）；gray 输出
+                # (B,H,W,1) 时直接取通道（跳过 matmul）
+                g = _gray_batch(crops)
                 sharp = g.std(axis=(1, 2))
                 bs = g > th
                 for k, gi in enumerate(range(bstart, bend)):

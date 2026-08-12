@@ -15,7 +15,12 @@ _GRAY_W = np.array([0.299, 0.587, 0.114], dtype=np.float32)
 
 
 def _gray(crop: np.ndarray) -> np.ndarray:
-    """RGB → 灰度（uint8）。权重与 _GRAY_W 一致（分段与 OCR 预处理共用）。"""
+    """RGB → 灰度（uint8）。权重与 _GRAY_W 一致（分段与 OCR 预处理共用）。
+
+    decord gray 输出 (H,W,1) 直接取通道（跳过 matmul）。
+    """
+    if crop.shape[-1] == 1:
+        return crop[..., 0]
     return (crop.astype(np.float32) @ _GRAY_W).astype(np.uint8)
 
 
@@ -176,7 +181,10 @@ def _preprocess_standard(crop: "np.ndarray", force_aspect: float = 0.0,
     if gamma > 0:
         # 灰度 + gamma（正式预处理）：RGB 逐通道 gamma 视觉差异小、回归多
         # （tools/_gamma_misread_montage 对比），灰度版视觉更清晰、回归少。
-        gray = resized @ _GRAY_W                          # (h, w) float32
+        if resized.shape[-1] == 1:
+            gray = resized[..., 0]                        # decord gray 输出
+        else:
+            gray = resized @ _GRAY_W                      # (h, w) float32
         resized = 255.0 * np.power(gray / 255.0, gamma)
         resized = np.stack([resized] * 3, axis=-1)
     return resized
