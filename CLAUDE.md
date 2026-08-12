@@ -30,14 +30,16 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
 
 - OCR 预处理：resize 48 高 + **灰度 gamma 2.0**（config.OCR_GAMMA，正式预处理；
   分段/代表帧选择仍用 raw 灰度，已知不一致但已接受）
+- 性能基线（test5）：GPU+TRT 8.8s / GPU+CPU 10.1s / **CPU+CPU 9.6s**
+  （decord v0.7.2 批量解码+预取 + 批量特征 + OCR 流水线化后，原 12.3s；
+  -22%）。decord v0.7.2 是硬依赖（get_batch_roi 批量解码）；DLL 在
+  _decord_build + site-packages 两处
+- 线程配置：CPU 解码用 DECORD_FFMPEG_THREAD_COUNT=8 + DECORD_FILTER_THREADS=1
+  最优（批量模式下 8 帧线程并行有效）；OCR 8 线程 + 攒批 B=16 最优。
+  逐帧 next_roi 780fps vs 批量 1247fps（固定成本摊薄后帧线程并行才生效）
 - **pad 宽 224 最优**（降宽省推理但 +19 误读）；buffer 128 最优
-- 性能基线（test5）：GPU+TRT 8.8s / GPU+CPU 10.1s / **CPU+CPU 12.3s**。
-  **CPU+CPU 是架构极限**（2026-08 全扫参证实）：OCR 8 线程 + FFmpeg 4
-  最优；双解码器分片无 OCR +66% 但完整流水线 14.0s（16 线程核挤退化）；
-  批量特征/攒批 B 调整有害。decode CAPI 延迟受限（单帧 ~1.26ms）。
-  **唯一剩余空间**：decord C++ 批量预取/ROI（预估 total → 8-8.5s，
-  跨仓库大工程未授权）。RVTOL_OCR_THREADS / RVTOL_OCR_GAMMA env 钩子
-  用于实验
+- RVTOL_OCR_THREADS / RVTOL_OCR_GAMMA / DECORD_PREFETCH_DEPTH /
+  DECORD_FILTER_THREADS env 钩子用于实验
 - SEG_DP_CHANGE_THRESHOLD=3.0（gamma raw 调参产物，消掉 DP 微调误改）
 - **A4 孤立尖峰豁免**（13→12）：SEG_DP_DEANCHOR_JERK_MIN/MAX=5/40 ——
   conf∈[20,50) 的锚定段若 jerk（二阶差分）∈带通则解锚交给 DP。判别实测：
