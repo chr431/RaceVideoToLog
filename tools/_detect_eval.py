@@ -83,7 +83,7 @@ def main() -> None:
     for v in args.videos:
         roi, f_start, f_end, fps, ms, ma, mw, truth = load_meta(v)
         pipe = SegmentPipeline(f"D:/Videos/racelog_test/{v}.mp4", roi, ms, ma,
-                               fps, f_start, f_end, 48, mw, "v6_small")
+                               fps, f_start, f_end, force_aspect=mw)
         frames, crops, grays, sharp = pipe._decode_all()
         segs = pipe._segment(frames, grays)
         seg_vals, rep_frames = pipe._ocr_segments(segs, crops, sharp)

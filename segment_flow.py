@@ -108,6 +108,8 @@ class SegmentPipeline:
                  dp_anchor_cost: float = config.SEG_DP_ANCHOR_COST,
                  dp_change_threshold: float = config.SEG_DP_CHANGE_THRESHOLD,
                  dp_anchor_conf: float = config.SEG_DP_ANCHOR_CONF,
+                 dp_deanchor_jerk_min: float = config.SEG_DP_DEANCHOR_JERK_MIN,
+                 dp_deanchor_jerk_max: float = config.SEG_DP_DEANCHOR_JERK_MAX,
                  progress_cb=None, cancel_check=None):
         self._video_path = Path(video_path)
         self._roi = tuple(roi)
@@ -140,6 +142,8 @@ class SegmentPipeline:
         self._dp_anchor_cost = dp_anchor_cost
         self._dp_change_threshold = dp_change_threshold
         self._dp_anchor_conf = dp_anchor_conf
+        self._dp_deanchor_jerk_min = dp_deanchor_jerk_min
+        self._dp_deanchor_jerk_max = dp_deanchor_jerk_max
         self._progress = progress_cb or (lambda m, p: None)
         self._cancel = cancel_check or (lambda: None)
         self.rows: list = []
@@ -481,6 +485,21 @@ class SegmentPipeline:
         # 后者在加速斜坡区被污染）
         is_anchor = [c >= self._dp_anchor_conf and v is not None
                      for c, v in zip(conf, seg_vals)]
+        # 孤立尖峰豁免（A4）：conf∈[20,50) 的锚定段若 jerk（二阶差分）中等
+        # （孤立尖峰误读特征；真刹车 jerk≈0、丢位邻居污染 jerk≥80）→ 解除
+        # 锚定交给 DP，防误读被锚定保留（实测 13→12 零误改，参数见 config）
+        if self._dp_deanchor_jerk_min > 0:
+            for i in range(1, n - 1):
+                if not is_anchor[i] or conf[i] >= 50.0 \
+                        or seg_vals[i] is None:
+                    continue
+                jl, jr = seg_vals[i - 1], seg_vals[i + 1]
+                if jl is None or jr is None:
+                    continue
+                jerk = abs(jr - 2 * seg_vals[i] + jl)
+                if self._dp_deanchor_jerk_min <= jerk \
+                        <= self._dp_deanchor_jerk_max:
+                    is_anchor[i] = False
         fill = self._fill_values(seg_vals, seg_times, is_anchor)
         i = 0
         while i < n:

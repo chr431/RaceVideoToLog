@@ -83,6 +83,35 @@ def test_dense_correct_none_filled():
     assert out[1] == 100 and n == 1, "None 段应填向锚点插值"
 
 
+def test_dense_correct_jerk_spike_deanchored():
+    """A4 豁免：孤立尖峰误读（jerk 中等、conf∈[20,50)）不应被锚定保留。
+
+    test#74 同构：raw=107 夹在 103/104 之间（jerk=9 ∈ [5,40]），conf=27
+    锚定会保留误读 → 豁免后 DP 拉正。
+    """
+    p = _pipe()
+    vals = [103, 101, 107, 104, 104]   # #74 邻域：101/107 双误读
+    times = [0, 3, 6, 9, 12]
+    conf = [72.0, 51.0, 27.0, 100.0, 72.0]  # 尖峰 107 conf=27 但 jerk=9
+    out, n = p._dense_correct(vals, times, conf)
+    # 尖峰 107 被 DP 拉向 101/104 插值（≈102-103），不再原样保留
+    assert out[2] != 107, "jerk 带通内的尖峰必须被解锚纠正"
+    assert abs(out[2] - 102.5) <= 1, f"应接近插值 102.5，实际 {out[2]}"
+
+
+def test_dense_correct_braking_anchor_kept():
+    """A4 反例：平滑变化（jerk≈0）的 conf∈[20,50) 段必须保持锚定。
+
+    刹车段 jerk≈0 不在带通 [5,40] 内 → 不被豁免（下界 0 是灾难：78 误改）。
+    """
+    p = _pipe()
+    vals = [100, 90, 80, 70, 60]       # 匀速刹车：jerk=0
+    times = [0, 3, 6, 9, 12]
+    conf = [100.0, 30.0, 30.0, 30.0, 100.0]  # 中间段 conf=30（jerk 分支）
+    out, n = p._dense_correct(vals, times, conf)
+    assert out == vals and n == 0, "刹车段（jerk=0）锚定不动，不允许 DP 拉偏"
+
+
 # ═══════════════ rows 构建 _build_rows（flag 判定 + 距离积分） ═══════════════
 
 def test_build_rows_flags():

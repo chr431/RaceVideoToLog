@@ -6,10 +6,14 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
 ## 回归门禁（改动后必跑）
 
 - **准确率漏斗是真正的测试门禁**：`tools/_accuracy_breakdown.py` 跑
-  test/test2/test3/test5/test6 + ground_truth_csv，当前基线 **13 错误**
-  （test 5 / test2 8 / test3/5/6 0，TOL±1）。任何算法改动不得破基线。
+  test/test2/test3/test5/test6 + ground_truth_csv，当前基线 **12 错误**
+  （test 4 / test2 8 / test3/5/6 0，TOL±1，A4 豁免后）。任何算法改动不得破基线。
+- **测试视频在 `D:\Videos\racelog_test`**（test~test6.mp4；truth 在仓库
+  ground_truth_csv/，test5/test6 用 *_ref.csv）。
 - **test4 truth 不可用**（巨大误差，用户确认）——不作准确率依据，仅用于
   "不把物理正确的帧改坏"。
+- 剩余 12 错误构成：11 个 2-off（平滑偏移/DP 部分纠正/truth 瞬时跳变，
+  信息论极限）+ test2 2 个"纠错"（改错，change_threshold=3 的 tradeoff 面）。
 - pytest：`tests/test_segment_flow.py`（13 用例，覆盖 _detect/_correct）。
 - 1-2 km/h 平滑偏移漏纠是信息论极限（与真实平滑不可区分）——局部物理约束
   无解，勿重复探索。
@@ -30,6 +34,11 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
 - 性能已到硬件限速：解码 NVDEC ~1000fps 是硬瓶颈；test5 GPU+TRT 8.8s 基线。
   RVTOL_OCR_THREADS / RVTOL_OCR_GAMMA env 钩子用于实验
 - SEG_DP_CHANGE_THRESHOLD=3.0（gamma raw 调参产物，消掉 DP 微调误改）
+- **A4 孤立尖峰豁免**（13→12）：SEG_DP_DEANCHOR_JERK_MIN/MAX=5/40 ——
+  conf∈[20,50) 的锚定段若 jerk（二阶差分）∈带通则解锚交给 DP。判别实测：
+  真刹车 jerk≈0、丢位污染 jerk≥80、孤立尖峰 jerk 中等（test#74 jerk=9）。
+  **jerk_score 无判别力**（正确段被丢位邻居污染后与尖峰同形）——必须用
+  原始 jerk 值；带通下界 0 是灾难（78 误改），上界 ≥80 引入污染段
 
 ## 架构要点
 
