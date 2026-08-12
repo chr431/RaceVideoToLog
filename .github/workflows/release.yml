@@ -31,7 +31,7 @@ on:
       decord-version:
         description: 'decord fork release version to consume (chr431/decord)'
         required: false
-        default: '0.7.1'
+        default: '0.7.3'
         type: string
 
 permissions:

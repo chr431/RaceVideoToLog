@@ -9,7 +9,7 @@ import os
 import sys
 from pathlib import Path
 
-__version__ = "2.13.2"
+__version__ = "2.14.0"
 
 # ═══════════════════ 数据目录 ═══════════════════
 
