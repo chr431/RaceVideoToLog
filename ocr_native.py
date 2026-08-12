@@ -101,6 +101,18 @@ class OcrEngine:
             n = max(1, int(_env_t))
         so.intra_op_num_threads = n
         so.inter_op_num_threads = 2
+        # ORT 线程池自旋控制（1.28 支持；与解码线程共存时影响 CPU 调度）：
+        # - RVTOL_ORT_SPIN=0 → 关闭 intra/inter 忙等自旋（推理间隙让出 CPU）
+        # - RVTOL_ORT_SPIN_MS=N → 自旋时长上限（ms，0=默认无限）
+        # 默认不设置（保持 ORT 默认），实验后定稿
+        _env_spin = os.environ.get("RVTOL_ORT_SPIN")
+        if _env_spin == "0":
+            so.add_session_config_entry("session.intra_op.allow_spinning", "0")
+            so.add_session_config_entry("session.inter_op.allow_spinning", "0")
+        _env_spin_ms = os.environ.get("RVTOL_ORT_SPIN_MS")
+        if _env_spin_ms:
+            so.add_session_config_entry(
+                "session.intra_op.spin_duration", _env_spin_ms)
         self._session = ort.InferenceSession(
             str(models / f"PP-OCRv6_rec_{size}.onnx"),
             sess_options=so, providers=["CPUExecutionProvider"])
