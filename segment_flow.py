@@ -96,7 +96,8 @@ class SegmentPipeline:
                  speed_format: str = "km/h",
                  decode_backend: str = "auto",
                  ocr_backend: str = "auto",
-                 buffer_size: int = config.DEFAULT_BUFFER_SIZE, pad: int = 0,
+                 buffer_size: int = config.DEFAULT_BUFFER_SIZE,
+                 fill_width: int = config.DEFAULT_FILL_WIDTH,
                  C: float = config.SEG_C, win: int = config.SEG_WIN,
                  mult: float = config.SEG_MULT,
                  min_dev: float = config.SEG_MIN_DEV,
@@ -127,7 +128,7 @@ class SegmentPipeline:
         self._ocr_backend = ocr_backend
         self._speed_format = speed_format
         self._buffer_size = buffer_size
-        self._pad = pad
+        self._fill_width = fill_width
         self._C = C
         self._win = win
         self._mult = mult
@@ -261,7 +262,8 @@ class SegmentPipeline:
     def _ocr_segments(self, segs, crops, sharp):
         from ocr_native import OcrEngine
         from video_utils import _preprocess_standard
-        eng = OcrEngine(self._ocr_model, self._ocr_engine_type())
+        eng = OcrEngine(self._ocr_model, self._ocr_engine_type(),
+                               fill_width=self._fill_width)
         seg_vals = []
         rep_frames = []
         t0 = time.perf_counter()
@@ -271,7 +273,7 @@ class SegmentPipeline:
         reps = [max(seg, key=lambda fi: sharp[fi]) for seg in segs]
         for k in range(0, len(segs), B):
             chunk = segs[k:k + B]
-            procs = [_preprocess_standard(crops[rep], self._pad,
+            procs = [_preprocess_standard(crops[rep],
                                           force_aspect=self._force_aspect)
                      for rep in reps[k:k + B]]
             results = eng(procs)
@@ -665,14 +667,15 @@ class SegmentPipeline:
         def ocr_worker() -> None:
             t0 = time.perf_counter()
             try:
-                eng = OcrEngine(self._ocr_model, self._ocr_engine_type())
+                eng = OcrEngine(self._ocr_model, self._ocr_engine_type(),
+                               fill_width=self._fill_width)
                 B = 16
                 b_idx, b_reps, b_crops = [], [], []
 
                 def flush() -> None:
                     if not b_idx:
                         return
-                    procs = [_preprocess_standard(c, self._pad,
+                    procs = [_preprocess_standard(c,
                                                   force_aspect=self._force_aspect)
                              for c in b_crops]
                     res = eng(procs)
@@ -866,7 +869,7 @@ class SegmentPipeline:
                      f", frame_start={self._frame_start or ''}"
                      f", frame_end={self._frame_end or ''}\n")
             fh.write(f"# max_speed={self._max_speed}, max_accel={self._max_accel}"
-                     f", force_aspect={self._force_aspect}, pad={self._pad}\n")
+                     f", force_aspect={self._force_aspect}, fill_width={self._fill_width}\n")
             fh.write(f"# backend={self._backend}, model={self._ocr_model}\n")
             fh.write(f"# segments={self._n_segments}, corrected={self._n_corr}\n")
             tstr = ", ".join(f"{k}={v:.2f}" for k, v in self.timing.items())

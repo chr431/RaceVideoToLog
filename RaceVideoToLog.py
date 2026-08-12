@@ -36,7 +36,8 @@ def main() -> None:
         help="解码∥OCR 流水线队列缓冲（段数）")
     parser.add_argument("--max-speed", type=float, default=config.DEFAULT_MAX_SPEED)
     parser.add_argument("--max-accel", type=float, default=config.DEFAULT_MAX_ACCEL)
-    parser.add_argument("--pad", type=int, default=config.DEFAULT_PAD)
+    parser.add_argument("--fill-width", type=int, default=config.DEFAULT_FILL_WIDTH,
+        help="预处理填充宽度下限 px（pad 到该总宽，速度窄图更准）")
     parser.add_argument("--force-aspect", type=float, default=None,
         help="强制横向宽高比（0=不启用；>0 时宽度=48×此值）。扁宽字体设 1.5-2.0 可改善识别")
     parser.add_argument("--decode-backend", choices=config.DECODE_BACKEND_KEYS,

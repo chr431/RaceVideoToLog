@@ -50,7 +50,13 @@ DEFAULT_MAX_SPEED: float = 400.0       # 最大速度 (km/h)
 DEFAULT_MAX_ACCEL: float = 50.0        # 最大加速度 (m/s²)
 DEFAULT_FORCE_ASPECT: float = 0.0      # 强制横向宽高比（0=不启用；>0 时宽度
                                        # 强制 = 48×此值，纠正扁宽字体）
-DEFAULT_PAD: int = 0                   # OCR 预处理 padding (px)
+DEFAULT_FILL_WIDTH: int = 224          # OCR 输入 pad 宽度下限（引擎 _resize_norm
+                                       # pad 到该总宽）。扫描（test2/5/6 全量）：
+                                       # 320 raw 最优 0.53% vs 224 0.67%（test5 7→2、
+                                       # test6 17→5），但端到端 224 最优（13 vs 16）
+                                       # ——test5/6 的 raw 提升被 DP 吸收，test2 宽
+                                       # pad 引入混杂邻域 DP 拉中间值（纠错 5）。
+                                       # GUI 可调 160-320，默认 224
 OCR_GAMMA: float = 2.0                 # OCR 预处理灰度 gamma 增强指数（正式预处理：
                                        # 白字黄底等背景色块场景放大高段分离；灰度
                                        # 先于 gamma——RGB 逐通道 gamma 视觉差异小、

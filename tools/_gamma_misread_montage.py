@@ -73,7 +73,7 @@ def run_on_reps(pipe: SegmentPipeline, gamma: float) -> list:
     eng = ocr_native.OcrEngine(pipe._ocr_model, pipe._ocr_engine_type())
     for k in range(0, len(reps), BATCH):
         chunk = reps[k:k + BATCH]
-        procs = [_preprocess_standard(pipe.crops[r], pipe._pad,
+        procs = [_preprocess_standard(pipe.crops[r], pipe._fill_width,
                                       force_aspect=pipe._force_aspect, gamma=gamma)
                  for r in chunk]
         for r, res in zip(chunk, eng(procs)):

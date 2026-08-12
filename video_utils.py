@@ -136,10 +136,9 @@ def _np_resize(img: "np.ndarray", new_w: int, new_h: int) -> "np.ndarray":
             wx3 * wy3 * f[y1[:, None], x1[None, :]])
 
 
-def _preprocess_standard(crop: "np.ndarray", pad: int,
-                         force_aspect: float = 0.0,
+def _preprocess_standard(crop: "np.ndarray", force_aspect: float = 0.0,
                          gamma: "float | None" = None) -> "np.ndarray":
-    """标准预处理：resize 到 48 高 + 可选强制宽高比 + 灰度 gamma + 边缘填充。
+    """标准预处理：resize 到 48 高 + 可选强制宽高比 + 灰度 gamma。
 
     force_aspect > 0 时强制横向宽度 = 48 × force_aspect（px，宽高比固定；
     可能放大或缩小——"force" 语义，非上限）。0 = 按原宽高比 resize。
@@ -151,6 +150,9 @@ def _preprocess_standard(crop: "np.ndarray", pad: int,
     白字黄底等背景色块场景放大高段分离，平滑无裁剪不侵蚀笔画。
     gamma <= 0 跳过灰度变换（保留 RGB，回退旧行为）；
     灰度权重 [0.299,0.587,0.114] 与 segment_flow._gray 一致。
+
+    宽度 pad（fill_width）在 OCR 引擎 _resize_norm 层处理（替换固定 224），
+    此处不 pad。
     """
     target_h = 48                       # OCR 模型固定输入高度（v2.14 移除 target_h）
     h, w = crop.shape[:2]
@@ -170,9 +172,6 @@ def _preprocess_standard(crop: "np.ndarray", pad: int,
         gray = resized @ _GRAY_W                          # (h, w) float32
         resized = 255.0 * np.power(gray / 255.0, gamma)
         resized = np.stack([resized] * 3, axis=-1)
-    if pad > 0:
-        resized = np.pad(resized, ((pad, pad), (pad, pad), (0, 0)),
-                         mode="edge")  # 等价 cv2 BORDER_REPLICATE
     return resized
 
 

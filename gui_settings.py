@@ -24,7 +24,7 @@ def build_settings_panel(parent) -> dict:
     Returns dict keys:
         format_ms, format_kmh, format_mph  -- RadioButton (speed format)
         max_speed_edit, max_accel_edit      -- LineEdit
-        buffer_spin, pad_spin  -- CompactSpinBox; force_aspect_edit -- LineEdit
+        buffer_spin, fill_width_spin  -- CompactSpinBox; force_aspect_edit -- LineEdit
         backend_combo                        -- ComboBox (解码后端 auto/cpu/nvdec)
         ocr_backend_combo                    -- ComboBox (OCR 后端 auto/cpu/tensorrt)
         log_level_combo                     -- ComboBox
@@ -76,9 +76,10 @@ def build_settings_panel(parent) -> dict:
     widgets["force_aspect_edit"].setText(str(config.DEFAULT_FORCE_ASPECT))
     widgets["force_aspect_edit"].setFixedWidth(70)
     pl.addWidget(widgets["force_aspect_edit"], 1, 3)
-    pl.addWidget(BodyLabel("边缘填充 (px)"), 2, 0)
-    widgets["pad_spin"] = make_int_spinbox(0, 64, config.DEFAULT_PAD, 70)
-    pl.addWidget(widgets["pad_spin"], 2, 1)
+    pl.addWidget(BodyLabel("填充宽度"), 2, 0)
+    widgets["fill_width_spin"] = make_int_spinbox(160, 320,
+                                                     config.DEFAULT_FILL_WIDTH, 70)
+    pl.addWidget(widgets["fill_width_spin"], 2, 1)
     pl.addWidget(CaptionLabel("宽高比：0=自动；>0 宽度=48×此值"), 2, 2, 1, 2)
     pl.addWidget(BodyLabel("解码后端"), 3, 0)
     widgets["backend_combo"] = ComboBox()

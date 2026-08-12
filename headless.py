@@ -76,7 +76,7 @@ def run_headless(args: argparse.Namespace) -> None:
         buffer_size=args.buffer,
         decode_backend=args.decode_backend,
         ocr_backend=args.ocr_backend,
-        pad=args.pad,
+        fill_width=args.fill_width,
         speed_format=args.format,
         frame_start=args.frame_start,
         frame_end=args.frame_end,

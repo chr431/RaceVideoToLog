@@ -78,7 +78,7 @@ def main() -> None:
         for rep, _ov, t, crop in mis:
             gammas = [g for g in args.gammas]
             imgs = [crop for _ in args.gammas]  # 同一 crop，preprocess 时传不同 gamma
-            procs = [_preprocess_standard(c, pipe._pad,
+            procs = [_preprocess_standard(c, pipe._fill_width,
                                           force_aspect=pipe._force_aspect, gamma=g)
                      for c, g in zip(imgs, gammas)]
             results = eng(procs)

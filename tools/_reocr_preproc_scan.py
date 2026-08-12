@@ -176,7 +176,7 @@ def main() -> None:
         # 逐帧逐方案 OCR（一次 preprocess 全方案）
         for rep, _ov, t, crop in mis:
             imgs3 = [img3 for _n, _lab, img3 in build_schemes(crop)]
-            res = run_ocr(eng, imgs3, pipe._pad, pipe._force_aspect)
+            res = run_ocr(eng, imgs3, pipe._fill_width, pipe._force_aspect)
             for name, r in zip(names, res):
                 vals[(rep, name)] = r
 

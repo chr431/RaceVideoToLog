@@ -51,7 +51,7 @@ class ExportThread(QThread):
             buffer_size: int,
             decode_backend: str,
             ocr_backend: str,
-            pad_px: int,
+            fill_width: int,
             speed_format: str,
             frame_start: str,
             frame_end: str,
@@ -68,7 +68,7 @@ class ExportThread(QThread):
         self._buffer_size = buffer_size
         self._decode_backend = decode_backend
         self._ocr_backend = ocr_backend
-        self._pad_px = pad_px
+        self._fill_width = fill_width
         self._speed_format = speed_format
         self._frame_start = _to_int_or_none(frame_start)
         self._frame_end = _to_int_or_none(frame_end)
@@ -101,7 +101,7 @@ class ExportThread(QThread):
                     buffer_size=self._buffer_size,
                     decode_backend=self._decode_backend,
                     ocr_backend=self._ocr_backend,
-                    pad=self._pad_px,
+                    fill_width=self._fill_width,
                     speed_format=self._speed_format,
                     frame_start=self._frame_start,
                     frame_end=self._frame_end,

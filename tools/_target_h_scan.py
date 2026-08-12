@@ -83,7 +83,7 @@ def main() -> None:
             mw_s = round(mw * h / BASE_H) if mw > 0 else 0
             vals = []
             for k in range(0, len(crops), BATCH):
-                procs = [_to48(_preprocess_standard(c, pipe._pad,
+                procs = [_to48(_preprocess_standard(c, pipe._fill_width,
                                                     force_aspect=mw_s))
                          for c in crops[k:k + BATCH]]
                 for res in eng(procs):

@@ -500,7 +500,7 @@ class RaceVideoToLogApp(QMainWindow):
 
         _spin_fields = {
             "buffer": s["buffer_spin"],
-            "pad": s["pad_spin"],
+            "fill_width": s["fill_width_spin"],
         }
         _text_fields = {"force_aspect": s["force_aspect_edit"]}
         for key, widget in _spin_fields.items():
@@ -547,7 +547,7 @@ class RaceVideoToLogApp(QMainWindow):
             ma = float(s["max_accel_edit"].text())
             bu = s["buffer_spin"].value()
             fa = float(s["force_aspect_edit"].text())
-            pp = s["pad_spin"].value()
+            pp = s["fill_width_spin"].value()
             monitor_enabled = s["monitor_checkbox"].isChecked()
         except ValueError:
             QMessageBox.warning(self, "参数错误", "请检查数值参数。"); return
@@ -574,7 +574,7 @@ class RaceVideoToLogApp(QMainWindow):
                 s["backend_combo"].currentIndex()],
             ocr_backend=config.OCR_BACKEND_KEYS[
                 s["ocr_backend_combo"].currentIndex()],
-            pad_px=pp,
+            fill_width=pp,
             force_aspect=fa,
             speed_format=self.speed_format,
             frame_start=s["frame_start_edit"].text(),
