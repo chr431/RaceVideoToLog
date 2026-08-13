@@ -25,9 +25,9 @@ setup_venv.bat
 
 本项目**不依赖 PyPI decord**（CPU-only、无 `next_roi` / `get_codec`、CPU 解码内存溢出）。自建 fork（chr431/decord）支持 NVDEC GPU 硬解码 + CPU 软件解码，只传输识别 ROI（解码提速 ~45%，编码信息直接来自 decord），且 GPU API 运行时动态加载 —— 无 NVIDIA 设备自动回退 CPU 解码。
 
-**版本要求：≥ v0.7.3**（v2.14 起批量解码 `get_batch(roi)` 是性能路径的硬依赖——CPU 软解 +22% 靠它；旧版 decord 会报 `_CAPI_VideoReaderGetBatchRoi` 不存在）。
+**版本要求：≥ v0.7.4**（v2.14 起批量解码 `get_batch(roi)` 是性能路径的硬依赖——CPU 软解 +22% 靠它；v0.7.4 起支持灰度输出 `output_format='gray'`，CLI 默认启用；旧版会报 `_CAPI_VideoReaderGetBatchRoi` 不存在）。
 
-获取 decord 发布产物（推荐）：运行 [chr431/decord](https://github.com/chr431/decord) 的 **Release workflow**（Actions → Release → Run workflow，输入版本号如 `0.7.3`），它会构建并发布 `decord-<ver>-win64-gpu.zip`。解压到本仓库 `_decord_build\`：
+获取 decord 发布产物（推荐）：运行 [chr431/decord](https://github.com/chr431/decord) 的 **Release workflow**（Actions → Release → Run workflow，输入版本号如 `0.7.4`），它会构建并发布 `decord-<ver>-win64-gpu.zip`。解压到本仓库 `_decord_build\`：
 
 ```text
 _decord_build\
