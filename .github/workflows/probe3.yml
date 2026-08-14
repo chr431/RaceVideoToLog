@@ -1,0 +1,50 @@
+name: CI-Probe3
+
+on:
+  push:
+    branches: [ci-probe]
+
+jobs:
+  p3-test:
+    if: github.ref_name != 'master'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "test job"
+  p3-decoder:
+    if: github.ref_name != 'master'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install deps
+        run: |
+          pip install -e .
+          pip install pytest
+      - name: Download decord fork release (v0.7.7)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest -Uri "https://github.com/chr431/decord/releases/download/v0.7.7/decord-0.7.7-win64-gpu.zip" -OutFile "$env:RUNNER_TEMP\decord.zip"
+          Expand-Archive "$env:RUNNER_TEMP\decord.zip" -DestinationPath "_decord_build" -Force
+      - name: Install decord into site-packages (fork: DLLs + python layer)
+        if: hashFiles('_decord_build/python/decord/video_reader.py') != ''
+        shell: pwsh
+        run: |
+          $sp = python -c "import site; print(site.getsitepackages()[0])"
+          New-Item -ItemType Directory -Force -Path "$sp\decord" | Out-Null
+          Copy-Item "_decord_build\*.dll" "$sp\decord\" -Force
+          python -c "import decord; print('decord fork installed:', decord.__file__)"
+      - name: Report decoder availability (explicit skip reason when absent)
+        shell: pwsh
+        run: |
+          python -c "import decord, inspect, decord.video_reader as v" 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "warn"
+          }
+  p3-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "version"
+
