@@ -44,7 +44,7 @@ jobs:
           $ProgressPreference = 'SilentlyContinue'
           Invoke-WebRequest -Uri "https://github.com/chr431/decord/releases/download/v0.7.7/decord-0.7.7-win64-gpu.zip" -OutFile "$env:RUNNER_TEMP\decord.zip"
           Expand-Archive "$env:RUNNER_TEMP\decord.zip" -DestinationPath "_decord_build" -Force
-      - name: Install decord into site-packages (fork: DLLs + python layer)
+      - name: "Install decord into site-packages (fork: DLLs + python layer)"
         if: hashFiles('_decord_build/python/decord/video_reader.py') != ''
         shell: pwsh
         run: |
