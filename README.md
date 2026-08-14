@@ -5,7 +5,8 @@
 ## 前置要求
 
 - Python 3.11+
-- NVIDIA 显卡 + 最新驱动（GPU 视频解码；无 GPU 自动使用 CPU 软件解码，性能差异约 15%）
+- NVIDIA 显卡 + 最新驱动（GPU 视频解码；无 GPU 自动使用 CPU 软件解码，
+  性能差异约 5% —— OCR 全物理核线程预算下两者接近）
 - （可选）CUDA Toolkit 13.x + TensorRT 11.x（GPU OCR 推理；无则自动使用 CPU）
 
 ## 一键安装
@@ -147,6 +148,14 @@ python RaceVideoToLog.py [video] [options]
 夹具由 `tools/make_regression_fixtures.py` 生成（需本机 decord + 测试视频）。
 任何算法/预处理/模型改动使夹具读数变化 → CI 失败；属有意改动时先跑完整漏斗
 确认无回归，再重新生成夹具并更新基线。
+
+## 线程预算（自动）
+
+OCR 推理线程数默认 = **全部物理核**：NVDEC 解码时 CPU 全部让给 OCR；CPU
+解码时 FFmpeg 帧线程 + filter 走 decord fork 默认（占 SMT 份额，不抢物理核）。
+16C32T 实测（test5 7223 帧）：GPU 解码+CPU OCR 8.9s / CPU 解码+CPU OCR 9.3s
+（旧 8 线程预算分别为 11.3s / 12.8s）。超过物理核（超线程）不再提升，
+故自动封顶。`RVTOL_OCR_THREADS` 环境变量可覆盖（实验用）。
 
 ## 打包
 

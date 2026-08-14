@@ -56,13 +56,18 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
   （gamma 改变 Otsu/二值化合并了段），原始误读不变（155），但 test2 8→9
   （新增 1 误改）、总量 12→13。raw 灰度 + Otsu 的组合在分割层面更优；
   gamma 仅保留给 OCR 预处理。钩子留作实验入口，勿设默认。
-- 性能基线（test5）：GPU+TRT 8.8s / GPU+CPU 10.1s / **CPU+CPU 9.6s**
-  （decord v0.7.2 批量解码+预取 + 批量特征 + OCR 流水线化后，原 12.3s；
-  -22%）。decord v0.7.2 是硬依赖（get_batch_roi 批量解码）；DLL 在
-  _decord_build + site-packages 两处
-- 线程配置：CPU 解码用 DECORD_FFMPEG_THREAD_COUNT=8 + DECORD_FILTER_THREADS=1
-  最优（批量模式下 8 帧线程并行有效）；OCR 8 线程 + 攒批 B=16 最优。
-  逐帧 next_roi 780fps vs 批量 1247fps（固定成本摊薄后帧线程并行才生效）
+- 性能基线（test5 7223 帧，decord v0.7.4 + onnxruntime 1.29，2026-08 实测）：
+  **GPU 解码+CPU OCR 8.9s / CPU 解码+CPU OCR 9.3s / GPU+TRT 8.8s**。
+  瓶颈 = get_batch 解码本身（生产者各 Python/numpy 子步骤合计仅 3.6%；
+  GPU 992fps / CPU 864fps ROI-only）。DLL 在 _decord_build + site-packages 两处
+- **线程预算规则（v2.14 起代码内置，_ocr_num_threads/auto_ocr_thread_count）**：
+  OCR = 全部物理核（16C32T → 16），解码用 fork 默认（FFmpeg 帧线程 2 +
+  filter auto≈2，落在 SMT 份额上不抢物理核）。实测 OCR 8→16 线程：
+  GPU 解码 11.3→9.0s、CPU 解码 12.8→9.5s，满负荷正收益；超物理核不再提升。
+  RVTOL_OCR_THREADS env 钩子优先（实验用）。**旧"FFMPEG8 + filter1 +
+  OCR8"组合在当前栈上 13.3s/9.8GB 病态，已废弃**（filter=1 是元凶，
+  单线程 sws 全帧转换 ~0.8ms/帧）。DECORD_FFMPEG_THREAD_COUNT=4 是坏点
+  （13.5s）。逐帧 next_roi 780fps vs 批量 1247fps（固定成本摊薄）
 - **pad 宽 224 最优**（降宽省推理但 +19 误读）；buffer 128 最优
 - RVTOL_OCR_THREADS / RVTOL_OCR_GAMMA / DECORD_PREFETCH_DEPTH /
   DECORD_FILTER_THREADS env 钩子用于实验
@@ -86,6 +91,14 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
 - TRT 引擎缓存：`<程序目录>/ocr_engines/`（免安装便携），旧 LOCALAPPDATA
   只读回退；engine 文件名含 sm89（本机 RTX 4060），换卡靠"加载失败→删除→
   重建"兜底；TRT 10/11 双兼容（getattr 回退 + 输出张量 profile 守卫）
+- **decord fork 解码层余量（Phase 2 候选，fork 仓库 D:\Repo\decord，
+  build\Release\decord.dll 本地可重建）**：
+  - CPU：filter 图在全 1080p 帧做 YUV→RGB/gray 再裁剪，99.9% 转换像素
+    被丢弃 → ROI-first（YUV 域先 crop 再 scale/format，ROI 固定时 filter
+    图只建一次）可砍 ~0.4-0.8ms/帧，decode 阶段 8.8s → 预计 ~5-6s。
+  - GPU：GetBatch 是逐帧循环（每帧 NextFrameImpl sync + cudaMemcpy2D +
+    CopyTo 双拷贝），HandlePictureDisplay 每帧 cudaStreamSynchronize →
+    真批量异步解码 + 单次 sync + ROI 批量 D2H 可将 decode 8.2s 大幅压缩。
 
 ## 工作流约束
 

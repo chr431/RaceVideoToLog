@@ -236,6 +236,22 @@ class SegmentPipeline:
         return "onnxruntime" if (self._ocr_backend or "auto").lower() == "cpu" \
             else "tensorrt"
 
+    def _ocr_num_threads(self) -> int:
+        """OCR 推理线程预算：RVTOL_OCR_THREADS env 钩子优先，否则全物理核。
+
+        根本性解决"CPU 满负荷抢核变慢"：解码（NVDEC 全卸载 / CPU 下
+        FFmpeg 帧线程 2 + filter auto 只占 SMT 份额）不抢物理核，OCR
+        吃满全部物理核——实测 16C32T：GPU 解码 8→16 线程 11.3s→9.0s、
+        CPU 解码 8→16 线程 12.8s→9.5s，满负荷正收益；超过物理核
+        （超线程）不再提升，故封顶。显式参数传入引擎，不污染全局 env。
+        """
+        from ocr_native import auto_ocr_thread_count
+        _env = _os.environ.get("RVTOL_OCR_THREADS")
+        if _env:
+            return max(1, int(_env))
+        gpu = getattr(self, "_backend", "") == "decord/GPU"
+        return auto_ocr_thread_count(gpu)
+
     # ── 阶段 1：解码 + 特征（diff/清晰度）──
     def _decode_all(self):
         vr = self._open_vr()
@@ -310,7 +326,8 @@ class SegmentPipeline:
         from ocr_native import OcrEngine
         from video_utils import _preprocess_standard
         eng = OcrEngine(self._ocr_model, self._ocr_engine_type(),
-                               fill_width=self._fill_width)
+                        fill_width=self._fill_width,
+                        num_threads=self._ocr_num_threads())
         seg_vals = []
         rep_frames = []
         t0 = time.perf_counter()
@@ -712,7 +729,8 @@ class SegmentPipeline:
             t0 = time.perf_counter()
             try:
                 eng = OcrEngine(self._ocr_model, self._ocr_engine_type(),
-                               fill_width=self._fill_width)
+                                fill_width=self._fill_width,
+                                num_threads=self._ocr_num_threads())
                 B = 16
                 # 预处理（单线程 numpy，持 GIL）与推理（ONNX 8 线程，
                 # session.run 释放 GIL）流水线重叠：主循环攒批预处理，

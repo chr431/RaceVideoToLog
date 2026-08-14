@@ -29,6 +29,33 @@ def _models_dir() -> Path:
     return Path(__file__).resolve().parent / "assets" / "ocr_models"
 
 
+def cpu_physical_cores() -> int:
+    """物理核数（psutil 缺失时用逻辑核/2 估算，最小 2）。"""
+    try:
+        import psutil  # type: ignore[import-not-found]
+        physical = psutil.cpu_count(logical=False)
+    except ImportError:
+        physical = None
+    if not physical:
+        physical = max(2, (os.cpu_count() or 8) // 2)
+    return max(2, int(physical))
+
+
+def auto_ocr_thread_count(gpu_decode: bool) -> int:
+    """给 OCR 推理线程预算（根本性解决"CPU 满负荷抢核变慢"）。
+
+    实测（16C32T，decord v0.7.4 + onnxruntime 1.29，test5 7223 帧）：
+    - GPU 解码：OCR 8→16 线程 11.3s→9.0s，满负荷正收益（超线程上限
+      继续退化，封顶物理核）。
+    - CPU 解码：FFmpeg 帧线程 2（fork 默认）+ filter auto（≈2）只占
+      SMT 份额，OCR 全物理核 16 线程 9.5s（vs OCR 8 线程 12.8s 且
+      RSS 病态 8.2GB）。旧"FFmpeg8+filter1+OCR8"组合在当前栈上
+      13.3s/9.8GB，已过时。
+    两种后端皆返回全部物理核（gpu_decode 参数保留供诊断日志）。
+    """
+    return cpu_physical_cores()
+
+
 class RecOut:
     """兼容 extract_speed_value 的输出对象（txts/scores）。"""
 
@@ -50,15 +77,21 @@ class OcrEngine:
     def __init__(self, variant: str = "v6_small",
                  engine_type: str = "onnxruntime",
                  progress_cb: "Callable[[str], None] | None" = None,
-                 fill_width: int = 0) -> None:
+                 fill_width: int = 0,
+                 num_threads: int | None = None) -> None:
         """progress_cb: 构建引擎等耗时阶段的进度消息回调 (str)。
 
         fill_width: OCR 输入 pad 宽度下限（px，替换固定 OCR_PAD_WIDTH_MIN）。
         0 = 用 config 默认。速度窄图对宽 pad 更准，用户可调（GUI 160-320）。
+
+        num_threads: ONNX 推理线程数（None = RVTOL_OCR_THREADS env →
+        默认物理核/2）。管线按解码后端注入线程预算（SegmentPipeline.
+        _ocr_num_threads）：NVDEC 解码 → 全物理核；CPU 解码 → 物理核/2。
         """
         self._variant = variant
         self._progress_cb = progress_cb
         self._fill_width = fill_width
+        self._num_threads = num_threads
         self._lock = threading.Lock()
         size = variant.replace("v6_", "")
         models = _models_dir()
@@ -83,22 +116,20 @@ class OcrEngine:
     def _init_onnx(self, models: Path, size: str) -> None:
         import onnxruntime as ort
         # 线程数必须显式限制：默认（=全部逻辑核）会让 ONNX 推理占满 CPU
-        # 并与解码器抢核；且 os.cpu_count() 是逻辑核（7945HX 16核32线程），
-        # 逻辑核/2=16 线程对物理 16 核超配（实测 16 线程 0.823ms/帧 vs
-        # 8 线程 0.598ms/帧 —— 超线程核上的线程开销）。用物理核数/2。
+        # 并与解码器抢核。物理核/2 是 CPU 解码场景的历史最优（8 线程
+        # 0.598ms/帧 vs 16 线程 0.823ms/帧——超线程核上的线程开销）；
+        # GPU 解码场景由 SegmentPipeline._apply_ocr_thread_env 按
+        # auto_ocr_thread_count(全物理核) 覆盖（RVTOL_OCR_THREADS env）。
         so = ort.SessionOptions()
-        try:
-            import psutil  # type: ignore[import-not-found]
-            physical = psutil.cpu_count(logical=False)
-        except ImportError:
-            physical = None
-        if not physical:
-            physical = (int(os.cpu_count() or 8) // 2)  # 假设 2 线程/核
+        physical = cpu_physical_cores()
         n = max(2, physical // 2)
-        # env 覆盖（性能实验用，如 CPU 解码场景让核给解码线程）
-        _env_t = os.environ.get("RVTOL_OCR_THREADS")
-        if _env_t:
-            n = max(1, int(_env_t))
+        # 优先级：显式 num_threads > env 钩子 > 默认物理核/2
+        if self._num_threads:
+            n = max(1, int(self._num_threads))
+        else:
+            _env_t = os.environ.get("RVTOL_OCR_THREADS")
+            if _env_t:
+                n = max(1, int(_env_t))
         so.intra_op_num_threads = n
         so.inter_op_num_threads = 2
         # ORT 线程池自旋控制（1.28 支持；与解码线程共存时影响 CPU 调度）：
