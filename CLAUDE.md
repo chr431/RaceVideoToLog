@@ -31,9 +31,10 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
   `test_correction_chain.py`（conf/DP/build_rows/预处理）、`test_csv_io.py`、
   `test_from_csv.py`（from-csv 显式参数优先语义）、`test_packaging.py`
   （py-modules 完整性）、`test_seg_series.py`、`test_ocr_fixtures.py`、
+  `test_hybrid_decoder.py`（cpu+nvdec 识别/切分/解码 worker）、
   `test_decoder_integration.py`（缺 decord 显式跳过）。
 - CI（.github/workflows/ci.yml）：test job 跑全量 pytest；decoder-smoke job
-  从 chr431/decord release v0.7.5 下载 fork 真实跑解码集成测试（下载失败
+  从 chr431/decord release v0.7.7 下载 fork 真实跑解码集成测试（下载失败
   显式跳过不红）；version-check 跑 tools/version.py。
 - 1-2 km/h 平滑偏移漏纠是信息论极限（与真实平滑不可区分）——局部物理约束
   无解，勿重复探索。
@@ -56,18 +57,43 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
   （gamma 改变 Otsu/二值化合并了段），原始误读不变（155），但 test2 8→9
   （新增 1 误改）、总量 12→13。raw 灰度 + Otsu 的组合在分割层面更优；
   gamma 仅保留给 OCR 预处理。钩子留作实验入口，勿设默认。
-- 性能基线（test5 7223 帧，decord v0.7.5 + onnxruntime 1.29，2026-08 实测）：
-  **CPU+CPU 9.0s / GPU+CPU 8.6s / CPU+TRT 6.8s / GPU+TRT 8.1s**。
+- 性能基线（test5 7223 帧，decord v0.7.7 + onnxruntime 1.29，2026-08 实测）：
+  **CPU+CPU 9.0s / GPU+CPU 8.6s / CPU+TRT 6.8s / GPU+TRT 8.1s /
+  CPU+NVDEC+TRT 7.0s / CPU+NVDEC+CPU 8.1s**（v2.15 新增混合后端）。
   生产者各 Python/numpy 子步骤合计仅 ~4%（GPU ~1000fps / CPU ~1260fps
   ROI-only）。DLL 在 _decord_build + site-packages 两处
-- **decord v0.7.5（ROI-first + 撕裂帧竞态修复，fork 仓库 D:\Repo\decord）**：
-  解码器只输出 ROI 矩形：CPU filter crop 先于 format（yuv420p 上
-  x/y/w/h 全偶数约束，用偶数超集+顶部精裁绕过）；GPU kernel 只算 ROI
-  窗口 + 输出池 ROI 尺寸（asnumpy 单次批量 D2H）。**同步 D2H 是正确性
-  关键**：v0.7.4 的线程本地非阻塞拷贝流在并发管线中产生孤立帧撕裂
-  （~0.2-0.9% 帧部分行旧内容 → 分段/OCR 漂移，门禁 12→24-41 波动），
-  改回同步 cudaMemcpy 后 A/B 5 轮 0 分歧、门禁可复现 12。剩余余量：
-  GPU 真批量异步解码（display 回调每帧 sync 仍在）。
+- **CPU+NVDEC 混合解码（v2.15，_open_hybrid_vrs）**：CPU reader 覆盖前
+  55%（calib 后）、GPU reader 覆盖后 45%（独立 seek_accurate 到段首），
+  两 worker 线程并行填有界队列、消费者按序合并（帧序与单解码器一致）。
+  接缝跨后端帧对仅一处：两后端同帧灰度差 ±2-3 散布全帧、_cluster_win3
+  列密度 << C=5 不产生假边。切分比例 config.HYBRID_CPU_SPLIT=0.55
+  （env RVTOL_HYBRID_SPLIT）。解码阶段并行砍半，但被 OCR/分段消费者
+  瓶颈拉平 —— 端到端 ~14%（8.1→7.0s），非 50%。GPU 不可用自动回退纯 CPU。
+- **decord v0.7.7（ROI-first + 撕裂帧竞态修复 + seek VFR 越位修复 + 双
+  解码器背压，fork 仓库 D:\Repo\decord）**：
+  - v0.7.5 起：解码器只输出 ROI 矩形（CPU filter crop 先于 format，yuv420p
+    x/y/w/h 全偶数约束用偶数超集+顶部精裁绕过；GPU kernel 只算 ROI 窗口
+    + 输出池 ROI 尺寸）；同步 D2H 撕裂帧修复（v0.7.4 非阻塞流并发管线
+    孤立撕裂 ~0.2-0.9% → 门禁 12→24-41；同步 cudaMemcpy 后 A/B 5 轮
+    0 分歧、门禁可复现 12）。
+  - **v0.7.6 seek_accurate VFR 关键帧越位修复**：稀疏 GOP VFR 视频
+    （test3 4264 帧仅 17 关键帧）帧中段 seek 落到下一个关键帧（+267=
+    一个 GOP）静默错位（混合解码 GPU 段曾 433 误读）。三层：① Seek 关键帧
+    强制 AVSEEK_FLAG_BACKWARD（正投到恰等于关键帧自身 PTS 会落到下一
+    关键帧）；② 索引磁盘缓存命中路径从未重建 pts_frame_map_（仅全扫描
+    IndexKeyframes 建）→ 缓存版本 1→2 + LoadCachedIndex 重建 map；
+    ③ SeekAccurate 落点校验（解码一帧 PTS 对索引 ±2 tick，残差精确补跳，
+    校验帧交还 NextFrame / 记账前移防吞帧）。验证：5 视频×采样位置×
+    CPU/GPU 逐位一致（CPU 全 0）。
+  - **v0.7.7 双解码器并发背压**：EnqueueRawFrame 加背压
+    （raw_queue_+frame_queue_ ≥ max_queue_frames_+4 时等待）。raw/pkt/
+    buffer 队列是无界 ConcurrentBlockingQueue，唯一有界点是 frame_queue_
+    （32）；双并发解码器在 CPU 争抢下解码线程跑在消费者前，raw_queue_
+    无限堆积整帧（1080p ~1.9MB/帧 → 8-11GB，del reader 才释放）。
+    背压把消费者节奏传回 Push()，实测 11GB→500MB，帧序正确性不变。
+  - 剩余余量：GPU 真批量异步解码 —— GetBatch 逐帧 NextFrameImpl +
+    display 回调每帧 cudaStreamSynchronize；批内单次 sync + 批量 D2H
+    可将 GPU decode 阶段（8.1s）进一步压缩。
 - **线程预算规则（v2.14 起代码内置，_ocr_num_threads/auto_ocr_thread_count）**：
   OCR = 全部物理核（16C32T → 16），解码用 fork 默认（FFmpeg 帧线程 2 +
   filter auto≈2，落在 SMT 份额上不抢物理核）。实测 OCR 8→16 线程：
@@ -100,8 +126,10 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
   只读回退；engine 文件名含 sm89（本机 RTX 4060），换卡靠"加载失败→删除→
   重建"兜底；TRT 10/11 双兼容（getattr 回退 + 输出张量 profile 守卫）
 - **decord fork 解码层状态（fork 仓库 D:\Repo\decord，本地可重建）**：
-  - ✅ v0.7.5 已做：CPU filter crop 先于 format；GPU kernel ROI 窗口 +
-    ROI 输出池；同步 D2H（撕裂帧竞态修复）。
+  - ✅ v0.7.5：CPU filter crop 先于 format；GPU kernel ROI 窗口 + ROI
+    输出池；同步 D2H（撕裂帧竞态修复）。
+  - ✅ v0.7.6：seek_accurate VFR 关键帧越位修复（seek 三层修复）。
+  - ✅ v0.7.7：双解码器并发 raw 队列背压（内存爆炸修复）。
   - 剩余余量：GPU 真批量异步解码 —— GetBatch 逐帧 NextFrameImpl +
     display 回调每帧 cudaStreamSynchronize；批内单次 sync + 批量 D2H
     可将 GPU decode 阶段（8.1s）进一步压缩。

@@ -111,7 +111,7 @@ def run(video: str, truth: str, backend: str, out_csv: str,
     # scan both. 段管线（v2.13）输出 "[decord/GPU] 解码+分段: 0/7223" 与
     # "总耗时: X.Xs"；backend 从 CSV 头 "# backend=decord/GPU" 读。
     text = (r.stdout or "") + "\n" + (r.stderr or "")
-    m = re.search(r"\[decord/(\w+)\]", text)
+    m = re.search(r"\[decord/([\w+]+)\]", text)
     if m:
         timing["actual_backend"] = m.group(1)
     # 帧数 = CSV 数据行数（比解析 stdout 更稳）

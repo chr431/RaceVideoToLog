@@ -9,7 +9,7 @@ import os
 import sys
 from pathlib import Path
 
-__version__ = "2.14.0"
+__version__ = "2.15.0"
 
 # ═══════════════════ 数据目录 ═══════════════════
 
@@ -40,9 +40,11 @@ DEFAULT_BUFFER_SIZE: int = 128          # 解码∥OCR 流水线队列缓冲（�
                                         # 64→128：GPU 解码突发时缓冲背压，减少
                                         # 解码线程 q.put 阻塞等待（GPU+CPU wall
                                         # -0.3s；256 无进一步收益）
-DEFAULT_DECODE_BACKEND: str = "auto"   # 解码后端 (auto / cpu / nvdec)
-DECODE_BACKEND_KEYS: list[str] = ["auto", "cpu", "nvdec"]
-DECODE_BACKEND_LABELS: dict[str, str] = {"auto": "自动", "cpu": "CPU", "nvdec": "NVDEC"}
+DEFAULT_DECODE_BACKEND: str = "auto"   # 解码后端 (auto / cpu / nvdec / cpu+nvdec)
+DECODE_BACKEND_KEYS: list[str] = ["auto", "cpu", "nvdec", "cpu+nvdec"]
+DECODE_BACKEND_LABELS: dict[str, str] = {"auto": "自动", "cpu": "CPU",
+                                         "nvdec": "NVDEC",
+                                         "cpu+nvdec": "CPU+NVDEC"}
 DEFAULT_OCR_BACKEND: str = "auto"      # OCR 推理后端 (auto / cpu / tensorrt)
 OCR_BACKEND_KEYS: list[str] = ["auto", "cpu", "tensorrt"]
 OCR_BACKEND_LABELS: dict[str, str] = {"auto": "自动", "cpu": "CPU", "tensorrt": "TensorRT"}
@@ -67,6 +69,12 @@ MONITOR_INTERVAL_S: float = 1.0        # 资源采样间隔（秒）
 MONITOR_GPU: bool = True               # 是否采样 GPU 利用率/显存/温度
 
 # ═══════════════════ 段管线参数 ═══════════════════
+HYBRID_CPU_SPLIT: float = 0.55    # CPU+NVDEC 混合解码的 CPU 段帧数比例。
+                                  # CPU ROI-first 解码 ~1260fps vs GPU
+                                  # ~1000fps → 55/45 两端同时完成，解码
+                                  # wall = max(两边) ≈ 单解码器一半
+                                  # （test5 7223 帧实测 7.4s → 3.7s）。
+                                  # env RVTOL_HYBRID_SPLIT 可覆盖（实验）。
 SEG_GAMMA: float = 0.0             # 分段/代表帧选择的灰度 gamma 增强指数。
                                    # 0 = raw 灰度（锁定基线，v2.14 现状：分段与
                                    # OCR 正式预处理 gray+gamma2.0 不一致但已接受）。

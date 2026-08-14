@@ -86,7 +86,7 @@ def build_settings_panel(parent) -> dict:
     widgets["backend_combo"].addItems(
         [config.DECODE_BACKEND_LABELS[k] for k in config.DECODE_BACKEND_KEYS])
     widgets["backend_combo"].setCurrentIndex(0)
-    widgets["backend_combo"].setFixedWidth(95)
+    widgets["backend_combo"].setFixedWidth(115)
     pl.addWidget(widgets["backend_combo"], 3, 1)
     pl.addWidget(BodyLabel("OCR 后端"), 3, 2)
     widgets["ocr_backend_combo"] = ComboBox()

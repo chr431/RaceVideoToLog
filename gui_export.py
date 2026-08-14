@@ -58,6 +58,7 @@ class ExportThread(QThread):
             force_aspect: float,
             output_path: Path,
             monitor_enabled: bool = True,
+            gray_output: bool = False,
             parent: QWidget | None = None,
         ) -> None:
         super().__init__(parent)
@@ -74,6 +75,7 @@ class ExportThread(QThread):
         self._frame_end = _to_int_or_none(frame_end)
         self._force_aspect = force_aspect
         self._monitor_enabled = monitor_enabled
+        self._gray_output = gray_output
         self._output_path = output_path
         self._cancel_flag = False
 
@@ -109,6 +111,7 @@ class ExportThread(QThread):
                     force_aspect=self._force_aspect,
                     fps=None,
                     cancel_check=self._check_cancel,
+                    gray_output=self._gray_output,
                 )
                 pipeline.run(self._output_path)
                 result_container["mode"] = "auto"

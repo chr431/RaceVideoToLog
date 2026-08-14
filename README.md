@@ -1,4 +1,4 @@
-# RaceVideoToLog v2.14.0
+# RaceVideoToLog v2.15.0
 
 从赛车视频中提取速度数据，生成时间-速度-距离 CSV 文件。
 
@@ -31,7 +31,7 @@ filter 先裁剪再转换、GPU 转换 kernel 只算 ROI 窗口；并修复了 v
 D2H 的孤立帧撕裂竞态。v0.7.4 自动回退逐帧裁剪路径，功能正常但略慢；
 旧版会报 `_CAPI_VideoReaderGetBatchRoi` 不存在）。
 
-获取 decord 发布产物（推荐）：运行 [chr431/decord](https://github.com/chr431/decord) 的 **Release workflow**（Actions → Release → Run workflow，输入版本号如 `0.7.5`），它会构建并发布 `decord-<ver>-win64-gpu.zip`。解压到本仓库 `_decord_build\`：
+获取 decord 发布产物（推荐）：运行 [chr431/decord](https://github.com/chr431/decord) 的 **Release workflow**（Actions → Release → Run workflow，输入版本号如 `0.7.7`），它会构建并发布 `decord-<ver>-win64-gpu.zip`。解压到本仓库 `_decord_build\`：
 
 ```text
 _decord_build\
@@ -70,7 +70,7 @@ _decord_build\
 ## 输出格式
 
 ```csv
-# RaceVideoToLog v2.14.0
+# RaceVideoToLog v2.15.0
 # video=test5.mp4, fps=59.767
 # roi=843,993,948,1025, format=km/h, frame_start=362, frame_end=7585
 # max_speed=400.0, max_accel=50.0, force_aspect=0.0, fill_width=224
@@ -104,7 +104,7 @@ python RaceVideoToLog.py [video] [options]
   --force-aspect N               强制宽高比 (默认: 0=不启用；>0 宽度=48×此值)
   --fill-width N                 预处理 pad 宽度下限 px (默认: 224；速度窄图更准)
   --buffer N                     解码∥OCR 流水线队列缓冲，段数 (默认: 128)
-  --decode-backend {auto,cpu,nvdec}  解码后端 (默认: auto 自动选 GPU)
+  --decode-backend {auto,cpu,nvdec,cpu+nvdec}  解码后端 (默认: auto 自动选 GPU；cpu+nvdec 双解码器并行最快)
   --ocr-backend {auto,cpu,tensorrt}  OCR 推理后端 (默认: auto 自动选 GPU)
   --log-level {normal,detailed,debug} 日志级别 (默认: normal)
   --frame-start N                起始帧号
@@ -170,7 +170,7 @@ build_exe.bat
 
 ## 变更记录
 
-完整发布日志（v2.7.1 → v2.14.0）见 [release_notes.md](release_notes.md)。
+完整发布日志（v2.7.1 → v2.15.0）见 [release_notes.md](release_notes.md)。
 
 ## 运行时缓存（卸载时需删除）
 

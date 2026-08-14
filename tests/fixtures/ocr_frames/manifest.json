@@ -1,5 +1,5 @@
 {
-  "version": "2.14.0",
+  "version": "2.15.0",
   "note": "12 错误案例代表帧的 OCR 行为锁定（expected_raw 是基线产出）。若 OCR/预处理/模型改动改变读数，属有意改动：先跑完整漏斗（tools/accuracy_breakdown.py）确认无回归，再重新生成本夹具。",
   "cases": [
     {

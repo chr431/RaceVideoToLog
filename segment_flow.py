@@ -9,6 +9,8 @@
 - 段值：每段最清晰代表帧 OCR（sharpness=灰度std），OCR 线程批处理闭合段
 - 段级检测：中值滤波（跟随弯曲，误读=尖峰被中值剔除）
 - 段级纠正：可信锚点插值（锚点距离上界，跳过曲线正确段）
+- 解码：decode_backend='cpu+nvdec' 时 CPU+NVDEC 双解码器并行（CPU 前段 +
+  GPU 后段，见 _open_hybrid_vrs），解码阶段 wall 砍半（test5 7.4s→3.7s）
 
 注意：_decode_all/_segment/_ocr_segments/_detect/_correct 是串行参考路径
 （仅 tools/ 与测试使用），生产 run() 走 _run_pipelined + _dense_correct。
@@ -124,6 +126,56 @@ def _cluster_win3(diff: np.ndarray) -> float:
     return float(w3.max())
 
 
+HYBRID_BACKEND_ALIASES: tuple[str, ...] = ("cpu+nvdec", "hybrid")
+
+
+def _hybrid_ranges(frames: list, calib_n: int,
+                   split_ratio: float) -> tuple[list, list]:
+    """CPU+NVDEC 混合解码区间切分：(cpu_fis, gpu_fis)，无重叠全覆盖。
+
+    split_pos = max(calib_n, int(len(frames)*split_ratio))：CPU 解
+    frames[calib_n:split_pos]（前段，接在校准帧之后），GPU 解
+    frames[split_pos:]（后段）。跨后端相邻帧对仅接缝一处，重叠 0 帧。
+    """
+    split_pos = min(len(frames),
+                    max(calib_n, int(len(frames) * split_ratio)))
+    return frames[calib_n:split_pos], frames[split_pos:]
+
+
+def _decode_range_worker(vr, fis, q, roi, th, err, batch: int = 16):
+    """批量解码帧区间 [fis] → (fi, crop, gray, sharp, bin) 入队。
+
+    CPU+NVDEC 混合解码的解码线程体：_run_pipelined 传 th（分段阈值，
+    bin 参与增量分段）；_decode_all 传 th=None（bin=None 不用，参考
+    路径）。批量特征（gray/std/二值化）在解码线程内向量化完成，与
+    消费者分段线程重叠。异常记入 err 并放哨兵，保证消费者不被卡死。
+    roi 为半开区间。
+    """
+    try:
+        for bstart in range(0, len(fis), batch):
+            bend = min(bstart + batch, len(fis))
+            crops = vr.get_batch(fis[bstart:bend], roi=roi).asnumpy()
+            g = _gray_seg_batch(crops)
+            sharp = g.std(axis=(1, 2))
+            bs = (g > th) if th is not None else None
+            for k, fi in enumerate(fis[bstart:bend]):
+                b = None if bs is None else bs[k]
+                q.put((fi, crops[k], g[k], float(sharp[k]), b))
+    except Exception as e:  # noqa: BLE001 — 经 err 回传主线程 raise
+        err.append(e)
+    finally:
+        q.put(None)
+
+
+def _drain_queue(q):
+    """按序消费解码队列直到哨兵（None）。"""
+    while True:
+        item = q.get()
+        if item is None:
+            return
+        yield item
+
+
 class SegmentPipeline:
     """生产分段流水线。"""
 
@@ -209,6 +261,7 @@ class SegmentPipeline:
 
         auto: 尝试 GPU (NVDEC) 失败回退 CPU。cpu: 强制 CPU。
         nvdec: 强制 GPU（失败回退 CPU 并警告）。替代旧 DECORD_FORCE_CPU env。
+        cpu+nvdec: 走 _open_hybrid_vrs（双解码器并行），不经过本方法。
 
         ROI-first（decord ≥0.7.5）：构造时传入固定 ROI（半开区间）——
         解码器只输出该矩形（CPU filter 先 crop 再转换 / GPU 转换 kernel
@@ -243,6 +296,56 @@ class SegmentPipeline:
         self._backend = f"decord/{label}"
         return vr
 
+    def _is_hybrid(self) -> bool:
+        """decode_backend == 'cpu+nvdec'（CPU+NVDEC 混合并行解码）。"""
+        return (self._decode_backend or "auto").lower() in HYBRID_BACKEND_ALIASES
+
+    def _hybrid_split(self) -> float:
+        """混合解码的 CPU 段帧数比例（env RVTOL_HYBRID_SPLIT 优先）。
+
+        实测 CPU ROI-first 解码 ~1260fps vs GPU ~1000fps → CPU 拿 55%
+        时两端同时完成，wall = max(两边) ≈ 单解码器一半。OCR 满负荷时
+        CPU 解码与 OCR 抢核减速（GPU 段不受影响），可调低让 GPU 多拿。
+        """
+        _env = _os.environ.get("RVTOL_HYBRID_SPLIT")
+        if _env:
+            try:
+                v = float(_env)
+                if 0.0 < v < 1.0:
+                    return v
+            except ValueError:
+                pass
+        return float(config.HYBRID_CPU_SPLIT)
+
+    def _open_hybrid_vrs(self):
+        """CPU+NVDEC 混合解码：打开一对 ROI-first 解码器（CPU 前段 + GPU 后段）。
+
+        与 _open_vr 相同 ROI 语义（闭合框 → 半开 +1）。CPU reader 灰度
+        输出（sws 转换量 1/3，_gray_seg_batch 直接取通道）；GPU reader
+        RGB（GPU kernel 只算 ROI 窗口）。GPU 不可用 → 回退单 CPU reader
+        （vr_gpu=None，调用方按纯 CPU 走）。返回 (vr_cpu, vr_gpu)。
+        """
+        from decord import VideoReader, cpu as _cpu
+        try:
+            import decord.video_reader as _vr_mod
+            _has_roi_api = hasattr(_vr_mod, "_CAPI_VideoReaderSetRoi")
+        except ImportError:
+            _has_roi_api = False
+        roi = (self._roi[0], self._roi[1], self._roi[2] + 1, self._roi[3] + 1)
+        roi_kw = {"roi": roi} if _has_roi_api else {}
+        vr_cpu = VideoReader(str(self._video_path), ctx=_cpu(0),
+                             output_format='gray' if self._gray_output
+                             else 'rgb', **roi_kw)
+        vr_gpu = None
+        try:
+            from decord import gpu as _g
+            vr_gpu = VideoReader(str(self._video_path), ctx=_g(0), **roi_kw)
+            self._backend = "decord/CPU+NVDEC"
+        except Exception:
+            logger.warning("NVDEC 解码不可用，CPU+NVDEC 回退纯 CPU")
+            self._backend = "decord/CPU"
+        return vr_cpu, vr_gpu
+
     def _ocr_engine_type(self) -> str:
         """OCR 推理后端：auto/tensorrt → tensorrt（OcrEngine 失败回退 onnx），cpu → onnxruntime。"""
         return "onnxruntime" if (self._ocr_backend or "auto").lower() == "cpu" \
@@ -266,7 +369,14 @@ class SegmentPipeline:
 
     # ── 阶段 1：解码 + 特征（diff/清晰度）──
     def _decode_all(self):
-        vr = self._open_vr()
+        hybrid = self._is_hybrid()
+        vr_gpu = None
+        if hybrid:
+            vr, vr_gpu = self._open_hybrid_vrs()
+            if vr_gpu is None:
+                hybrid = False  # GPU 不可用 → 已回退纯 CPU
+        else:
+            vr = self._open_vr()
         # fps 未指定时从解码器推导（CLI/GUI 无需传 fps）
         if self._fps is None:
             for m in ("get_avg_fps", "get_fps"):
@@ -290,21 +400,72 @@ class SegmentPipeline:
         grays = {}
         sharp = {}
         t0 = time.perf_counter()
-        for k, fi in enumerate(frames):
-            c = vr.next_roi(x1, y1, x2 + 1, y2 + 1).asnumpy()
-            if c.shape[0] != y2 - y1 + 1 or c.shape[1] != x2 - x1 + 1:
-                c = c[y1:y2 + 1, x1:x2 + 1]
-            crops[fi] = c
-            g = _gray_seg(c)
-            grays[fi] = g
-            sharp[fi] = float(g.std())
-            if k % 500 == 0:
-                self._progress(f"[{self._backend}] 解码: {k}/{len(frames)}",
-                               3 + k / max(len(frames), 1) * 70)
-            if k % 100 == 0:
-                self._cancel()
+        if hybrid:
+            # CPU+NVDEC 混合：两解码线程并行解码各自区间（批量 get_batch），
+            # 按序合并（dict 键即帧号，帧序由 frames 列表保证）。
+            import threading
+            from queue import Queue
+            cpu_fis, gpu_fis = _hybrid_ranges(frames, 0,
+                                              self._hybrid_split())
+            q_cpu: Queue = Queue(maxsize=8)  # 有界：防某端先解完内存膨胀
+            q_gpu = Queue(maxsize=8) if gpu_fis else None
+            err: list = []
+            threads: list = []
+            roi_half = (x1, y1, x2 + 1, y2 + 1)
+            if cpu_fis:
+                t = threading.Thread(target=_decode_range_worker,
+                                     args=(vr, cpu_fis, q_cpu, roi_half,
+                                           None, err), daemon=True)
+                t.start()
+                threads.append(t)
+            else:
+                q_cpu.put(None)
+            if q_gpu is not None:
+                try:
+                    vr_gpu.seek_accurate(gpu_fis[0])
+                except Exception as e:  # noqa: BLE001 — 与解码错误同通道回传
+                    err.append(e)
+                    q_gpu.put(None)
+                else:
+                    t = threading.Thread(target=_decode_range_worker,
+                                         args=(vr_gpu, gpu_fis, q_gpu,
+                                               roi_half, None, err),
+                                         daemon=True)
+                    t.start()
+                    threads.append(t)
+            for q in (q_cpu, q_gpu):
+                if q is None:
+                    continue
+                for fi, c, g, s, _b in _drain_queue(q):
+                    if c.shape[0] != y2 - y1 + 1 \
+                            or c.shape[1] != x2 - x1 + 1:
+                        # 旧版非 ROI-first 解码器：全帧输出 → 子裁剪
+                        c = c[y1:y2 + 1, x1:x2 + 1]
+                        g = _gray_seg(c)
+                        s = float(g.std())
+                    crops[fi] = c
+                    grays[fi] = g
+                    sharp[fi] = s
+            for t in threads:
+                t.join()
+            if err:
+                raise err[0]
+        else:
+            for k, fi in enumerate(frames):
+                c = vr.next_roi(x1, y1, x2 + 1, y2 + 1).asnumpy()
+                if c.shape[0] != y2 - y1 + 1 or c.shape[1] != x2 - x1 + 1:
+                    c = c[y1:y2 + 1, x1:x2 + 1]
+                crops[fi] = c
+                g = _gray_seg(c)
+                grays[fi] = g
+                sharp[fi] = float(g.std())
+                if k % 500 == 0:
+                    self._progress(f"[{self._backend}] 解码: {k}/{len(frames)}",
+                                   3 + k / max(len(frames), 1) * 70)
+                if k % 100 == 0:
+                    self._cancel()
         self.timing["decode"] = time.perf_counter() - t0
-        del vr
+        del vr, vr_gpu
         return frames, crops, grays, sharp
 
     # ── 阶段 2：分段（聚类 diff）──
@@ -685,7 +846,8 @@ class SegmentPipeline:
         解码是 I/O 瓶颈（CPU 占用低），段边界（win3）在解码循环内增量计算，
         段一闭合就把代表帧（最清晰）交给 OCR 工作线程 —— 解码∥OCR 重叠摊薄
         总墙钟。代表帧选择与串行 _segment/_ocr_segments 完全一致（每段 max
-        灰度 std），OCR 批 B=16。
+        灰度 std），OCR 批 B=16。cpu+nvdec 时两个解码线程（CPU 前段 +
+        GPU 后段）并行填有界队列，消费者按序合并，帧序与单解码器一致。
 
         返回 (frames, segs, seg_vals, rep_frames)；self.crops = {rep_frame:
         crop}（仅代表帧，供 review 预览，比存全帧省内存）。
@@ -697,7 +859,16 @@ class SegmentPipeline:
         from ocr_engine import extract_speed_value
 
         # ── 打开解码器 + fps ──
-        vr = self._open_vr()
+        # CPU+NVDEC 混合：CPU reader 前段 + GPU reader 后段并行解码
+        # （见 _open_hybrid_vrs）；GPU 不可用已在其中回退纯 CPU。
+        hybrid = self._is_hybrid()
+        vr_gpu = None
+        if hybrid:
+            vr, vr_gpu = self._open_hybrid_vrs()
+            if vr_gpu is None:
+                hybrid = False
+        else:
+            vr = self._open_vr()
         if self._fps is None:
             for m in ("get_avg_fps", "get_fps"):
                 fn = getattr(vr, m, None)
@@ -807,26 +978,75 @@ class SegmentPipeline:
         # 分段状态机仍逐帧推进（仅索引/比较），行为与逐帧取帧一致。
         DECODE_BATCH = 16
 
-        def frame_stream():
-            """先产出校准帧，再批量流式解码剩余帧。
+        dec_threads: list = []
+        dec_err: list = []
 
-            yield (fi, crop, gray, sharp, bin) —— bin 为预计算的二值化。
-            """
-            for fi, c, g, s in calib:
-                yield (fi, c, g, s, g > th)
-            for bstart in range(calib_n, len(frames), DECODE_BATCH):
-                bend = min(bstart + DECODE_BATCH, len(frames))
-                crops = vr.get_batch(
-                    frames[bstart:bend], roi=(x1, y1, x2 + 1, y2 + 1)
-                ).asnumpy()
-                # 批量特征：一次 (B,H,W,3)@(3,) + std + 比较（大数组，
-                # numpy 释放 GIL，不与 OCR 预处理线程互斥）；gray 输出
-                # (B,H,W,1) 时直接取通道（跳过 matmul）
-                g = _gray_seg_batch(crops)
-                sharp = g.std(axis=(1, 2))
-                bs = g > th
-                for k, gi in enumerate(range(bstart, bend)):
-                    yield (frames[gi], crops[k], g[k], float(sharp[k]), bs[k])
+        if hybrid:
+            # ── CPU+NVDEC 混合：两解码线程并行填两个有界队列，按序消费 ──
+            # CPU 解 frames[calib_n:split_pos]（前段），GPU 解
+            # frames[split_pos:]（后段，独立 seek 到段首）。跨后端相邻帧
+            # 对仅接缝一处（CPU 段末帧 vs GPU 段首帧）：两后端同帧灰度差
+            # ±2-3 散布全帧（实测静止帧二值化 XOR ~67、最大窗口和 << C=5），
+            # 不产生假边界；完整漏斗门禁（12 错）兜底。
+            from queue import Queue as _Queue
+            cpu_fis, gpu_fis = _hybrid_ranges(frames, calib_n,
+                                              self._hybrid_split())
+            cpu_q: _Queue = _Queue(maxsize=8)  # 有界：防先解完的一端内存膨胀
+            gpu_q = _Queue(maxsize=8) if gpu_fis else None
+            roi_half = (x1, y1, x2 + 1, y2 + 1)
+            if cpu_fis:
+                t = threading.Thread(
+                    target=_decode_range_worker,
+                    args=(vr, cpu_fis, cpu_q, roi_half, th, dec_err,
+                          DECODE_BATCH), daemon=True)
+                t.start()
+                dec_threads.append(t)
+            else:
+                cpu_q.put(None)
+            if gpu_q is not None:
+                try:
+                    vr_gpu.seek_accurate(gpu_fis[0])
+                except Exception as e:  # noqa: BLE001 — 与解码错误同通道回传
+                    dec_err.append(e)
+                    gpu_q.put(None)
+                else:
+                    t = threading.Thread(
+                        target=_decode_range_worker,
+                        args=(vr_gpu, gpu_fis, gpu_q, roi_half, th, dec_err,
+                              DECODE_BATCH), daemon=True)
+                    t.start()
+                    dec_threads.append(t)
+
+            def frame_stream():
+                """先产出校准帧（CPU reader），再按序消费 CPU 段队列
+                与 GPU 段队列 —— 帧序与单解码器完全一致。"""
+                for fi, c, g, s in calib:
+                    yield (fi, c, g, s, g > th)
+                yield from _drain_queue(cpu_q)
+                if gpu_q is not None:
+                    yield from _drain_queue(gpu_q)
+        else:
+            def frame_stream():
+                """先产出校准帧，再批量流式解码剩余帧。
+
+                yield (fi, crop, gray, sharp, bin) —— bin 为预计算的二值化。
+                """
+                for fi, c, g, s in calib:
+                    yield (fi, c, g, s, g > th)
+                for bstart in range(calib_n, len(frames), DECODE_BATCH):
+                    bend = min(bstart + DECODE_BATCH, len(frames))
+                    crops = vr.get_batch(
+                        frames[bstart:bend], roi=(x1, y1, x2 + 1, y2 + 1)
+                    ).asnumpy()
+                    # 批量特征：一次 (B,H,W,3)@(3,) + std + 比较（大数组，
+                    # numpy 释放 GIL，不与 OCR 预处理线程互斥）；gray 输出
+                    # (B,H,W,1) 时直接取通道（跳过 matmul）
+                    g = _gray_seg_batch(crops)
+                    sharp = g.std(axis=(1, 2))
+                    bs = g > th
+                    for k, gi in enumerate(range(bstart, bend)):
+                        yield (frames[gi], crops[k], g[k], float(sharp[k]),
+                               bs[k])
 
         segs: list = []
         rep_crops: dict = {}
@@ -837,6 +1057,7 @@ class SegmentPipeline:
         rep_sharp = -1.0
         prev_b = None
         t0 = time.perf_counter()
+        consumer_ok = [False]
         try:
             for k, (fi, c, g, sharp, b) in enumerate(frame_stream()):
                 if prev_b is not None:
@@ -866,17 +1087,25 @@ class SegmentPipeline:
             q.put((seg_idx, rep_frame, rep_crop))
             rep_crops[rep_frame] = rep_crop
             seg_idx += 1
+            consumer_ok[0] = True
         finally:
+            # 解码线程只在正常消费完后 join（消费者异常中断时解码线程
+            # 阻塞在有界队列 put 上，daemon 交进程回收，避免 join 挂死）
+            if consumer_ok[0]:
+                for t in dec_threads:
+                    t.join()
             q.put(None)
             ocr_thread.join()
 
+        if dec_err:
+            raise dec_err[0]
         if ocr_err:
             raise ocr_err[0]
         self.timing["decode"] = time.perf_counter() - t0
         self.timing["ocr"] = ocr_wall[0]
         self._n_segments = len(segs)
         self.crops = rep_crops
-        del vr
+        del vr, vr_gpu
         return frames, segs, [results[i][0] for i in range(seg_idx)], \
             [results[i][1] for i in range(seg_idx)]
 

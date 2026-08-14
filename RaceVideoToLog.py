@@ -1,4 +1,4 @@
-"""RaceVideoToLog v2.14.0 — 赛车视频速度 OCR 提取工具。
+"""RaceVideoToLog v2.15.0 — 赛车视频速度 OCR 提取工具。
 
 从车载视频中实时 OCR 识别速度数字，支持 TensorRT / CPU 两种后端（自动选择），
 输出时间-速度-距离 CSV 文件。
@@ -79,7 +79,8 @@ def main() -> None:
         help="强制横向宽高比（0=不启用；>0 时宽度=48×此值）。扁宽字体设 1.5-2.0 可改善识别")
     parser.add_argument("--decode-backend", choices=config.DECODE_BACKEND_KEYS,
         default=config.DEFAULT_DECODE_BACKEND,
-        help="解码后端（auto/cpu/nvdec，默认 auto 自动选 GPU）")
+        help="解码后端（auto/cpu/nvdec/cpu+nvdec，默认 auto 自动选 GPU；"
+             "cpu+nvdec 双解码器并行最快）")
     parser.add_argument("--ocr-backend", choices=config.OCR_BACKEND_KEYS,
         default=config.DEFAULT_OCR_BACKEND,
         help="OCR 推理后端（auto/cpu/tensorrt，默认 auto 自动选 GPU）")

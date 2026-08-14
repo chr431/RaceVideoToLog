@@ -108,3 +108,28 @@ def test_gray_output_single_channel():
         assert np.abs(g[..., 0].astype(np.float32) - gray).max() <= 2.0
     finally:
         del vr
+
+
+def test_hybrid_decode_all_complete_and_close_to_cpu():
+    """cpu+nvdec（无 GPU 自动回退 CPU）：_decode_all 产出完整有序帧集。
+
+    灰度与纯 CPU 参考一致：无 GPU 时逐位相同；有 GPU 时混合后半段
+    来自 GPU 解码（同帧跨后端灰度差实测 ≤38，且不产生假分段——
+    完整漏斗门禁另测）。容差 40 防解码器舍入差异，抓错帧/错裁剪。
+    """
+    _require_fork_api()
+    from segment_flow import SegmentPipeline
+    roi_closed = (ROI[0], ROI[1], ROI[2] - 1, ROI[3] - 1)  # 闭合框语义
+    pipe = SegmentPipeline(str(VIDEO), roi_closed, 400.0, 50.0,
+                           30.0, None, None, decode_backend="cpu+nvdec")
+    frames, crops, grays, sharp = pipe._decode_all()
+    assert frames == list(range(EXPECT_FRAMES))
+    assert list(crops) == frames, "crops 完整且有序"
+    assert set(grays) == set(frames) == set(sharp)
+    ref = SegmentPipeline(str(VIDEO), roi_closed, 400.0, 50.0,
+                          30.0, None, None, decode_backend="cpu")
+    _rf, _rc, rgrays, _rs = ref._decode_all()
+    for fi in frames:
+        d = int(np.abs(grays[fi].astype(int)
+                       - rgrays[fi].astype(int)).max())
+        assert d <= 40, f"帧 {fi} 灰度与纯 CPU 参考差 {d}"

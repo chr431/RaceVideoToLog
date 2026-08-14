@@ -38,10 +38,12 @@ BASELINE_PATH = PROJECT / "tools" / "baseline.json"
 _METRICS = ("seg", "raw", "fix", "fix_wrong", "missed", "harm", "final")
 
 
-def run_funnel(videos, tol: float = 1.0) -> dict:
+def run_funnel(videos, tol: float = 1.0, decode_backend: str = "auto") -> dict:
     """对每个视频跑生产管线并统计漏斗指标。
 
     返回 {"videos": {name: {metric: value}}, "total": {metric: value}}。
+    decode_backend: decord 解码后端（门禁默认 auto 不变；cpu+nvdec
+    用于混合解码对照）。
     """
     per_video: dict = {}
     total = {k: 0 for k in _METRICS}
@@ -50,7 +52,9 @@ def run_funnel(videos, tol: float = 1.0) -> dict:
     for v in videos:
         roi, f_start, f_end, fps, ms, ma, mw, truth = load_meta(v)
         pipe = SegmentPipeline(f"{VIDEO_DIR}/{v}.mp4", roi, ms, ma,
-                               fps, f_start, f_end, force_aspect=mw)
+                               fps, f_start, f_end, force_aspect=mw,
+                               decode_backend=decode_backend,
+                               gray_output=(decode_backend == "cpu+nvdec"))
         pipe.run(str(PROJECT / "outputs" / f"_brk_{v}.csv"))
         sv = pipe._ocr_vals
         cv = pipe._corr_vals
@@ -154,13 +158,18 @@ def main() -> None:
         description="准确率漏斗分析 + 基线门禁（最终错误数回归即失败退出码 1）")
     ap.add_argument("videos", nargs="*", default=DEFAULT_VIDEOS)
     ap.add_argument("--tol", type=float, default=1.0)
+    ap.add_argument("--decode-backend", default="auto",
+                    choices=config.DECODE_BACKEND_KEYS,
+                    help="decord 解码后端（auto/cpu/nvdec/cpu+nvdec；"
+                         "门禁默认 auto 不变）")
     ap.add_argument("--update-baseline", action="store_true",
                     help="用本次结果覆盖 tools/baseline.json（有意改动后）")
     ap.add_argument("--baseline", type=str, default=str(BASELINE_PATH),
                     help="基线文件路径")
     args = ap.parse_args()
 
-    results = run_funnel(args.videos, tol=args.tol)
+    results = run_funnel(args.videos, tol=args.tol,
+                         decode_backend=args.decode_backend)
 
     if args.update_baseline:
         save_baseline(Path(args.baseline), results, args.tol,
