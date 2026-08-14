@@ -42,6 +42,39 @@ def _gray_batch(crops: np.ndarray) -> np.ndarray:
     return (crops.astype(np.float32) @ _GRAY_W).astype(np.uint8)
 
 
+def _seg_gamma() -> float:
+    """分段/代表帧选择的灰度 gamma（实验钩子）。
+
+    RVTOL_SEG_GAMMA env > config.SEG_GAMMA。默认 0 = 现状 raw 灰度
+    （锁定基线）；>0 时对灰度做 255*(g/255)^gamma 增强后再分段与选代表帧
+    —— 与 OCR 正式预处理（gray + gamma 2.0）对齐的对照实验用。
+    """
+    _env = _os.environ.get("RVTOL_SEG_GAMMA")
+    if _env:
+        try:
+            return float(_env)
+        except ValueError:
+            pass
+    return float(config.SEG_GAMMA)
+
+
+def _apply_gamma(g: np.ndarray, gamma: float) -> np.ndarray:
+    if gamma <= 0:
+        return g
+    return (255.0 * np.power(g.astype(np.float32) / 255.0, gamma)
+            ).astype(np.uint8)
+
+
+def _gray_seg(crop: np.ndarray) -> np.ndarray:
+    """分段用灰度：raw（默认）或 gamma 增强（RVTOL_SEG_GAMMA / SEG_GAMMA）。"""
+    return _apply_gamma(_gray(crop), _seg_gamma())
+
+
+def _gray_seg_batch(crops: np.ndarray) -> np.ndarray:
+    """批量分段灰度（_gray_seg 的批量版，含 gamma 钩子）。"""
+    return _apply_gamma(_gray_batch(crops), _seg_gamma())
+
+
 def _otsu(g: np.ndarray) -> int:
     hist, _ = np.histogram(g, bins=256, range=(0, 256))
     total = int(g.size)
@@ -234,7 +267,7 @@ class SegmentPipeline:
             if c.shape[0] != y2 - y1 + 1 or c.shape[1] != x2 - x1 + 1:
                 c = c[y1:y2 + 1, x1:x2 + 1]
             crops[fi] = c
-            g = _gray(c)
+            g = _gray_seg(c)
             grays[fi] = g
             sharp[fi] = float(g.std())
             if k % 500 == 0:
@@ -663,7 +696,7 @@ class SegmentPipeline:
             c = vr.next_roi(x1, y1, x2 + 1, y2 + 1).asnumpy()
             if c.shape[0] != y2 - y1 + 1 or c.shape[1] != x2 - x1 + 1:
                 c = c[y1:y2 + 1, x1:x2 + 1]
-            g = _gray(c)
+            g = _gray_seg(c)
             calib.append((frames[k], c, g, float(g.std())))
         ths = [_otsu(g) for _fi, _c, g, _s in calib]
         th = int(np.median(ths)) if ths else 127
@@ -759,7 +792,7 @@ class SegmentPipeline:
                 # 批量特征：一次 (B,H,W,3)@(3,) + std + 比较（大数组，
                 # numpy 释放 GIL，不与 OCR 预处理线程互斥）；gray 输出
                 # (B,H,W,1) 时直接取通道（跳过 matmul）
-                g = _gray_batch(crops)
+                g = _gray_seg_batch(crops)
                 sharp = g.std(axis=(1, 2))
                 bs = g > th
                 for k, gi in enumerate(range(bstart, bend)):

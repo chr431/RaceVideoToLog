@@ -13,7 +13,7 @@ from __future__ import annotations
 import sys
 sys.path.insert(0, '.')
 import numpy as np
-from tools.eval_phase1 import build_arrays, evaluate, fmt
+from tools.archive.eval_phase1 import build_arrays, evaluate, fmt
 
 
 def median_pairs_expected(vals: np.ndarray, times: np.ndarray,

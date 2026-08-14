@@ -12,8 +12,8 @@ from __future__ import annotations
 import sys
 sys.path.insert(0, '.')
 import numpy as np
-from tools.eval_phase1 import build_arrays, evaluate, fmt
-from tools.proto_signal2 import median_pairs_expected, sig_abs_bw
+from tools.archive.eval_phase1 import build_arrays, evaluate, fmt
+from tools.archive.proto_signal2 import median_pairs_expected, sig_abs_bw
 
 
 def combine_faithful(signals: dict, weights: dict, floor_sigs: list,

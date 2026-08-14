@@ -18,7 +18,7 @@ import numpy as np
 PROJECT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT))
 
-from tools._segment_detect_proto import (  # noqa: E402
+from tools.archive._segment_detect_proto import (  # noqa: E402
     load, read_crops, calibrate, segment, sharpness, detect)
 
 

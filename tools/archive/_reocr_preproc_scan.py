@@ -35,7 +35,7 @@ import ocr_native  # noqa: E402
 from segment_flow import SegmentPipeline  # noqa: E402
 from video_utils import _preprocess_standard  # noqa: E402
 from ocr_engine import extract_speed_value  # noqa: E402
-from tools._detect_eval import load_meta  # noqa: E402
+from tools.detect_eval import load_meta  # noqa: E402
 
 TOL = 1.0
 UPSCALE = 4

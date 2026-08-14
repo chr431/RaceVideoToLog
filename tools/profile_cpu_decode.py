@@ -14,7 +14,7 @@ sys.path.insert(0, str(PROJECT))
 import numpy as np  # noqa: E402
 
 from decord import VideoReader, cpu  # noqa: E402
-from tools._detect_eval import load_meta  # noqa: E402
+from tools.detect_eval import load_meta  # noqa: E402
 from segment_flow import _gray, _cluster_win3, _otsu  # noqa: E402
 
 

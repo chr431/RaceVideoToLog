@@ -3,7 +3,7 @@
 每个视频的 ROI 区域逐帧存为 PNG（文件名=帧号），方便人工复查 truth/ref
 的帧同步（显示转换帧的 ±1 帧模糊）。同时存 truth.csv 供对照。
 
-用法：python tools/_extract_roi.py [--scale 2] [--max-frames N]
+用法：python tools/extract_roi.py [--scale 2] [--max-frames N]
 """
 from __future__ import annotations
 import argparse

@@ -67,6 +67,11 @@ MONITOR_INTERVAL_S: float = 1.0        # 资源采样间隔（秒）
 MONITOR_GPU: bool = True               # 是否采样 GPU 利用率/显存/温度
 
 # ═══════════════════ 段管线参数 ═══════════════════
+SEG_GAMMA: float = 0.0             # 分段/代表帧选择的灰度 gamma 增强指数。
+                                   # 0 = raw 灰度（锁定基线，v2.14 现状：分段与
+                                   # OCR 正式预处理 gray+gamma2.0 不一致但已接受）。
+                                   # >0 = 255*(g/255)^g 增强后分段（与 OCR 预处理
+                                   # 对齐实验，env RVTOL_SEG_GAMMA 可覆盖）。
 SEG_C: float = 5.0              # 分段聚类阈值：max 3×3 窗口和 < C ⇒ 显示未变
 SEG_WIN: int = 30               # 段级检测带宽窗口（换算成帧：×中位段间距，上限 120 帧）
 SEG_MULT: float = 2.0           # 检测门限倍率：|值-中值| > 带宽×mult ⇒ suspect

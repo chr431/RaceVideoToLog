@@ -18,7 +18,7 @@ PROJECT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT))
 
 from segment_flow import SegmentPipeline  # noqa: E402
-from tools._detect_eval import load_meta  # noqa: E402
+from tools.detect_eval import load_meta  # noqa: E402
 
 TOL = 1.0
 

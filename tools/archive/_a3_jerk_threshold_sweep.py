@@ -14,8 +14,8 @@ PROJECT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT))
 
 from segment_flow import SegmentPipeline  # noqa: E402
-from tools._detect_eval import load_meta  # noqa: E402
-from tools._jerk_anchor_probe import _components  # noqa: E402
+from tools.detect_eval import load_meta  # noqa: E402
+from tools.archive._jerk_anchor_probe import _components  # noqa: E402
 
 VIDEOS = ["test", "test2", "test3", "test5", "test6"]
 TOL = 1.0
