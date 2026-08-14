@@ -125,9 +125,14 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
     （0-255）——CPU swscale 遵循标注做 limited→full 展开，GPU 直出
     原始 Y 会与 CPU 差 mean 7-10，故 kernel 必须按 dec_ctx->color_range
     决定展开。
-  - 剩余余量：GPU 真批量异步解码 —— GetBatch 逐帧 NextFrameImpl +
-    display 回调每帧 cudaStreamSynchronize；批内单次 sync + 批量 D2H
-    可将 GPU decode 阶段（8.1s）进一步压缩。
+  - **GPU 真批量异步解码 = 已验证死路（2026-08-15 实测）**：display 回调
+    去 sync + 延迟解映射 + 32 surface + 批级 SyncStream 的完整实现放在
+    fork 分支 `experiment/async-batch-decode`（980 帧 A/B 与同步版逐位
+    一致），但实测 **生产路径 0% 收益**：test6 灰 ROI 1734 vs 1741fps、
+    端到端 decode 14.1s 不变 —— 全部测试视频均为 **NVDEC 硬件解码上限**
+    （h264 ~960fps=2Gp/s、AV1 ~1734fps），display sync 与转换 kernel
+    早已隐藏于硬件解码之下，软件层无法超过硬件解码器。唯一收益是全帧
+    RGB 路径 +7%（739→791fps，其中 D2H 带宽为主）。勿重复攻关。
 - **线程预算规则（v2.14 起代码内置，_ocr_num_threads/auto_ocr_thread_count）**：
   OCR = 全部物理核（16C32T → 16），解码用 fork 默认（FFmpeg 帧线程 2 +
   filter auto≈2，落在 SMT 份额上不抢物理核）。实测 OCR 8→16 线程：
@@ -167,9 +172,14 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
   - ✅ v0.7.8：GPU 色度 siting 修复（RGB 跨后端收敛 ±3）+ GPU
     output_format='gray' 直出 Y（按流 range 展开，与 CPU GRAY8
     逐位一致）。
-  - 剩余余量：GPU 真批量异步解码 —— GetBatch 逐帧 NextFrameImpl +
-    display 回调每帧 cudaStreamSynchronize；批内单次 sync + 批量 D2H
-    可将 GPU decode 阶段（8.1s）进一步压缩。
+  - **GPU 真批量异步解码 = 已验证死路（2026-08-15 实测）**：display 回调
+    去 sync + 延迟解映射 + 32 surface + 批级 SyncStream 的完整实现放在
+    fork 分支 `experiment/async-batch-decode`（980 帧 A/B 与同步版逐位
+    一致），但实测 **生产路径 0% 收益**：test6 灰 ROI 1734 vs 1741fps、
+    端到端 decode 14.1s 不变 —— 全部测试视频均为 **NVDEC 硬件解码上限**
+    （h264 ~960fps=2Gp/s、AV1 ~1734fps），display sync 与转换 kernel
+    早已隐藏于硬件解码之下，软件层无法超过硬件解码器。唯一收益是全帧
+    RGB 路径 +7%（739→791fps，其中 D2H 带宽为主）。勿重复攻关。
 
 ## 工作流约束
 
