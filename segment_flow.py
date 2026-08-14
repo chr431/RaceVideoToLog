@@ -308,10 +308,18 @@ class SegmentPipeline:
     def _hybrid_split(self) -> float:
         """混合解码的 CPU 段帧数比例（env RVTOL_HYBRID_SPLIT 优先）。
 
-        实测 CPU ROI-first 解码 ~1260fps vs GPU ~1000fps → CPU 拿 55%
-        时两端同时完成，wall = max(两边) ≈ 单解码器一半。OCR 满负荷时
-        CPU 解码与 OCR 抢核减速（GPU 段不受影响），可调低让 GPU 多拿。
+        保守分法（默认 10%）：只把 CPU 软解当"增量"——wall =
+        max(CPU 10% 耗时, GPU 90% 耗时) 在 h264/HEVC 上 ≤ 纯 GPU
+        （实测 test3 h264 3.1 vs 3.4s、test5 h264 7.1 vs 7.6s、
+        test HEVC 2.7 vs 2.9s）。AV1 特判：CPU 软解 AV1 极耗核且与
+        GPU 段并发竞争反而拖慢 GPU 吞吐（实测混合 19.1s vs 纯 GPU
+        14.4s）→ 返回 0（CPU 段空，等效纯 GPU；_open_hybrid_vrs 已
+        按纯 GPU 分支走，此返回为其他路径的防御性兜底）。55% 对半分
+        只在 CPU/GPU 吞吐相近的 h264 上有砍半优势，HEVC/AV1 下 CPU
+        软解是瓶颈会倒退（test6 AV1 曾 43.6s vs GPU 14.4s）。
         """
+        if getattr(self, "_hybrid_codec", "") == "av1":
+            return 0.0
         _env = _os.environ.get("RVTOL_HYBRID_SPLIT")
         if _env:
             try:
@@ -327,8 +335,15 @@ class SegmentPipeline:
 
         与 _open_vr 相同 ROI 语义（闭合框 → 半开 +1）。CPU reader 灰度
         输出（sws 转换量 1/3，_gray_seg_batch 直接取通道）；GPU reader
-        RGB（GPU kernel 只算 ROI 窗口）。GPU 不可用 → 回退单 CPU reader
-        （vr_gpu=None，调用方按纯 CPU 走）。返回 (vr_cpu, vr_gpu)。
+        灰度（decord ≥0.7.8 直出 Y，与 CPU GRAY8 逐位一致）。GPU 不可用
+        → 回退单 CPU reader（vr_gpu=None，调用方按纯 CPU 走）。
+        AV1 特判：CPU 软解 AV1 极耗核（~330fps）且与 GPU 段并发竞争拖慢
+        GPU 吞吐（实测混合 decode 19.1s vs 纯 GPU 14.4s）→ 不再打开 CPU
+        reader，直接返回 (vr_gpu, vr_gpu)；调用方见 vr_gpu is vr → 置
+        hybrid=False 走纯 GPU 分支（无队列/线程开销，与纯 GPU 完全一致；
+        实测 decode 14.6 vs 14.1s、RSS 1145→~700MB、total 15.2→14.7s）。
+        _hybrid_split 同步返回 0（防御性，其他路径兜底）。
+        返回 (vr_cpu, vr_gpu)。
         """
         from decord import VideoReader, cpu as _cpu
         try:
@@ -338,10 +353,8 @@ class SegmentPipeline:
             _has_roi_api = False
         roi = (self._roi[0], self._roi[1], self._roi[2] + 1, self._roi[3] + 1)
         roi_kw = {"roi": roi} if _has_roi_api else {}
-        vr_cpu = VideoReader(str(self._video_path), ctx=_cpu(0),
-                             output_format='gray' if self._gray_output
-                             else 'rgb', **roi_kw)
-        vr_gpu = None
+        # 先开 GPU reader：codec 探测用它（AV1 时免开 CPU reader）；
+        # GPU 不可用 → 回退单 CPU reader。
         try:
             from decord import gpu as _g
             # GPU reader 与 CPU 同语义：_gray_output 时直出 GRAY8（= Y 平面，
@@ -354,7 +367,21 @@ class SegmentPipeline:
         except Exception:
             logger.warning("NVDEC 解码不可用，CPU+NVDEC 回退纯 CPU")
             self._backend = "decord/CPU"
-        return vr_cpu, vr_gpu
+            return VideoReader(str(self._video_path), ctx=_cpu(0),
+                               output_format='gray' if self._gray_output
+                               else 'rgb', **roi_kw), None
+        try:
+            self._hybrid_codec = str(vr_gpu.get_codec() or "").lower()
+        except Exception:
+            self._hybrid_codec = ""
+        if self._hybrid_codec == "av1":
+            logger.warning("AV1 视频：CPU 软解与 GPU 并发竞争反而拖慢解码，"
+                           "CPU+NVDEC 按纯 GPU 解码（不打开 CPU reader）")
+            self._backend = "decord/GPU"
+            return vr_gpu, vr_gpu
+        return VideoReader(str(self._video_path), ctx=_cpu(0),
+                           output_format='gray' if self._gray_output
+                           else 'rgb', **roi_kw), vr_gpu
 
     def _ocr_engine_type(self) -> str:
         """OCR 推理后端：auto/tensorrt → tensorrt（OcrEngine 失败回退 onnx），cpu → onnxruntime。"""
@@ -385,6 +412,10 @@ class SegmentPipeline:
             vr, vr_gpu = self._open_hybrid_vrs()
             if vr_gpu is None:
                 hybrid = False  # GPU 不可用 → 已回退纯 CPU
+            elif vr_gpu is vr:
+                hybrid = False  # AV1 特判：不打开 CPU reader，等效纯 GPU
+            elif vr_gpu is vr:
+                hybrid = False  # AV1 特判：不打开 CPU reader，等效纯 GPU
         else:
             vr = self._open_vr()
         # fps 未指定时从解码器推导（CLI/GUI 无需传 fps）

@@ -4,14 +4,22 @@
 
 > 本节面向使用者：只讲你能直接感知到的变化。技术细节见下方各节。
 
-### ⚡ 新增「CPU+NVDEC」解码后端（有 NVIDIA 显卡提速 ~14%）
+### ⚡ 新增「CPU+NVDEC」解码后端（有 NVIDIA 显卡提速）
 
 - 解码后端新增 **CPU+NVDEC** 选项（GUI「性能」卡 / CLI `--decode-backend
-  cpu+nvdec`）：CPU 软解 + NVDEC 硬解**同时工作**，各解一半帧再并行拼接，
-  充分利用 CPU + GPU 两个资源
-- test5 实测（decord v0.7.7）：GPU 单解 8.1s → 混合 **7.0s**；纯 CPU
-  9.4s → 混合 **8.1s**（14%）。解码阶段本身并行砍半，但被 OCR/分段
-  消费者瓶颈拉平，端到端收益约 1.1-1.4s
+  cpu+nvdec`）：CPU 软解 + NVDEC 硬解**同时工作**，CPU 解前段、GPU 解
+  后段再按序拼接，充分利用 CPU + GPU 两个资源
+- **保守分法（CPU 只分 10%）**：h264 上 CPU 软解吞吐（~1260fps）与
+  NVDEC（~960fps）相当，对半分才有砍半优势；但 HEVC/AV1 的 CPU 软解
+  只有 NVDEC 的 1/3~1/5，大份额 CPU 段反成瓶颈。10% 分法下
+  wall = max(CPU 10% 耗时, GPU 90% 耗时)，实测三种编码 **均不弱于
+  纯 GPU**（decode 阶段，venv+TRT）：HEVC 2.5 vs 2.6s、h264 3.1 vs
+  3.3s（test3）/ 7.2 vs 7.7s（test5）
+- **AV1 自动按纯 GPU 解码**：CPU 软解 AV1 极耗核且与 GPU 段并发竞争
+  反而拖慢 GPU 吞吐（实测混合 19.1s vs 纯 GPU 14.4s）→ AV1 视频不再
+  打开 CPU 解码器，行为与「auto」完全一致（decode 14.4 vs 14.1s）
+- test5 端到端（decord v0.7.8 + TensorRT）：GPU 8.1s → 混合 **7.8s**；
+  纯 CPU 9.4s → 混合 **8.1s**
 - 依赖自建 fork **decord v0.7.7**：修复两处关键 bug ——
   ① 稀疏关键帧 VFR 视频的帧中段 seek 落到下一个关键帧（+267 帧静默错位，
   曾致混合解码 test3 433 误读）；② 双解码器并发时解码帧队列无界增长

@@ -69,12 +69,21 @@ MONITOR_INTERVAL_S: float = 1.0        # 资源采样间隔（秒）
 MONITOR_GPU: bool = True               # 是否采样 GPU 利用率/显存/温度
 
 # ═══════════════════ 段管线参数 ═══════════════════
-HYBRID_CPU_SPLIT: float = 0.55    # CPU+NVDEC 混合解码的 CPU 段帧数比例。
-                                  # CPU ROI-first 解码 ~1260fps vs GPU
-                                  # ~1000fps → 55/45 两端同时完成，解码
-                                  # wall = max(两边) ≈ 单解码器一半
-                                  # （test5 7223 帧实测 7.4s → 3.7s）。
-                                  # env RVTOL_HYBRID_SPLIT 可覆盖（实验）。
+HYBRID_CPU_SPLIT: float = 0.10    # CPU+NVDEC 混合解码的 CPU 段帧数比例（保守分法）。
+                                  # 只有 CPU/GPU 吞吐相近（h264：CPU 软解
+                                  # ~1260fps ≈ NVDEC 2Gp/s 上限 ~960fps）时
+                                  # 对半分（55/45）才有 decode 砍半优势；
+                                  # HEVC/AV1 的 CPU 软解只有 NVDEC 的 1/3~1/5，
+                                  # 大份额 CPU 段反成瓶颈（test6 AV1 混合
+                                  # 43.6s vs GPU 14.4s）。10% 保守分法下
+                                  # wall = max(CPU 10% 耗时, GPU 90% 耗时)，
+                                  # h264/HEVC ≤ 纯 GPU（实测 test HEVC 2.7 vs
+                                  # 2.9s / test3 h264 3.1 vs 3.4s / test5 h264
+                                  # 7.1 vs 7.6s decode）；AV1 特判：CPU 软解
+                                  # AV1 极耗核且并发竞争拖慢 GPU 段（混合 19.1s
+                                  # vs 纯 GPU 14.4s）→ _hybrid_split 返回 0，
+                                  # 等效纯 GPU。env RVTOL_HYBRID_SPLIT 可覆盖
+                                  # （实验）。
 SEG_GAMMA: float = 0.0             # 分段/代表帧选择的灰度 gamma 增强指数。
                                    # 0 = raw 灰度（锁定基线，v2.14 现状：分段与
                                    # OCR 正式预处理 gray+gamma2.0 不一致但已接受）。

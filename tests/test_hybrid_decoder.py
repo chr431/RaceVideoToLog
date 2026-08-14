@@ -80,6 +80,20 @@ def test_hybrid_split_env_invalid_falls_back(monkeypatch):
         assert p._hybrid_split() == config.HYBRID_CPU_SPLIT
 
 
+def test_hybrid_split_av1_forces_pure_gpu(monkeypatch):
+    # AV1 特判：CPU 软解 AV1 极耗核且与 GPU 段并发竞争拖慢 GPU 吞吐
+    # （实测混合 19.1s vs 纯 GPU 14.4s）→ 返回 0（CPU 段空，等效纯 GPU）。
+    # 该特判优先于 env 覆盖（任何 split 对 AV1 都是回归）。
+    import config
+    p = _pipe()
+    p._hybrid_codec = "h264"
+    assert p._hybrid_split() == config.HYBRID_CPU_SPLIT
+    monkeypatch.setenv("RVTOL_HYBRID_SPLIT", "0.42")
+    assert p._hybrid_split() == pytest.approx(0.42)  # 非 AV1 仍走 env
+    p._hybrid_codec = "av1"
+    assert p._hybrid_split() == 0.0                  # AV1 特判压过 env
+
+
 # ═══════════════ 区间切分 ═══════════════
 
 def test_hybrid_ranges_partition_no_overlap():

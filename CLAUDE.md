@@ -64,13 +64,18 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
   生产者各 Python/numpy 子步骤合计仅 ~4%（GPU ~1000fps / CPU ~1260fps
   ROI-only）。DLL 在 _decord_build + site-packages 两处
 - **CPU+NVDEC 混合解码（v2.15，_open_hybrid_vrs）**：CPU reader 覆盖前
-  55%（calib 后）、GPU reader 覆盖后 45%（独立 seek_accurate 到段首），
-  两 worker 线程并行填有界队列、消费者按序合并（帧序与单解码器一致）。
-  **v0.7.8 起两后端灰度逐位一致**（GPU 也直出 Y，range 语义同 CPU
-  swscale）→ 接缝无跨后端差异，auto 与混合门禁结果逐位相同（11 错）。
-  切分比例 config.HYBRID_CPU_SPLIT=0.55（env RVTOL_HYBRID_SPLIT）。
-  解码阶段并行砍半，但被 OCR/分段消费者瓶颈拉平 —— 端到端 ~14%
-  （8.1→7.0s），非 50%。GPU 不可用自动回退纯 CPU。
+  10%（calib 后，保守分法）、GPU reader 覆盖后 90%（独立 seek_accurate
+  到段首），两 worker 线程并行填有界队列、消费者按序合并（帧序与单解码
+  器一致）。**v0.7.8 起两后端灰度逐位一致**（GPU 也直出 Y，range 语义
+  同 CPU swscale）→ 接缝无跨后端差异，auto 与混合门禁结果逐位相同
+  （11 错）。切分比例 config.HYBRID_CPU_SPLIT=0.10（env
+  RVTOL_HYBRID_SPLIT）。**AV1 特判**：CPU 软解 AV1 极耗核且与 GPU 段
+  并发竞争拖慢 GPU 吞吐（混合 19.1s vs 纯 GPU 14.4s）→ 不打开 CPU
+  reader、按纯 GPU 分支走（_open_hybrid_vrs 返回 (vr_gpu, vr_gpu)，
+  调用方见 vr_gpu is vr 置 hybrid=False；_hybrid_split 返回 0 兜底）。
+  实测（venv+TRT，decode 阶段）：HEVC 2.5 vs GPU 2.6s、h264 3.1 vs
+  3.3s / 7.2 vs 7.7s、AV1 14.4 vs 14.1s —— 三种编码均不弱于纯 GPU。
+  GPU 不可用自动回退纯 CPU。
 - **decord v0.7.8（ROI-first + 撕裂帧 + seek VFR 越位 + 双解码器背压 +
   GPU 色度 siting 修复 + GPU gray 输出，fork 仓库 D:\Repo\decord）**：
   - v0.7.5 起：解码器只输出 ROI 矩形（CPU filter crop 先于 format，yuv420p
