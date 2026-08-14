@@ -1,0 +1,30 @@
+name: CI-Probe2
+
+on:
+  push:
+    branches: [ci-probe]
+
+jobs:
+  decoder-smoke-mirror:
+    if: github.ref_name != 'master'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: continue-on-error with inline Chinese comment
+        continue-on-error: true  # 网络失败 → 后续步骤显式跳过并报告
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          echo "download emulated"
+      - name: step with hashFiles condition
+        if: hashFiles('_decord_build/python/decord/video_reader.py') != ''
+        shell: pwsh
+        run: |
+          echo "hashFiles step"
+      - name: plain pwsh step with dollar
+        shell: pwsh
+        run: |
+          python -c "import inspect" 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::warning::warn"
+          }
