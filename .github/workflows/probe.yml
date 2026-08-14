@@ -1,0 +1,14 @@
+name: CI-Probe
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe-windows-latest:
+    runs-on: windows-latest
+    steps:
+      - run: echo "windows-latest OK"
+  probe-windows-2022:
+    runs-on: windows-2022
+    steps:
+      - run: echo "windows-2022 OK"
