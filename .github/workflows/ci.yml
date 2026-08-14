@@ -43,7 +43,8 @@ jobs:
         run: |
           $ProgressPreference = 'SilentlyContinue'
           Invoke-WebRequest -Uri "https://github.com/chr431/decord/releases/download/v0.7.7/decord-0.7.7-win64-gpu.zip" -OutFile "$env:RUNNER_TEMP\decord.zip"
-          Expand-Archive "$env:RUNNER_TEMP\decord.zip" -DestinationPath "_decord_build" -Force
+          # zip 顶层即 _decord_build/ 目录 —— 解压到工作区根，避免 _decord_build/_decord_build 嵌套
+          Expand-Archive "$env:RUNNER_TEMP\decord.zip" -DestinationPath "." -Force
       - name: "Install decord into site-packages (fork: DLLs + python layer)"
         if: hashFiles('_decord_build/python/decord/video_reader.py') != ''
         shell: pwsh
@@ -61,6 +62,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             Write-Host "::warning::decord 未安装（下载失败或 release 不可用）—— 解码集成测试将显式跳过"
           }
+          # 仅报告不判红：runner 的 pwsh 包装会以 $LASTEXITCODE 收尾，必须显式归零
+          exit 0
       - name: Decoder integration tests
         run: python -m pytest tests/test_decoder_integration.py -v -rs
 
