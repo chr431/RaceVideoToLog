@@ -64,3 +64,6 @@ _patch_*.py
 *_diagnostics.csv
 RaceVideoToLog.egg-info/
 assets/ocr_models/models/
+
+# decord 帧索引缓存（诊断脚本 CWD 下的运行时产物）
+index/
