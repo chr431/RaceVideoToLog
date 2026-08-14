@@ -34,11 +34,13 @@ jobs:
         run: |
           pip install -e .
           pip install pytest
-      - name: Download stub
+      - name: Download decord fork release (v0.7.7)
         continue-on-error: true
         shell: pwsh
         run: |
-          echo "download stub"
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest -Uri "https://github.com/chr431/decord/releases/download/v0.7.7/decord-0.7.7-win64-gpu.zip" -OutFile "$env:RUNNER_TEMP\decord.zip"
+          Expand-Archive "$env:RUNNER_TEMP\decord.zip" -DestinationPath "_decord_build" -Force
       - name: Decoder integration tests
         run: python -m pytest tests/test_decoder_integration.py -v -rs
 
