@@ -67,6 +67,9 @@ jobs:
           # 仅报告不判红：runner 的 pwsh 包装会以 $LASTEXITCODE 收尾，必须显式归零
           exit 0
       - name: Decoder integration tests
+        # decord 未装时跳过整个步骤：pytest 对"模块级 importorskip 全跳过
+        # （collected 0 items）"返回非零退出码（pytest 9），会误红
+        if: hashFiles('_decord_build/python/decord/video_reader.py') != ''
         run: python -m pytest tests/test_decoder_integration.py -v -rs
         env:
           PYTHONIOENCODING: utf-8  # 中文 skip reason 在 GBK 控制台崩溃
