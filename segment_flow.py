@@ -240,8 +240,9 @@ class SegmentPipeline:
         self._dp_anchor_conf = dp_anchor_conf
         self._dp_deanchor_jerk_min = dp_deanchor_jerk_min
         self._dp_deanchor_jerk_max = dp_deanchor_jerk_max
-        # 灰度输出（decord output_format='gray'，仅 CPU 解码路径生效）：
-        # 跳过 RGB→灰转换（sws 转换量 1/3 + Python 侧 matmul 省去）
+        # 灰度输出（decord output_format='gray'，CPU/GPU 解码路径都生效，
+        # ≥0.7.8）：直出 Y 平面（与 CPU swscale GRAY8 逐位一致），分段灰度
+        # 跨后端统一；跳过 RGB→灰转换与 Python 侧 matmul
         self._gray_output = gray_output
         self._progress = progress_cb or (lambda m, p: None)
         self._cancel = cancel_check or (lambda: None)
@@ -282,7 +283,11 @@ class SegmentPipeline:
         if backend in ("auto", "nvdec"):
             try:
                 from decord import gpu as _g
-                vr = VideoReader(str(self._video_path), ctx=_g(0), **roi_kw)
+                # GPU 也支持 output_format='gray'（decord ≥0.7.8，直出 Y
+                # 平面与 CPU GRAY8 逐位一致）；旧版忽略该参数仍输出 RGB。
+                vr = VideoReader(str(self._video_path), ctx=_g(0),
+                                 output_format='gray' if self._gray_output
+                                 else 'rgb', **roi_kw)
                 label = "GPU"
             except Exception:
                 vr = None
@@ -339,7 +344,12 @@ class SegmentPipeline:
         vr_gpu = None
         try:
             from decord import gpu as _g
-            vr_gpu = VideoReader(str(self._video_path), ctx=_g(0), **roi_kw)
+            # GPU reader 与 CPU 同语义：_gray_output 时直出 GRAY8（= Y 平面，
+            # 与 CPU swscale GRAY8 逐位一致）→ 分段灰度跨后端统一；
+            # 旧 decord（GPU 忽略 output_format）回退 RGB + matmul 灰度。
+            vr_gpu = VideoReader(str(self._video_path), ctx=_g(0),
+                                 output_format='gray' if self._gray_output
+                                 else 'rgb', **roi_kw)
             self._backend = "decord/CPU+NVDEC"
         except Exception:
             logger.warning("NVDEC 解码不可用，CPU+NVDEC 回退纯 CPU")

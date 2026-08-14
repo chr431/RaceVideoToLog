@@ -83,7 +83,8 @@ def main() -> None:
     for v in args.videos:
         roi, f_start, f_end, fps, ms, ma, mw, truth = load_meta(v)
         pipe = SegmentPipeline(f"{VIDEO_DIR}/{v}.mp4", roi, ms, ma,
-                               fps, f_start, f_end, force_aspect=mw)
+                               fps, f_start, f_end, force_aspect=mw,
+                               gray_output=True)
         print(f"== {v}: 生产管线运行中 ...")
         pipe.run(str(PROJECT / "outputs" / f"_fx_{v}.csv"))
         series = {
@@ -122,7 +123,7 @@ def main() -> None:
 
     manifest = {
         "version": config.__version__,
-        "note": "12 错误案例代表帧的 OCR 行为锁定（expected_raw 是基线产出）。"
+        "note": "错误案例代表帧的 OCR 行为锁定（expected_raw 是基线产出）。"
                 "若 OCR/预处理/模型改动改变读数，属有意改动：先跑完整漏斗"
                 "（tools/accuracy_breakdown.py）确认无回归，再重新生成本夹具。",
         "cases": all_cases,

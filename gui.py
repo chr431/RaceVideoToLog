@@ -594,10 +594,9 @@ class RaceVideoToLogApp(QMainWindow):
             frame_start=s["frame_start_edit"].text(),
             frame_end=s["frame_end_edit"].text(),
             monitor_enabled=monitor_enabled,
-            # CPU 路径（cpu / cpu+nvdec 的 CPU reader）用灰度输出省转换；
-            # 与 headless CLI 一致（GPU 路径自动忽略）
-            gray_output=(config.DECODE_BACKEND_KEYS[
-                s["backend_combo"].currentIndex()] != "nvdec"),
+            # 灰度解码输出（decord ≥0.7.8 CPU/GPU 都支持）：直出 Y 平面，
+            # 分段灰度跨后端统一（GPU 路径省 RGB→灰转换与 matmul）
+            gray_output=True,
             output_path=Path(out),
             parent=self,
         )

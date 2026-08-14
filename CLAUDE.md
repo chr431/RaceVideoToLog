@@ -7,15 +7,16 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
 
 - **准确率漏斗是真正的测试门禁**：`tools/accuracy_breakdown.py` 跑
   test/test2/test3/test5/test6 + ground_truth_csv，与 `tools/baseline.json`
-  对比，当前基线 **12 错误**（test 4 / test2 8 / test3/5/6 0，TOL±1，
-  A4 豁免后）。任一视频或总量的最终错误数增加 → 退出码 1（失败即红）。
-  有意改进后：确认无意外回归 → `--update-baseline` 更新基线，并同步
-  重新生成回归夹具（`tools/make_regression_fixtures.py`）与更新本节基线描述。
+  对比，当前基线 **11 错误**（test 3 / test2 8 / test3/5/6 0，TOL±1，
+  A4 豁免后；v2.15 灰度统一后 test 4→3）。任一视频或总量的最终错误数
+  增加 → 退出码 1（失败即红）。有意改进后：确认无意外回归 →
+  `--update-baseline` 更新基线，并同步重新生成回归夹具
+  （`tools/make_regression_fixtures.py`）与更新本节基线描述。
 - **CI 回归夹具（无视频/无 decord 可跑）**：`tests/fixtures/` ——
   - `seg_series/*.json`：生产 run() 的全量段级序列（test/test2/test3/5/6），
     `tests/test_seg_series.py` 重构 _confidence+_dense_correct 并逐段断言
-    与基线一致 + 最终错误集一致（12 案例口径）。
-  - `ocr_frames/`：12 错误案例代表帧的原始 ROI 裁剪（.npy）+ manifest，
+    与基线一致 + 最终错误集一致（11 案例口径）。
+  - `ocr_frames/`：错误案例代表帧的原始 ROI 裁剪（.npy）+ manifest，
     `tests/test_ocr_fixtures.py` 用 onnxruntime CPU 锁定 OCR 行为基线。
   夹具版本必须与 config.__version__ 一致（测试强制）。任何算法/预处理/
   模型改动使夹具读数变化 → 测试失败，属有意改动时先跑完整漏斗确认无
@@ -24,9 +25,9 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
   ground_truth_csv/，test5/test6 用 *_ref.csv）。
 - **test4 truth 不可用**（巨大误差，用户确认）——不作准确率依据，仅用于
   "不把物理正确的帧改坏"。
-- 剩余 12 错误构成：11 个 2-off（平滑偏移/DP 部分纠正/truth 瞬时跳变，
+- 剩余 11 错误构成：9 个 2-off（平滑偏移/DP 部分纠正/truth 瞬时跳变，
   信息论极限）+ test2 2 个"纠错"（改错，change_threshold=3 的 tradeoff 面）。
-  12 案例全部是 len=1 单帧段误读（明细可跑 tools/final_err_dump.py）。
+  11 案例全部是 len=1 单帧段误读（明细可跑 tools/final_err_dump.py）。
 - pytest：`tests/test_segment_flow.py`（_detect/_correct）、
   `test_correction_chain.py`（conf/DP/build_rows/预处理）、`test_csv_io.py`、
   `test_from_csv.py`（from-csv 显式参数优先语义）、`test_packaging.py`
@@ -34,7 +35,7 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
   `test_hybrid_decoder.py`（cpu+nvdec 识别/切分/解码 worker）、
   `test_decoder_integration.py`（缺 decord 显式跳过）。
 - CI（.github/workflows/ci.yml）：test job 跑全量 pytest；decoder-smoke job
-  从 chr431/decord release v0.7.7 下载 fork 真实跑解码集成测试（下载失败
+  从 chr431/decord release v0.7.8 下载 fork 真实跑解码集成测试（下载失败
   显式跳过不红）；version-check 跑 tools/version.py。
 - 1-2 km/h 平滑偏移漏纠是信息论极限（与真实平滑不可区分）——局部物理约束
   无解，勿重复探索。
@@ -57,7 +58,7 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
   （gamma 改变 Otsu/二值化合并了段），原始误读不变（155），但 test2 8→9
   （新增 1 误改）、总量 12→13。raw 灰度 + Otsu 的组合在分割层面更优；
   gamma 仅保留给 OCR 预处理。钩子留作实验入口，勿设默认。
-- 性能基线（test5 7223 帧，decord v0.7.7 + onnxruntime 1.29，2026-08 实测）：
+- 性能基线（test5 7223 帧，decord v0.7.8 + onnxruntime 1.29，2026-08 实测）：
   **CPU+CPU 9.0s / GPU+CPU 8.6s / CPU+TRT 6.8s / GPU+TRT 8.1s /
   CPU+NVDEC+TRT 7.0s / CPU+NVDEC+CPU 8.1s**（v2.15 新增混合后端）。
   生产者各 Python/numpy 子步骤合计仅 ~4%（GPU ~1000fps / CPU ~1260fps
@@ -65,12 +66,13 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
 - **CPU+NVDEC 混合解码（v2.15，_open_hybrid_vrs）**：CPU reader 覆盖前
   55%（calib 后）、GPU reader 覆盖后 45%（独立 seek_accurate 到段首），
   两 worker 线程并行填有界队列、消费者按序合并（帧序与单解码器一致）。
-  接缝跨后端帧对仅一处：两后端同帧灰度差 ±2-3 散布全帧、_cluster_win3
-  列密度 << C=5 不产生假边。切分比例 config.HYBRID_CPU_SPLIT=0.55
-  （env RVTOL_HYBRID_SPLIT）。解码阶段并行砍半，但被 OCR/分段消费者
-  瓶颈拉平 —— 端到端 ~14%（8.1→7.0s），非 50%。GPU 不可用自动回退纯 CPU。
-- **decord v0.7.7（ROI-first + 撕裂帧竞态修复 + seek VFR 越位修复 + 双
-  解码器背压，fork 仓库 D:\Repo\decord）**：
+  **v0.7.8 起两后端灰度逐位一致**（GPU 也直出 Y，range 语义同 CPU
+  swscale）→ 接缝无跨后端差异，auto 与混合门禁结果逐位相同（11 错）。
+  切分比例 config.HYBRID_CPU_SPLIT=0.55（env RVTOL_HYBRID_SPLIT）。
+  解码阶段并行砍半，但被 OCR/分段消费者瓶颈拉平 —— 端到端 ~14%
+  （8.1→7.0s），非 50%。GPU 不可用自动回退纯 CPU。
+- **decord v0.7.8（ROI-first + 撕裂帧 + seek VFR 越位 + 双解码器背压 +
+  GPU 色度 siting 修复 + GPU gray 输出，fork 仓库 D:\Repo\decord）**：
   - v0.7.5 起：解码器只输出 ROI 矩形（CPU filter crop 先于 format，yuv420p
     x/y/w/h 全偶数约束用偶数超集+顶部精裁绕过；GPU kernel 只算 ROI 窗口
     + 输出池 ROI 尺寸）；同步 D2H 撕裂帧修复（v0.7.4 非阻塞流并发管线
@@ -91,6 +93,20 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
     （32）；双并发解码器在 CPU 争抢下解码线程跑在消费者前，raw_queue_
     无限堆积整帧（1080p ~1.9MB/帧 → 8-11GB，del reader 才释放）。
     背压把消费者节奏传回 Push()，实测 11GB→500MB，帧序正确性不变。
+  - **v0.7.8 GPU 色度 siting 修复 + GPU gray 输出**：
+    ① improc.cu 色度采样 (src_x/2)+0.5 在奇数 luma 像素落色度 texel
+    边界被 cudaFilterModeLinear 50/50 混合（与 CPU swscale MPEG-2
+    siting 取所属 2x2 块单 texel 不一致）→ RGB 彩色边缘差 40+、|Δ|>=8
+    像素 77-91% 在奇行/奇列。修复取 int(src_x/2)+0.5 → 同帧 GPU/CPU
+    RGB 收敛 max≤3（纯舍余）。
+    ② GPU 路径响应 output_format='gray'（上游 API 已有、此前忽略）：
+    kernel 直出 Y 平面，**按流 color_range 展开**（tv→(Y-16)*255/219，
+    与 CPU swscale GRAY8 逐位一致，实测 maxΔ=0）→ 分段灰度跨后端
+    统一，auto 与混合门禁结果逐位相同（11 错，v2.15 起 test 4→3）。
+    **range 坑**：测试视频标注 color_range=tv 但实际 Y 数据 full-range
+    （0-255）——CPU swscale 遵循标注做 limited→full 展开，GPU 直出
+    原始 Y 会与 CPU 差 mean 7-10，故 kernel 必须按 dec_ctx->color_range
+    决定展开。
   - 剩余余量：GPU 真批量异步解码 —— GetBatch 逐帧 NextFrameImpl +
     display 回调每帧 cudaStreamSynchronize；批内单次 sync + 批量 D2H
     可将 GPU decode 阶段（8.1s）进一步压缩。
@@ -130,6 +146,9 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
     输出池；同步 D2H（撕裂帧竞态修复）。
   - ✅ v0.7.6：seek_accurate VFR 关键帧越位修复（seek 三层修复）。
   - ✅ v0.7.7：双解码器并发 raw 队列背压（内存爆炸修复）。
+  - ✅ v0.7.8：GPU 色度 siting 修复（RGB 跨后端收敛 ±3）+ GPU
+    output_format='gray' 直出 Y（按流 range 展开，与 CPU GRAY8
+    逐位一致）。
   - 剩余余量：GPU 真批量异步解码 —— GetBatch 逐帧 NextFrameImpl +
     display 回调每帧 cudaStreamSynchronize；批内单次 sync + 批量 D2H
     可将 GPU decode 阶段（8.1s）进一步压缩。

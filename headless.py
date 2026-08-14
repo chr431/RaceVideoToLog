@@ -83,9 +83,9 @@ def run_headless(args: argparse.Namespace) -> None:
         progress_cb=_progress,
         force_aspect=getattr(args, 'force_aspect', 0.0),
         fps=None,
-        # CLI 默认灰度解码输出（跳过 RGB→灰；仅 CPU 解码生效，
-        # GPU 路径 decord 自动忽略）
-        gray_output=(args.decode_backend != 'nvdec'),
+        # 灰度解码输出（decord ≥0.7.8 CPU/GPU 都支持）：直出 Y 平面，
+        # 分段灰度跨后端统一（GPU 路径省 RGB→灰转换与 matmul）
+        gray_output=True,
     )
 
     t0 = time.perf_counter()

@@ -110,6 +110,30 @@ def test_gray_output_single_channel():
         del vr
 
 
+def test_gpu_gray_matches_cpu_gray():
+    """GPU NVDEC 的 output_format='gray'（decord ≥0.7.8）与 CPU GRAY8 逐位一致。
+
+    GPU kernel 直出 Y 平面（按流 color_range 展开），分段灰度跨后端统一
+    是 CPU+NVDEC 混合解码正确性的基础（v0.7.8 新能力，无 GPU 时跳过）。
+    """
+    _require_fork_api()
+    from decord import VideoReader, cpu
+    try:
+        from decord import gpu
+        vr_g = VideoReader(str(VIDEO), ctx=gpu(0), output_format="gray")
+    except Exception as e:
+        pytest.skip(f"NVDEC 不可用（{type(e).__name__}）—— GPU gray 测试跳过")
+    vr_c = VideoReader(str(VIDEO), ctx=cpu(0), output_format="gray")
+    try:
+        g = vr_g.next_roi(*ROI).asnumpy()
+        c = vr_c.next_roi(*ROI).asnumpy()
+        assert g.shape == (EXPECT_ROI_SHAPE[0], EXPECT_ROI_SHAPE[1], 1)
+        assert np.array_equal(g, c), \
+            "GPU gray 与 CPU GRAY8 不一致（range 展开/采样路径变化）"
+    finally:
+        del vr_g, vr_c
+
+
 def test_hybrid_decode_all_complete_and_close_to_cpu():
     """cpu+nvdec（无 GPU 自动回退 CPU）：_decode_all 产出完整有序帧集。
 

@@ -59,14 +59,14 @@ def test_ocr_frame_matches_baseline(engine, case):
         "若改动有意，先跑完整漏斗确认无回归，再重新生成夹具。")
 
 
-def test_manifest_has_12_error_cases():
-    """夹具完整性：12 错误案例口径（test 4 / test2 8，test3/5/6 0）。"""
+def test_manifest_has_error_cases():
+    """夹具完整性：11 错误案例口径（test 3 / test2 8，test3/5/6 0）。"""
     cases = _cases()
-    assert len(cases) == 12
+    assert len(cases) == 11
     by_video = {}
     for c in cases:
         by_video[c["video"]] = by_video.get(c["video"], 0) + 1
-    assert by_video == {"test": 4, "test2": 8}
+    assert by_video == {"test": 3, "test2": 8}
 
 
 def test_all_frames_exist():

@@ -1,6 +1,6 @@
 {
   "version": "2.15.0",
-  "note": "12 错误案例代表帧的 OCR 行为锁定（expected_raw 是基线产出）。若 OCR/预处理/模型改动改变读数，属有意改动：先跑完整漏斗（tools/accuracy_breakdown.py）确认无回归，再重新生成本夹具。",
+  "note": "错误案例代表帧的 OCR 行为锁定（expected_raw 是基线产出）。若 OCR/预处理/模型改动改变读数，属有意改动：先跑完整漏斗（tools/accuracy_breakdown.py）确认无回归，再重新生成本夹具。",
   "cases": [
     {
       "file": "test_frame_00798.npy",
@@ -14,7 +14,7 @@
     {
       "file": "test_frame_01462.npy",
       "video": "test",
-      "seg_index": 323,
+      "seg_index": 324,
       "rep_frame": 1462,
       "expected_raw": 169,
       "expected_corr": 169,
@@ -23,20 +23,11 @@
     {
       "file": "test_frame_03435.npy",
       "video": "test",
-      "seg_index": 1248,
+      "seg_index": 1253,
       "rep_frame": 3435,
       "expected_raw": 121,
       "expected_corr": 121,
       "truth": 123
-    },
-    {
-      "file": "test_frame_03750.npy",
-      "video": "test",
-      "seg_index": 1398,
-      "rep_frame": 3750,
-      "expected_raw": 194,
-      "expected_corr": 194,
-      "truth": 196
     },
     {
       "file": "test2_frame_01141.npy",
@@ -95,7 +86,7 @@
     {
       "file": "test2_frame_02871.npy",
       "video": "test2",
-      "seg_index": 924,
+      "seg_index": 923,
       "rep_frame": 2871,
       "expected_raw": 21,
       "expected_corr": 213,
@@ -104,7 +95,7 @@
     {
       "file": "test2_frame_03095.npy",
       "video": "test2",
-      "seg_index": 958,
+      "seg_index": 957,
       "rep_frame": 3095,
       "expected_raw": 223,
       "expected_corr": 223,

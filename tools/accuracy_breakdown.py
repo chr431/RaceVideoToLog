@@ -54,7 +54,7 @@ def run_funnel(videos, tol: float = 1.0, decode_backend: str = "auto") -> dict:
         pipe = SegmentPipeline(f"{VIDEO_DIR}/{v}.mp4", roi, ms, ma,
                                fps, f_start, f_end, force_aspect=mw,
                                decode_backend=decode_backend,
-                               gray_output=(decode_backend == "cpu+nvdec"))
+                               gray_output=True)
         pipe.run(str(PROJECT / "outputs" / f"_brk_{v}.csv"))
         sv = pipe._ocr_vals
         cv = pipe._corr_vals
