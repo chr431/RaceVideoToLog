@@ -209,24 +209,36 @@ class SegmentPipeline:
 
         auto: 尝试 GPU (NVDEC) 失败回退 CPU。cpu: 强制 CPU。
         nvdec: 强制 GPU（失败回退 CPU 并警告）。替代旧 DECORD_FORCE_CPU env。
+
+        ROI-first（decord ≥0.7.5）：构造时传入固定 ROI（半开区间）——
+        解码器只输出该矩形（CPU filter 先 crop 再转换 / GPU 转换 kernel
+        只算 ROI 窗口 + 输出池 ROI 尺寸），免全帧转换与逐帧裁剪。
         """
-        from decord import VideoReader, gpu, cpu
+        from decord import VideoReader, cpu as _cpu
+        try:
+            import decord.video_reader as _vr_mod
+            _has_roi_api = hasattr(_vr_mod, "_CAPI_VideoReaderSetRoi")
+        except ImportError:
+            _has_roi_api = False
+        # 本项目 ROI 语义：闭合框 (x1,y1,x2,y2) → decord 半开 +1
+        roi = (self._roi[0], self._roi[1], self._roi[2] + 1, self._roi[3] + 1)
+        roi_kw = {"roi": roi} if _has_roi_api else {}
         backend = (self._decode_backend or "auto").lower()
         vr = None
         label = "CPU"
         if backend in ("auto", "nvdec"):
             try:
                 from decord import gpu as _g
-                vr = VideoReader(str(self._video_path), ctx=_g(0))
+                vr = VideoReader(str(self._video_path), ctx=_g(0), **roi_kw)
                 label = "GPU"
             except Exception:
                 vr = None
                 if backend == "nvdec":
                     logger.warning("NVDEC 解码不可用，回退 CPU")
         if vr is None:
-            vr = VideoReader(str(self._video_path), ctx=cpu(0),
+            vr = VideoReader(str(self._video_path), ctx=_cpu(0),
                              output_format='gray' if self._gray_output
-                             else 'rgb')
+                             else 'rgb', **roi_kw)
             label = "CPU"
         self._backend = f"decord/{label}"
         return vr
