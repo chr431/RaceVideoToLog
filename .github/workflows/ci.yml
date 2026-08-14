@@ -22,6 +22,26 @@ jobs:
       - name: Run unit tests
         run: python -m pytest tests/ -v
 
+  decoder-smoke-2:
+    if: github.ref_name != 'master'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install deps
+        run: |
+          pip install -e .
+          pip install pytest
+      - name: Download stub
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          echo "download stub"
+      - name: Decoder integration tests
+        run: python -m pytest tests/test_decoder_integration.py -v -rs
+
   version-check:
     runs-on: ubuntu-latest
     steps:
