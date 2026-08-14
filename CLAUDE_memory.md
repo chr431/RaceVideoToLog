@@ -48,6 +48,79 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
 - 窗口重 OCR 自动化（"至少一窗口读对"是幸存者偏差；仅人工辅助有价值）
 - 结构相似 obs（fill 锚点插值已是更强先验）；scipy（纯 numpy win3 替代）
 
+## 性能实验轮次：2026-08-15（dev，v2.15 基线，7945HX + RTX 4060 Laptop）
+
+### 测量基础设施（本轮新增，已通过 118 pytest + 漏斗门禁）
+- `segment_flow.py` 新增 `RVTOL_PROFILE=1` 细粒度剖面（默认关闭、零开销）：
+  producer 的 open_and_fps / calib / decode_batch / gray / sharp / bin /
+  segmentation / q_put_block / consumer_total；OCR 线程的 engine_init /
+  q_get_wait / preprocess / infer / ctc_decode。
+- **decode_s 口径修正**：原实现把 `ocr_thread.join()` 收尾时间计入 decode_s
+  （导致多数记录 decode≈ocr 的假象）；现 decode_s 只计生产者消费流结束，
+  OCR 收尾单列 `ocr_tail`（实测仅 ~0.1s）。
+- `tools/bench_decoder.py` 显式传 `--buffer`（修复 from-csv 旧 truth 头
+  buffer=16 静默覆盖默认 128 的测量口径问题），并新增 `--no-monitor`。
+- 新增工具：`bench_decoder_raw.py`（纯解码吞吐 + 逐帧 sha256 校验）、
+  `bench_engine_load.py`、`bench_seg_proto.py`。
+- 实验钩子：`RVTOL_OCR_BATCH`（OCR 批大小）、`RVTOL_TRT_BATCH_PROFILE`
+  （TRT 引擎 batch profile，独立 `_pbN` 缓存文件，实验后已删除）。
+
+### E0 归因（auto=GPU + TRT，buffer=128，warm run）
+| 视频 | total | decode_batch(纯CAPI) | consumer 占比 | OCR infer | OCR 等待喂料 |
+|---|---|---|---|---|---|
+| test3 h264 3190f | 3.6s | 2.89s | 92.0% | 1.74s | 2.34s (73%) |
+| test5 h264 7223f | 8.1s | 7.18s | 95.4% | 3.65s | 6.57s (88%) |
+| test6 AV1 23441f | 15.8s | 11.83s | 78.6% | 13.93s | 5.15s |
+
+结论：test3/test5 是纯 NVDEC 解码硬瓶颈（Python/numpy/分段 <5%，
+任何 Python 层优化无效）；test6 是解码+TRT OCR 双瓶颈，且生产者会因
+OCR 慢在队列上阻塞 1.67s。
+
+### 异步批量解码复测（fork experiment/async-batch-decode，A/B 受控）
+本轮重新构建该分支 Release DLL（CUDA 13.3 / FFmpeg 8，与 dev 同配置），
+隔离 DLL 目录 + DECORD_LIBRARY_PATH 做 sync/async A/B，输出全部逐位一致：
+- test3 h264 灰 ROI：sync 989.6 vs async 978.9 fps（-1.1%）
+- test5 h264 灰 ROI：sync 950.5 vs async 941.3 fps（-1.0%）
+- test6 AV1 灰 ROI：1674.1 vs 1674.0 fps（0.0%）
+- test5 全帧 RGB（含 D2H）：577.4 vs 556.6 fps（-3.6%）
+- test5 全帧 RGB（仅解码）：907.1 vs 890.9 fps（-1.8%）
+- test5 端到端：8.0s vs 8.1s
+**结论：异步批解码无任何收益（多数场景还慢 1-2%），原"0% 收益"结论
+复测确认且偏保守；此方向正式封板，勿再投入。**
+
+### 解码后端矩阵（本机诊断；产品策略不变）
+| 视频 | auto=GPU | CPU | hybrid10 |
+|---|---|---|---|
+| test3 h264 | 3.6s | 3.4s | 3.7s |
+| test5 h264 | 8.1s | 6.7s | 8.0s |
+| test HEVC | 3.3s | 5.9s | 4.0s |
+| test6 AV1 | 15.1s | 71s（历史） | 15.1s（AV1 特判退回纯 GPU） |
+
+h264 上 CPU 更快只是本机 7945HX（16 物理核）特例且 RSS +~300MB；
+HEVC/AV1 CPU 明显更慢，hybrid10 在 HEVC 还拖慢 0.7s。**维持 auto=GPU、
+混合默认关闭**（典型用户 CPU 解码明显慢于 NVDEC，用户确认）。
+
+### OCR 批参数 / TRT engine profile 扫描
+- OCR 批 B：test5 无感（解码瓶颈）；test6 B=16 附近最优，**B=8 退化到
+  16.9s**（15.1→16.9）。保持 B=16。
+- buffer：64/128/256 无显著差异（test6 15.3/15.1-15.8/15.1）。保持 128。
+- TRT engine batch profile（pb8/12/16 独立引擎，受控交替测量）：
+  default 15.3/15.2 < pb8 15.5 < pb12 16.0 < pb16 16.5 —— 单调变差。
+  pb16 虽把 OCR infer 13.9s→9.4s（-32%），但更大 TRT kernel 与 NVDEC
+  争抢 GPU，把 decode_batch 11.8s→14.1s，净亏。**保持 batch=6 默认
+  引擎 profile**；"OCR 与解码共享一块 GPU"是零和约束，勿单边优化。
+
+### E5/E6 与原型
+- 引擎加载：TRT 冷 0.44s / 热 0.24s；ONNX 冷 0.30s / 热 0.06s ——
+  已被解码并行期吸收，无需 GUI 引擎复用。
+- 监控采样（nvidia-smi 1s 间隔）：开 8.1s vs 关 8.1s，零可测开销，保持开启。
+- 批量向量化 `_cluster_win3` 原型：数值逐位一致但 0.29s vs 0.33s 并不
+  更快（管线中 segmentation 0.89s 主要是 GIL 竞争而非算法本身），不采纳。
+
+### 门禁
+- pytest 118 passed；准确率漏斗 final=11（test 3 / test2 8 / 其余 0），
+  与基线完全一致，无回归。
+
 ## 已锁定的参数（勿随意改动）
 
 - OCR 预处理：resize 48 高 + **灰度 gamma 2.0**（config.OCR_GAMMA，正式预处理；
