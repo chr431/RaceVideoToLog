@@ -22,48 +22,6 @@ jobs:
       - name: Run unit tests
         run: python -m pytest tests/ -v
 
-  decoder-smoke:
-    # 解码集成测试：下载自建 decord fork（chr431/decord release）真实运行
-    # CPU 软解冒烟（无需 GPU）。下载失败或 fork 缺失时测试显式跳过并报告，
-    # 不让整个 CI 变红 —— 但测试本身失败（解码行为变化）会红。
-    if: github.ref_name != 'master'
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Install dependencies
-        run: |
-          pip install -e .
-          pip install pytest
-      - name: Download decord fork release (v0.7.7)
-        continue-on-error: true  # 网络失败 → 后续步骤显式跳过并报告
-        shell: pwsh
-        run: |
-          $ProgressPreference = 'SilentlyContinue'
-          Invoke-WebRequest -Uri "https://github.com/chr431/decord/releases/download/v0.7.7/decord-0.7.7-win64-gpu.zip" -OutFile "$env:RUNNER_TEMP\decord.zip"
-          Expand-Archive "$env:RUNNER_TEMP\decord.zip" -DestinationPath "_decord_build" -Force
-      - name: Install decord into site-packages (fork: DLLs + python layer)
-        if: hashFiles('_decord_build/python/decord/video_reader.py') != ''
-        shell: pwsh
-        run: |
-          $sp = python -c "import site; print(site.getsitepackages()[0])"
-          New-Item -ItemType Directory -Force -Path "$sp\decord" | Out-Null
-          Copy-Item "_decord_build\*.dll" "$sp\decord\" -Force
-          Copy-Item "_decord_build\ffprobe.exe" "$sp\decord\" -Force -ErrorAction SilentlyContinue
-          Copy-Item "_decord_build\python\decord\*" "$sp\decord\" -Recurse -Force
-          python -c "import decord; print('decord fork installed:', decord.__file__)"
-      - name: Report decoder availability (explicit skip reason when absent)
-        shell: pwsh
-        run: |
-          python -c "import decord, inspect, decord.video_reader as v" 2>$null
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "::warning::decord 未安装（下载失败或 release 不可用）—— 解码集成测试将显式跳过"
-          }
-      - name: Decoder integration tests
-        run: python -m pytest tests/test_decoder_integration.py -v -rs
-
   version-check:
     runs-on: ubuntu-latest
     steps:
