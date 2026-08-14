@@ -189,7 +189,9 @@ def main() -> None:
     ap.add_argument("--backend", default="tensorrt", choices=["tensorrt", "cpu", "auto"])
     ap.add_argument("--decode-backend", default="auto",
                     choices=config.DECODE_BACKEND_KEYS,
-                    help="decord 解码后端 (auto/cpu/nvdec)")
+                    help="decord 解码后端 (auto/cpu/nvdec；实验性混合："
+                         "设 RVTOL_HYBRID_DECODE=1 后 auto/nvdec 内部走"
+                         " CPU+NVDEC 并行)")
     ap.add_argument("--runs", type=int, default=2, help="runs (last one used for stats)")
     ap.add_argument("--json", type=str, default="", help="save record to JSON (default outputs/bench_<video>.json)")
     args = ap.parse_args()

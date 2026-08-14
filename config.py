@@ -40,11 +40,20 @@ DEFAULT_BUFFER_SIZE: int = 128          # 解码∥OCR 流水线队列缓冲（�
                                         # 64→128：GPU 解码突发时缓冲背压，减少
                                         # 解码线程 q.put 阻塞等待（GPU+CPU wall
                                         # -0.3s；256 无进一步收益）
-DEFAULT_DECODE_BACKEND: str = "auto"   # 解码后端 (auto / cpu / nvdec / cpu+nvdec)
-DECODE_BACKEND_KEYS: list[str] = ["auto", "cpu", "nvdec", "cpu+nvdec"]
+DEFAULT_DECODE_BACKEND: str = "auto"   # 解码后端 (auto / cpu / nvdec)
+DECODE_BACKEND_KEYS: list[str] = ["auto", "cpu", "nvdec"]
 DECODE_BACKEND_LABELS: dict[str, str] = {"auto": "自动", "cpu": "CPU",
-                                         "nvdec": "NVDEC",
-                                         "cpu+nvdec": "CPU+NVDEC"}
+                                         "nvdec": "NVDEC"}
+# 实验性 CPU+NVDEC 混合解码开关（不暴露给 GUI/CLI 参数）：
+# 环境变量置 1/true/yes/on 后，GPU 模式（auto / nvdec）内部改走
+# CPU+NVDEC 双解码器并行（CPU 前段 + GPU 后段，见 _open_hybrid_vrs）；
+# 默认关闭（纯 GPU 足够好，混合收益不确定且增加复杂度）。
+HYBRID_DECODE_ENV: str = "RVTOL_HYBRID_DECODE"
+# 实验性 OCR 混合开关（不暴露给 GUI/CLI 参数）：置 1/true/yes/on 后
+# OCR 同时用 TensorRT（GPU）+ onnxruntime（CPU）双引擎并发处理段批
+# （OCR 无状态约束，结果按段索引聚合，顺序无关 → 实现简单）。
+# 默认关闭（TRT 可用时 OCR 已隐藏于解码阶段之下，非瓶颈）。
+HYBRID_OCR_ENV: str = "RVTOL_HYBRID_OCR"
 DEFAULT_OCR_BACKEND: str = "auto"      # OCR 推理后端 (auto / cpu / tensorrt)
 OCR_BACKEND_KEYS: list[str] = ["auto", "cpu", "tensorrt"]
 OCR_BACKEND_LABELS: dict[str, str] = {"auto": "自动", "cpu": "CPU", "tensorrt": "TensorRT"}
@@ -69,7 +78,8 @@ MONITOR_INTERVAL_S: float = 1.0        # 资源采样间隔（秒）
 MONITOR_GPU: bool = True               # 是否采样 GPU 利用率/显存/温度
 
 # ═══════════════════ 段管线参数 ═══════════════════
-HYBRID_CPU_SPLIT: float = 0.10    # CPU+NVDEC 混合解码的 CPU 段帧数比例（保守分法）。
+HYBRID_CPU_SPLIT: float = 0.10    # 实验性混合解码（HYBRID_DECODE_ENV=1 时生效）
+                                  # 的 CPU 段帧数比例（保守分法）。
                                   # 只有 CPU/GPU 吞吐相近（h264：CPU 软解
                                   # ~1260fps ≈ NVDEC 2Gp/s 上限 ~960fps）时
                                   # 对半分（55/45）才有 decode 砍半优势；

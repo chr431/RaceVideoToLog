@@ -55,11 +55,30 @@ def _pipe(**kw):
 # ═══════════════ 后端识别与切分比例 ═══════════════
 
 @pytest.mark.parametrize("backend,expected", [
-    ("cpu+nvdec", True), ("CPU+NVDEC", True), ("hybrid", True),
+    ("cpu+nvdec", True), ("CPU+NVDEC", True), ("hybrid", True),  # 显式旧用法恒混合
     ("auto", False), ("cpu", False), ("nvdec", False), (None, False),
 ])
-def test_is_hybrid(backend, expected):
+def test_is_hybrid_env_off(backend, expected):
+    # 默认（RVTOL_HYBRID_DECODE 未设）：只有显式 cpu+nvdec/hybrid 才混合
     assert _pipe(decode_backend=backend)._is_hybrid() is expected
+
+
+@pytest.mark.parametrize("backend,expected", [
+    ("auto", True), ("nvdec", True), (None, True),   # GPU 系 → 混合
+    ("cpu", False), ("CPU", False),                 # CPU 不受影响
+])
+def test_is_hybrid_env_on(monkeypatch, backend, expected):
+    # RVTOL_HYBRID_DECODE=1：GPU 模式（auto/nvdec）内部改走混合
+    import config
+    monkeypatch.setenv(config.HYBRID_DECODE_ENV, "1")
+    assert _pipe(decode_backend=backend)._is_hybrid() is expected
+
+
+@pytest.mark.parametrize("bad", ["0", "off", "false", "no", "", "abc"])
+def test_hybrid_env_off_values(monkeypatch, bad):
+    import config
+    monkeypatch.setenv(config.HYBRID_DECODE_ENV, bad)
+    assert _pipe(decode_backend="auto")._is_hybrid() is False
 
 
 def test_hybrid_split_default():

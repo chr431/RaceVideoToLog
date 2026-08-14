@@ -42,8 +42,8 @@ def run_funnel(videos, tol: float = 1.0, decode_backend: str = "auto") -> dict:
     """对每个视频跑生产管线并统计漏斗指标。
 
     返回 {"videos": {name: {metric: value}}, "total": {metric: value}}。
-    decode_backend: decord 解码后端（门禁默认 auto 不变；cpu+nvdec
-    用于混合解码对照）。
+    decode_backend: decord 解码后端（门禁默认 auto 不变；实验性混合
+    解码对照用 env RVTOL_HYBRID_DECODE=1）。
     """
     per_video: dict = {}
     total = {k: 0 for k in _METRICS}
@@ -160,8 +160,8 @@ def main() -> None:
     ap.add_argument("--tol", type=float, default=1.0)
     ap.add_argument("--decode-backend", default="auto",
                     choices=config.DECODE_BACKEND_KEYS,
-                    help="decord 解码后端（auto/cpu/nvdec/cpu+nvdec；"
-                         "门禁默认 auto 不变）")
+                    help="decord 解码后端（auto/cpu/nvdec；门禁默认 auto 不变；"
+                         "实验性混合用 env RVTOL_HYBRID_DECODE=1）")
     ap.add_argument("--update-baseline", action="store_true",
                     help="用本次结果覆盖 tools/baseline.json（有意改动后）")
     ap.add_argument("--baseline", type=str, default=str(BASELINE_PATH),

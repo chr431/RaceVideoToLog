@@ -9,8 +9,10 @@
 - 段值：每段最清晰代表帧 OCR（sharpness=灰度std），OCR 线程批处理闭合段
 - 段级检测：中值滤波（跟随弯曲，误读=尖峰被中值剔除）
 - 段级纠正：可信锚点插值（锚点距离上界，跳过曲线正确段）
-- 解码：decode_backend='cpu+nvdec' 时 CPU+NVDEC 双解码器并行（CPU 前段 +
-  GPU 后段，见 _open_hybrid_vrs），解码阶段 wall 砍半（test5 7.4s→3.7s）
+- 解码：实验开关 HYBRID_DECODE_ENV（默认 RVTOL_HYBRID_DECODE=1，不暴露
+  GUI/CLI 参数）开启时，GPU 模式（auto/nvdec）改走 CPU+NVDEC 双解码器
+  并行（CPU 前段 + GPU 后段，见 _open_hybrid_vrs；AV1 特判按纯 GPU）；
+  显式传 decode_backend='cpu+nvdec' 仍为混合（旧版程序化用法）
 
 注意：_decode_all/_segment/_ocr_segments/_detect/_correct 是串行参考路径
 （仅 tools/ 与测试使用），生产 run() 走 _run_pipelined + _dense_correct。
@@ -262,7 +264,8 @@ class SegmentPipeline:
 
         auto: 尝试 GPU (NVDEC) 失败回退 CPU。cpu: 强制 CPU。
         nvdec: 强制 GPU（失败回退 CPU 并警告）。替代旧 DECORD_FORCE_CPU env。
-        cpu+nvdec: 走 _open_hybrid_vrs（双解码器并行），不经过本方法。
+        混合（显式 cpu+nvdec 或 HYBRID_DECODE_ENV 开启）：走
+        _open_hybrid_vrs（双解码器并行），不经过本方法。
 
         ROI-first（decord ≥0.7.5）：构造时传入固定 ROI（半开区间）——
         解码器只输出该矩形（CPU filter 先 crop 再转换 / GPU 转换 kernel
@@ -301,9 +304,26 @@ class SegmentPipeline:
         self._backend = f"decord/{label}"
         return vr
 
+    def _hybrid_env_enabled(self) -> bool:
+        """实验开关 config.HYBRID_DECODE_ENV（默认 RVTOL_HYBRID_DECODE）。
+
+        1/true/yes/on（大小写不敏感）为开启。开启后 GPU 模式（auto /
+        nvdec）内部改走 CPU+NVDEC 双解码器并行；不暴露给 GUI/CLI 参数。
+        """
+        _v = _os.environ.get(config.HYBRID_DECODE_ENV, "").strip().lower()
+        return _v in ("1", "true", "yes", "on")
+
     def _is_hybrid(self) -> bool:
-        """decode_backend == 'cpu+nvdec'（CPU+NVDEC 混合并行解码）。"""
-        return (self._decode_backend or "auto").lower() in HYBRID_BACKEND_ALIASES
+        """是否启用 CPU+NVDEC 混合并行解码。
+
+        显式传 decode_backend='cpu+nvdec'/'hybrid'（旧版程序化用法）恒为
+        混合；否则需 HYBRID_DECODE_ENV 开启 且 后端为 GPU 系（auto /
+        nvdec）——即"混合是 GPU 模式的实验变体"，cpu 不受影响。
+        """
+        _b = (self._decode_backend or "auto").lower()
+        if _b in HYBRID_BACKEND_ALIASES:
+            return True
+        return self._hybrid_env_enabled() and _b in ("auto", "nvdec")
 
     def _hybrid_split(self) -> float:
         """混合解码的 CPU 段帧数比例（env RVTOL_HYBRID_SPLIT 优先）。
@@ -952,18 +972,38 @@ class SegmentPipeline:
         def ocr_worker() -> None:
             t0 = time.perf_counter()
             try:
-                eng = OcrEngine(self._ocr_model, self._ocr_engine_type(),
-                                fill_width=self._fill_width,
-                                num_threads=self._ocr_num_threads())
+                # 实验性 OCR 混合（config.HYBRID_OCR_ENV，默认关）：TRT +
+                # ONNX 双引擎并发处理段批。与解码不同，OCR 无状态约束——
+                # 结果按段索引聚合，批处理顺序无关 → 实现只需共享一个
+                # infer_q、两个推理线程各持一引擎，谁空闲谁取批。
+                # 预期收益场景：TRT 可用但 OCR 走 ONNX（OCR=cpu 时
+                # ONNX 16 线程是瓶颈，混合可压到 TRT 水平）。
+                _hybrid_ocr = _os.environ.get(
+                    config.HYBRID_OCR_ENV, "").strip().lower() in \
+                    ("1", "true", "yes", "on")
+                if _hybrid_ocr:
+                    engines = [
+                        OcrEngine(self._ocr_model, "tensorrt",
+                                  fill_width=self._fill_width,
+                                  num_threads=self._ocr_num_threads()),
+                        OcrEngine(self._ocr_model, "onnxruntime",
+                                  fill_width=self._fill_width,
+                                  num_threads=self._ocr_num_threads()),
+                    ]
+                else:
+                    engines = [OcrEngine(
+                        self._ocr_model, self._ocr_engine_type(),
+                        fill_width=self._fill_width,
+                        num_threads=self._ocr_num_threads())]
                 B = 16
-                # 预处理（单线程 numpy，持 GIL）与推理（ONNX 8 线程，
-                # session.run 释放 GIL）流水线重叠：主循环攒批预处理，
+                # 预处理（单线程 numpy，持 GIL）与推理（ONNX 8 线程 /
+                # TRT，session.run 释放 GIL）流水线重叠：主循环攒批预处理，
                 # 推理线程消费。原串行 flush（预处理→推理→预处理→…）
                 # 让 8 线程推理空转等单线程预处理（OCR 6.8s 中预处理
                 # ~2s），重叠后 OCR 总时长逼近推理本身。
                 infer_q: Queue = Queue(maxsize=4)
 
-                def infer_worker() -> None:
+                def infer_worker(eng) -> None:
                     while True:
                         item = infer_q.get()
                         if item is None:  # 哨兵
@@ -976,9 +1016,12 @@ class SegmentPipeline:
                                 int(sv) if sv is not None and sv >= 0
                                 else None, rep)
 
-                infer_thread = threading.Thread(target=infer_worker,
-                                                daemon=True)
-                infer_thread.start()
+                infer_threads = [
+                    threading.Thread(target=infer_worker, args=(eng,),
+                                     daemon=True)
+                    for eng in engines]
+                for t in infer_threads:
+                    t.start()
                 b_idx, b_reps, b_crops = [], [], []
 
                 def flush() -> None:
@@ -999,8 +1042,10 @@ class SegmentPipeline:
                     if len(b_idx) >= B:
                         flush()
                 flush()
-                infer_q.put(None)  # 推理线程哨兵
-                infer_thread.join()
+                for _ in infer_threads:
+                    infer_q.put(None)  # 每个推理线程一个哨兵
+                for t in infer_threads:
+                    t.join()
             except Exception as e:
                 ocr_err.append(e)
             finally:
