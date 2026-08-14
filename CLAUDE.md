@@ -138,6 +138,17 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
 
 - **git 安全**：绝不删分支（曾因 git init 毁掉整个 .git）；force push /
   reset --hard 前必须确认；merge 后不删实验分支（保留参考）
+- **每次 push / release 后必须主动查 CI**（曾 6 连败而不自知）：
+  `gh run list --repo chr431/RaceVideoToLog --workflow ci.yml --limit 3`
+  确认最新 run 为 success；release 流程（decord fork / 本仓库）构建约
+  10-15 分钟，发布后同样核对 release 产物存在。失败特征：workflow 级
+  秒失败（created==updated、jobs=[]）多为 ci.yml 自身 YAML/解析问题；
+  job 级失败看具体步骤日志 `gh run view <id> --log`。
+- **CI YAML 教训（2026-08-14 踩坑）**：YAML plain scalar 不能含
+  `: `（冒号+空格）—— `name: Install ... (fork: DLLs + python layer)`
+  未加引号导致整个 workflow 解析失败、jobs=[] 秒红。步骤名含 `: ` 必须
+  用引号包住。诊断 bisect 时注意：删除整个步骤会同时删掉 name 与内容，
+  别把 name 问题误判成步骤内容问题。
 - 所有 .py 用 4 空格缩进（tab 曾致 Edit 失败）
 - **from-csv 显式参数优先已修复并被测试锁定**（`RaceVideoToLog.apply_csv_settings`
   + `tests/test_from_csv.py`：命令行显式写出即使等于默认值也不被 CSV 覆盖）。
