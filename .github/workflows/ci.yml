@@ -21,6 +21,8 @@ jobs:
         run: pip install pytest
       - name: Run unit tests
         run: python -m pytest tests/ -v
+        env:
+          PYTHONIOENCODING: utf-8  # 中文 skip reason 在 GBK 控制台崩溃（曾致 decoder-smoke 误红）
 
   decoder-smoke:
     # 解码集成测试：下载自建 decord fork（chr431/decord release）真实运行
@@ -66,6 +68,8 @@ jobs:
           exit 0
       - name: Decoder integration tests
         run: python -m pytest tests/test_decoder_integration.py -v -rs
+        env:
+          PYTHONIOENCODING: utf-8  # 中文 skip reason 在 GBK 控制台崩溃
 
   version-check:
     runs-on: ubuntu-latest
