@@ -33,7 +33,7 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
   （py-modules 完整性）、`test_seg_series.py`、`test_ocr_fixtures.py`、
   `test_decoder_integration.py`（缺 decord 显式跳过）。
 - CI（.github/workflows/ci.yml）：test job 跑全量 pytest；decoder-smoke job
-  从 chr431/decord release v0.7.4 下载 fork 真实跑解码集成测试（下载失败
+  从 chr431/decord release v0.7.5 下载 fork 真实跑解码集成测试（下载失败
   显式跳过不红）；version-check 跑 tools/version.py。
 - 1-2 km/h 平滑偏移漏纠是信息论极限（与真实平滑不可区分）——局部物理约束
   无解，勿重复探索。
@@ -56,10 +56,18 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
   （gamma 改变 Otsu/二值化合并了段），原始误读不变（155），但 test2 8→9
   （新增 1 误改）、总量 12→13。raw 灰度 + Otsu 的组合在分割层面更优；
   gamma 仅保留给 OCR 预处理。钩子留作实验入口，勿设默认。
-- 性能基线（test5 7223 帧，decord v0.7.4 + onnxruntime 1.29，2026-08 实测）：
-  **GPU 解码+CPU OCR 8.9s / CPU 解码+CPU OCR 9.3s / GPU+TRT 8.8s**。
-  瓶颈 = get_batch 解码本身（生产者各 Python/numpy 子步骤合计仅 3.6%；
-  GPU 992fps / CPU 864fps ROI-only）。DLL 在 _decord_build + site-packages 两处
+- 性能基线（test5 7223 帧，decord v0.7.5 + onnxruntime 1.29，2026-08 实测）：
+  **CPU+CPU 9.0s / GPU+CPU 8.6s / CPU+TRT 6.8s / GPU+TRT 8.1s**。
+  生产者各 Python/numpy 子步骤合计仅 ~4%（GPU ~1000fps / CPU ~1260fps
+  ROI-only）。DLL 在 _decord_build + site-packages 两处
+- **decord v0.7.5（ROI-first + 撕裂帧竞态修复，fork 仓库 D:\Repo\decord）**：
+  解码器只输出 ROI 矩形：CPU filter crop 先于 format（yuv420p 上
+  x/y/w/h 全偶数约束，用偶数超集+顶部精裁绕过）；GPU kernel 只算 ROI
+  窗口 + 输出池 ROI 尺寸（asnumpy 单次批量 D2H）。**同步 D2H 是正确性
+  关键**：v0.7.4 的线程本地非阻塞拷贝流在并发管线中产生孤立帧撕裂
+  （~0.2-0.9% 帧部分行旧内容 → 分段/OCR 漂移，门禁 12→24-41 波动），
+  改回同步 cudaMemcpy 后 A/B 5 轮 0 分歧、门禁可复现 12。剩余余量：
+  GPU 真批量异步解码（display 回调每帧 sync 仍在）。
 - **线程预算规则（v2.14 起代码内置，_ocr_num_threads/auto_ocr_thread_count）**：
   OCR = 全部物理核（16C32T → 16），解码用 fork 默认（FFmpeg 帧线程 2 +
   filter auto≈2，落在 SMT 份额上不抢物理核）。实测 OCR 8→16 线程：
@@ -91,14 +99,12 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
 - TRT 引擎缓存：`<程序目录>/ocr_engines/`（免安装便携），旧 LOCALAPPDATA
   只读回退；engine 文件名含 sm89（本机 RTX 4060），换卡靠"加载失败→删除→
   重建"兜底；TRT 10/11 双兼容（getattr 回退 + 输出张量 profile 守卫）
-- **decord fork 解码层余量（Phase 2 候选，fork 仓库 D:\Repo\decord，
-  build\Release\decord.dll 本地可重建）**：
-  - CPU：filter 图在全 1080p 帧做 YUV→RGB/gray 再裁剪，99.9% 转换像素
-    被丢弃 → ROI-first（YUV 域先 crop 再 scale/format，ROI 固定时 filter
-    图只建一次）可砍 ~0.4-0.8ms/帧，decode 阶段 8.8s → 预计 ~5-6s。
-  - GPU：GetBatch 是逐帧循环（每帧 NextFrameImpl sync + cudaMemcpy2D +
-    CopyTo 双拷贝），HandlePictureDisplay 每帧 cudaStreamSynchronize →
-    真批量异步解码 + 单次 sync + ROI 批量 D2H 可将 decode 8.2s 大幅压缩。
+- **decord fork 解码层状态（fork 仓库 D:\Repo\decord，本地可重建）**：
+  - ✅ v0.7.5 已做：CPU filter crop 先于 format；GPU kernel ROI 窗口 +
+    ROI 输出池；同步 D2H（撕裂帧竞态修复）。
+  - 剩余余量：GPU 真批量异步解码 —— GetBatch 逐帧 NextFrameImpl +
+    display 回调每帧 cudaStreamSynchronize；批内单次 sync + 批量 D2H
+    可将 GPU decode 阶段（8.1s）进一步压缩。
 
 ## 工作流约束
 
