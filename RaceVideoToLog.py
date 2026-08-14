@@ -26,6 +26,43 @@ for _stream_name in ('stdout', 'stderr'):
 import argparse
 
 
+def apply_csv_settings(args, defaults: dict, argv=None) -> "object":
+    """从 args.from_csv 的 CSV 头导入设置；命令行显式参数优先。
+
+    合并规则（CLI/GUI 共用语义）：
+    - 命令行显式写出的参数（即使等于默认值）优先于 CSV —— 旧逻辑误判
+      "值==默认值"为"未指定"，被 CSV 静默覆盖（如 --ocr-model v6_tiny
+      被 CSV 的 model=v6_small 覆盖，引擎静默换模型）。
+    - CSV 中的只读字段（fps/codec 等无 argparse dest 的）跳过。
+    - 解析失败的字段静默跳过（parse_csv_setting 返回 None）。
+    返回 args（原地修改）。argv=None 时取 sys.argv（CLI 场景），
+    测试可显式传入 argv 列表。
+    """
+    if not getattr(args, "from_csv", None):
+        return args
+    from ocr_engine import parse_csv_header, parse_csv_setting, csv_field_dest
+    argv = sys.argv if argv is None else argv
+    # 命令行显式写出的参数（即使等于默认值）优先于 CSV。
+    _explicit = {
+        a[2:].split("=", 1)[0].replace("-", "_")
+        for a in argv[1:] if a.startswith("--")
+    }
+    csv_settings = parse_csv_header(args.from_csv)
+    for key, val in csv_settings.items():
+        dest = csv_field_dest(key)
+        if dest is None or not hasattr(args, dest):
+            continue  # read-only fields (fps/codec) or unknown — skip
+        if dest in _explicit:
+            continue  # 命令行显式指定 — 不被 CSV 覆盖
+        cur = getattr(args, dest)
+        if cur != defaults.get(dest):
+            continue  # 已非默认值 — 跳过
+        parsed = parse_csv_setting(key, val)
+        if parsed is not None:
+            setattr(args, dest, parsed)
+    return args
+
+
 def main() -> None:
     import config
     parser = argparse.ArgumentParser(description="RaceVideoToLog - 视频速度提取工具")
@@ -60,30 +97,9 @@ def main() -> None:
     args = parser.parse_args()
 
     # ── 从 CSV 导入设置 ──
-    if args.from_csv:
-        from ocr_engine import parse_csv_header, parse_csv_setting, csv_field_dest
-        # 命令行显式写出的参数（即使等于默认值）优先于 CSV。
-        # 例：--ocr-model v6_tiny 等于默认值，旧逻辑误判"未指定"被 CSV 的
-        # model=v6_small 覆盖，导致引擎静默换成 small。
-        _explicit = {
-            a[2:].split("=", 1)[0].replace("-", "_")
-            for a in sys.argv[1:] if a.startswith("--")
-        }
-        csv_settings = parse_csv_header(args.from_csv)
-        _defaults = {a.dest: a.default
-                        for a in parser._actions if a.dest != "help"}
-        for key, val in csv_settings.items():
-            dest = csv_field_dest(key)
-            if dest is None or not hasattr(args, dest):
-                continue  # read-only fields (fps/codec) or unknown — skip
-            if dest in _explicit:
-                continue  # 命令行显式指定 — 不被 CSV 覆盖
-            cur = getattr(args, dest)
-            if cur != _defaults.get(dest):
-                continue  # user explicitly overrode — skip
-            parsed = parse_csv_setting(key, val)
-            if parsed is not None:
-                setattr(args, dest, parsed)
+    _defaults = {a.dest: a.default
+                 for a in parser._actions if a.dest != "help"}
+    apply_csv_settings(args, _defaults)
 
     # None = 未指定：归一化为配置默认值（显式传 0 必须保留，不能被 CSV 覆盖）
     if getattr(args, "force_aspect", None) is None:

@@ -6,7 +6,7 @@
 - _detect 的 suspect 标记 → TP(误读被flag) / FN(误读漏) / FP(正确被flag)
 - 召回率 Recall = TP/(TP+FN)，误报率 FPR = FP/正确段数
 
-用法：python tools/_detect_eval.py [--tol 1] [videos...]
+用法：python tools/detect_eval.py [--tol 1] [videos...]
 """
 from __future__ import annotations
 import re
