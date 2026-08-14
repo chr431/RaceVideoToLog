@@ -1,6 +1,8 @@
 name: CI-Probe
 
 on:
+  push:
+    branches: [ci-probe]
   workflow_dispatch:
 
 jobs:
