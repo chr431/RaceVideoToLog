@@ -180,23 +180,15 @@ class ExportControllerMixin:
         out = getattr(self, "_review_output_path", None)
         if pipeline is None or out is None:
             return
-        # 段级 review：段值 + 代表帧预览，用户可改段值（段内不混速度，改段=改全段）
+        # 段级 review：段值 + 段内缓存的代表帧灰度图，用户可改段值
+        # （段内不混速度，改段=改全段）
         from gui_review import ReviewDialog  # 延迟导入（pyqtgraph ~0.8s）
         dlg = ReviewDialog(self, pipeline.segments,
                            pipeline._max_speed, pipeline._max_accel,
-                           pipeline._fps or 1.0,
-                           preview_loader=pipeline.load_rgb_crop,
-                           is_crop_cached=pipeline.is_rgb_cached,
-                           preload_loader=pipeline.preload_rgb_crops)
+                           pipeline._fps or 1.0)
         self._gui_mark("final_check: before exec")
         accepted = dlg.exec() == QDialog.DialogCode.Accepted
         corrections = dlg.get_corrections()
-        # 停止后台 RGB 预取并释放全部代表帧缓存（~87MB 量级）
-        dlg.stop_rgb_preload()
-        try:
-            pipeline.clear_rgb_cache()
-        except Exception:
-            pass
         self._gui_mark("final_check: dialog closed")
         # finalize（写 CSV/统计）在 frozen 环境可能被安全扫描拖慢数秒 →
         # 后台执行，完成后回主线程收尾

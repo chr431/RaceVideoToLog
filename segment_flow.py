@@ -24,7 +24,6 @@ import logging
 import os as _os
 import threading
 import time
-from collections import OrderedDict
 from pathlib import Path
 
 import numpy as np
@@ -136,12 +135,6 @@ class SegmentPipeline:
         self._ocr_vals: list = []
         self._conf_vals: list = []        # 每段置信度（run 后填充，flag 判定用）
         self._pinned: set = set()          # 用户手动修正的段索引（finalize 时设）
-        # review 预览用：生产管线走 gray 输出（无色彩信息），预览需要原始
-        # RGB ROI 时惰性打开一个 CPU RGB reader（见 load_rgb_crop）
-        self._rgb_vr = None
-        self._rgb_reader_lock = threading.Lock()  # 串行 seek/解码（批间释放）
-        self._rgb_cache_lock = threading.Lock()   # 只保护缓存 dict（短临界区）
-        self._rgb_crop_cache: OrderedDict[int, np.ndarray] = OrderedDict()
         # 细粒度性能剖面（实验专用，RVTOL_PROFILE=1 才启用；默认零开销）
         self._profile_enabled = _os.environ.get(
             "RVTOL_PROFILE", "").strip().lower() in ("1", "true", "yes", "on")
@@ -245,160 +238,6 @@ class SegmentPipeline:
             except ValueError:
                 pass
         return float(config.HYBRID_CPU_SPLIT)
-
-    def load_rgb_crop(self, frame: int):
-        """惰性解码一帧原始 RGB ROI（段 review 预览用）。
-
-        生产解码器是 gray 输出（Y 平面，无法恢复色彩）；此方法单独维护
-        一个 CPU RGB reader，按需 seek 到目标帧取 ROI。结果按帧缓存，
-        供 review 快速回看/预取。缓存命中只拿短缓存锁（GUI 主线程不等待
-        后台解码）；未命中才拿 reader 锁解码。失败返回 None。
-        """
-        with self._rgb_cache_lock:
-            cached = self._rgb_crop_cache.get(frame)
-            if cached is not None:
-                self._rgb_crop_cache.move_to_end(frame)
-                return cached
-        x1, y1, x2, y2 = self._roi
-        try:
-            with self._rgb_reader_lock:
-                if self._rgb_vr is None:
-                    self._open_rgb_reader()
-                self._rgb_vr.seek_accurate(frame)
-                crop = self._rgb_vr.next_roi(*self._rgb_roi_half).asnumpy()
-            if crop.shape[0] != y2 - y1 + 1 or crop.shape[1] != x2 - x1 + 1:
-                # 旧版非 ROI-first 解码器回退全帧 → 子裁剪
-                crop = crop[y1:y2 + 1, x1:x2 + 1]
-            if crop.ndim == 2:
-                crop = crop[..., None]
-            if crop.shape[-1] == 1:
-                crop = np.repeat(crop, 3, axis=-1)
-            elif crop.shape[-1] == 4:
-                crop = crop[..., :3]
-            rgb = np.ascontiguousarray(crop, dtype=np.uint8)
-            with self._rgb_cache_lock:
-                self._rgb_crop_cache[frame] = rgb
-                self._rgb_crop_cache.move_to_end(frame)
-            return rgb
-        except Exception:
-            return None
-
-    def is_rgb_cached(self, frame: int) -> bool:
-        """该帧 RGB 是否已进预览缓存（GUI 据此决定是否可同步取图）。
-
-        GUI 主线程只应在返回 True 后调用 load_rgb_crop；False 时说明
-        后台预取尚未覆盖，主线程直接 seek 解码会阻塞界面。
-        """
-        with self._rgb_cache_lock:
-            return frame in self._rgb_crop_cache
-
-    def preload_rgb_crops(self, frames, priority_frame=None,
-                          progress_cb=None, stop_event=None,
-                          priority_ref=None):
-        """后台预取全部代表帧的原始 RGB ROI（review 长距离跳转用）。
-
-        frames 为所有代表帧号；先按与 priority_frame 的距离排序，用户
-        附近的段优先可用。priority_ref 为可变 dict {"frame": int,
-        "rev": int}：GUI 每次跳到未缓存段时递增 rev 并更新 frame，
-        本方法在下一批开始前对剩余帧重排序——长距离点击的目标立刻
-        提升为最高优先级，不必等初始顺序跑到最后。
-        按 DECODE_BATCH_SIZE 批量 get_batch，避免逐帧 seek。
-        内存成本：全部测试视频单次最多 ~87MB（test6），跨 5 个门禁
-        视频合计约 169MB；CPU 解码全部代表帧实测 test5 ~6.7s、test6
-        ~73s，因此本方法只在 review 打开后由后台线程调用。
-        解码全程只持 reader 锁，缓存锁仅覆盖批间写入短临界区——GUI 主
-        线程的缓存查询/命中去读从不等待后台解码。stop_event 置位后在
-        下一批开始前退出，配合 clear_rgb_cache 安全回收 reader。
-        """
-        if not frames:
-            return
-        priority0 = priority_frame or 0
-        ordered = sorted(set(int(f) for f in frames),
-                         key=lambda f: abs(f - priority0))
-        last_rev = int(priority_ref.get("rev", 0)) if priority_ref else 0
-        batch = config.DECODE_BATCH_SIZE
-        done = 0
-        try:
-            for i in range(0, len(ordered), batch):
-                if stop_event is not None and stop_event.is_set():
-                    return
-                # GUI 跳到新的未缓存段：对剩余帧按新目标重排序（O(n log n)
-                # 仅在 rev 变化时发生，点击频率下开销可忽略）
-                if priority_ref is not None:
-                    rev = int(priority_ref.get("rev", 0) or 0)
-                    if rev != last_rev:
-                        try:
-                            target = int(priority_ref.get(
-                                "frame", priority0))
-                        except (TypeError, ValueError):
-                            target = priority0
-                        tail = ordered[i:]
-                        tail.sort(key=lambda f: abs(f - target))
-                        ordered[i:] = tail
-                        last_rev = rev
-                with self._rgb_cache_lock:
-                    chunk = [f for f in ordered[i:i + batch]
-                             if f not in self._rgb_crop_cache]
-                if not chunk:
-                    done += len(ordered[i:i + batch])
-                    if progress_cb is not None:
-                        progress_cb(done, len(ordered))
-                    continue
-                with self._rgb_reader_lock:
-                    if stop_event is not None and stop_event.is_set():
-                        return
-                    if self._rgb_vr is None:
-                        self._open_rgb_reader()
-                    crops = self._rgb_vr.get_batch(
-                        chunk, roi=self._rgb_roi_half).asnumpy()
-                if crops.ndim == 3:
-                    crops = crops[None, ...]
-                converted: list[tuple[int, np.ndarray]] = []
-                for f, crop in zip(chunk, crops):
-                    arr = np.ascontiguousarray(crop, dtype=np.uint8)
-                    if arr.shape[-1] == 4:
-                        arr = arr[..., :3]
-                    converted.append((f, arr))
-                with self._rgb_cache_lock:
-                    for f, arr in converted:
-                        self._rgb_crop_cache[f] = arr
-                done += len(ordered[i:i + batch])
-                if progress_cb is not None:
-                    progress_cb(done, len(ordered))
-        except Exception:
-            # 预取失败不阻断：用户点击时仍会走单帧回退解码
-            pass
-
-    def clear_rgb_cache(self) -> None:
-        """释放 review 预览缓存（对话框关闭后调用）。
-
-        先拿 reader 锁删除解码器（顺带等待正在解码的当前批结束），
-        再拿缓存锁清空——避免预取批在 reader 删除后把旧结果写回缓存。
-        """
-        with self._rgb_reader_lock:
-            if self._rgb_vr is not None:
-                try:
-                    del self._rgb_vr
-                except Exception:
-                    pass
-                self._rgb_vr = None
-        with self._rgb_cache_lock:
-            self._rgb_crop_cache.clear()
-
-    def _open_rgb_reader(self) -> None:
-        """打开 review 专用的 CPU RGB ROI-first reader（调用方持 reader 锁）。"""
-        from decord import VideoReader, cpu as _cpu
-        try:
-            import decord.video_reader as _vr_mod
-            _has_roi_api = hasattr(_vr_mod, "_CAPI_VideoReaderSetRoi")
-        except ImportError:
-            _has_roi_api = False
-        x1, y1, x2, y2 = self._roi
-        roi_half = (x1, y1, x2 + 1, y2 + 1)
-        roi_kw = {"roi": roi_half} if _has_roi_api else {}
-        self._rgb_vr = VideoReader(str(self._video_path), ctx=_cpu(0),
-                                   output_format="rgb", **roi_kw)
-        self._rgb_roi_half = roi_half
 
     def _open_hybrid_vrs(self):
         """CPU+NVDEC 混合解码：打开一对 ROI-first 解码器（CPU 前段 + GPU 后段）。
