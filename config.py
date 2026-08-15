@@ -225,7 +225,10 @@ SEG_CONF_MED_GATE: float = 50.0
 # 两个单帧 127 形成 2 帧孤岛 → 不信任；3 帧以上相同值才允许高置信。
 SEG_CONF_MIN_CONSISTENT_FRAMES: int = 3
 SEG_CONF_SHORT_RUN_CAP: float = 15.0
-# 一致性孤岛还需“脱离曲线”：短相同值相对 run 外邻居中值的偏差
+# 一致性孤岛的“近似相同”容差 (km/h)：孤岛内允许的小波动范围。
+# 只靠完全相同会把 127,128 这种两个误读互相撑腰的短孤岛漏掉。
+SEG_CONF_ISLAND_TOL: float = 2.0
+# 一致性孤岛还需“脱离曲线”：短近似相同值相对 run 外邻居中值的偏差
 # > 局部带宽×该倍率 才封顶（防止误伤坡道上的正常短段）
 SEG_CONF_ISLAND_DEV_MULT: float = 3.0
 # A4 孤立尖峰豁免的 conf 上界（下界=SEG_DP_ANCHOR_CONF）

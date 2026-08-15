@@ -123,24 +123,57 @@ def correct_segments(seg_vals: list, seg_times: list, suspect: list, *,
     return out, n_corr
 
 
-def _consistent_run_frames(seg_vals: list, seg_lens, i: int) -> int:
-    """连续相同值的累计帧数（一致性孤岛长度）。
+def _consistent_run_bounds(seg_vals: list, seg_lens, i: int,
+                           tol: float = 0.0) -> tuple:
+    """连续近似相同值区间：返回 (l, r, 累计帧数, 区间中值)。
 
-    只看“值完全相同”的相邻段；seg_lens 缺省时按每段 1 帧计。
+    tol=0 时退化为“完全相同”；tol>0 时允许区间内 max-min ≤ tol 的小波动，
+    用于识别 127,128 这类内部有轻微 OCR 波动的一致性孤岛。
+    seg_lens 缺省时按每段 1 帧计。
     """
     v = seg_vals[i]
     if v is None:
-        return 0
+        return i, i, 0, None
+    n = len(seg_vals)
+    l = r = i
+    lo = hi = v
     total = int(seg_lens[i]) if seg_lens is not None and i < len(seg_lens) else 1
     j = i - 1
-    while j >= 0 and seg_vals[j] == v:
-        total += int(seg_lens[j]) if seg_lens is not None and j < len(seg_lens) else 1
-        j -= 1
+    while j >= 0 and seg_vals[j] is not None:
+        cand = seg_vals[j]
+        new_lo = min(lo, cand)
+        new_hi = max(hi, cand)
+        if new_hi - new_lo <= tol:
+            l = j
+            lo, hi = new_lo, new_hi
+            total += int(seg_lens[j]) if seg_lens is not None and j < len(seg_lens) else 1
+            j -= 1
+        else:
+            break
     j = i + 1
-    while j < len(seg_vals) and seg_vals[j] == v:
-        total += int(seg_lens[j]) if seg_lens is not None and j < len(seg_lens) else 1
-        j += 1
-    return total
+    while j < n and seg_vals[j] is not None:
+        cand = seg_vals[j]
+        new_lo = min(lo, cand)
+        new_hi = max(hi, cand)
+        if new_hi - new_lo <= tol:
+            r = j
+            lo, hi = new_lo, new_hi
+            total += int(seg_lens[j]) if seg_lens is not None and j < len(seg_lens) else 1
+            j += 1
+        else:
+            break
+    run_vals = [seg_vals[k] for k in range(l, r + 1) if seg_vals[k] is not None]
+    run_med = float(np.median(run_vals)) if run_vals else None
+    return l, r, total, run_med
+
+
+def _consistent_run_frames(seg_vals: list, seg_lens, i: int,
+                           tol: float = 0.0) -> int:
+    """连续近似相同值的累计帧数（一致性孤岛长度）。
+
+    tol=0 时只看完全相同；tol>0 时允许区间内小波动。
+    """
+    return _consistent_run_bounds(seg_vals, seg_lens, i, tol)[2]
 
 
 def confidence_scores(seg_vals: list, seg_times: list, seg_lens=None, *,
@@ -149,7 +182,8 @@ def confidence_scores(seg_vals: list, seg_times: list, seg_lens=None, *,
                       conf_jerk_scale: float = config.SEG_CONF_JERK_SCALE,
                       conf_w_med: float = config.SEG_CONF_W_MED,
                       conf_w_jerk: float = config.SEG_CONF_W_JERK,
-                      win: int = config.SEG_WIN) -> list:
+                      win: int = config.SEG_WIN,
+                      island_tol: float = config.SEG_CONF_ISLAND_TOL) -> list:
     """中值偏差 + 急动度加权置信度 [0,100]（门控急动度）。
 
     med_score = 100·exp(-dev/bw)：贴合曲线程度。**门控**：贴合曲线
@@ -199,33 +233,33 @@ def confidence_scores(seg_vals: list, seg_times: list, seg_lens=None, *,
             conf[i] = (conf_w_med * med_score + conf_w_jerk * jerk_score)
         else:
             conf[i] = med_score
-    # 一致性孤岛封顶：连续相同值累计帧数太少、且该值明显脱离 run 外邻居
-    # 的中值（局部曲线）时，即使原 conf 高分也不能作为 HIGH_TRUST / DP 锚点。
+    # 一致性孤岛封顶：连续“近似相同”值累计帧数太少、且该值明显脱离 run
+    # 外邻居的中值（局部曲线）时，即使原 conf 高分也不能作为 HIGH_TRUST /
+    # DP 锚点。tol=0 时与旧逻辑完全一致；tol>0 时把 127,128 这类内部有
+    # 小波动的短孤岛也识别出来，并对整个 run 一起封顶，防止互相撑腰。
     # 坡道上的正常短段（如 315 夹在 311/318 之间）偏差小，不封顶。
     for i in range(n):
         if seg_vals[i] is None or not island_cap_eligible[i]:
             continue
-        if _consistent_run_frames(seg_vals, seg_lens, i) \
-                >= config.SEG_CONF_MIN_CONSISTENT_FRAMES:
+        l, r, run_frames, run_med = _consistent_run_bounds(
+            seg_vals, seg_lens, i, island_tol)
+        if run_frames >= config.SEG_CONF_MIN_CONSISTENT_FRAMES:
             continue
-        v = seg_vals[i]
         lo = max(0, i - med_k)
         hi = min(n, i + med_k + 1)
-        # 找出连续相同值区间 [l, r]，只取区间外的邻居评估“曲线支持”
-        l = r = i
-        while l > 0 and seg_vals[l - 1] == v:
-            l -= 1
-        while r + 1 < n and seg_vals[r + 1] == v:
-            r += 1
+        # 找出连续近似相同值区间 [l, r]，只取区间外的邻居评估“曲线支持”
         outside = [seg_vals[j] for j in range(lo, hi)
                    if seg_vals[j] is not None and (j < l or j > r)]
         if len(outside) < config.SEG_CONF_MIN_NEIGHBORS:
             continue
         outside_med = float(np.median(outside))
-        dev = abs(v - outside_med)
+        dev = abs(run_med - outside_med) if run_med is not None else 0.0
         if dev > max(bw_raw[i], detect_floor) \
                 * config.SEG_CONF_ISLAND_DEV_MULT:
-            conf[i] = min(conf[i], config.SEG_CONF_SHORT_RUN_CAP)
+            cap = config.SEG_CONF_SHORT_RUN_CAP
+            for j in range(l, r + 1):
+                if seg_vals[j] is not None and island_cap_eligible[j]:
+                    conf[j] = min(conf[j], cap)
     return conf
 
 

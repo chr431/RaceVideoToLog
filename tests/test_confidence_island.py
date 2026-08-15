@@ -1,7 +1,11 @@
-"""一致性孤岛（连续相同值短段）的后处理保护测试。"""
+"""一致性孤岛（连续近似相同值短段）的后处理保护测试。"""
 from __future__ import annotations
 
-from seg_correction import _consistent_run_frames
+from seg_correction import (
+    _consistent_run_bounds,
+    _consistent_run_frames,
+    confidence_scores,
+)
 
 
 def test_consistent_run_frames_counts_consecutive_equal_segments():
@@ -21,3 +25,34 @@ def test_consistent_run_frames_defaults_to_one_per_segment():
     vals = [5, 5, 6]
     assert _consistent_run_frames(vals, None, 0) == 2
     assert _consistent_run_frames(vals, None, 2) == 1
+
+
+def test_consistent_run_frames_tolerance_groups_small_fluctuation():
+    vals = [160, 127, 128, 127, 151]
+    # tol=0：127/128 各自都不是“完全相同”的连续段
+    assert _consistent_run_frames(vals, None, 1) == 1
+    assert _consistent_run_frames(vals, None, 2) == 1
+    # tol=2：中间 127,128,127 是一个 max-min=1 的近似一致 run
+    assert _consistent_run_frames(vals, None, 1, tol=2.0) == 3
+    assert _consistent_run_frames(vals, None, 2, tol=2.0) == 3
+
+
+def test_consistent_run_bounds_returns_median_and_bounds():
+    vals = [160, 127, 128, 127, 151]
+    l, r, frames, med = _consistent_run_bounds(vals, None, 1, tol=2.0)
+    assert (l, r, frames) == (1, 3, 3)
+    assert med == 127.0
+
+
+def test_confidence_scores_caps_short_fluctuating_island():
+    # 中间的 150,152 是两个“近似相同”的短孤岛；旧逻辑只看完全相同时，
+    # 第一个 150 会被局部一致性打成 100，新逻辑把整个 run 一起封顶。
+    vals = [110, 113, 114, 113, 114, 120, 128, 124, 118, 128,
+            150, 152, 184, 187, 188, 193, 188, 199, 202, 205, 200, 202]
+    times = list(range(len(vals)))
+    conf = confidence_scores(vals, times, [1] * len(vals))
+    assert conf[10] < 20
+    assert conf[11] < 20
+    # 旧逻辑（tol=0）确实会放过第一个 150
+    old_conf = confidence_scores(vals, times, [1] * len(vals), island_tol=0.0)
+    assert old_conf[10] >= 20
