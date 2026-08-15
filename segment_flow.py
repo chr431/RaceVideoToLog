@@ -47,6 +47,45 @@ from seg_correction import (
 logger = logging.getLogger("RaceVideoToLog.segment_flow")
 
 
+class _ProgressGate:
+    """把并行阶段（解码∥OCR）的进度回调收敛成单调、不回退的进度。
+
+    decode 与 OCR 真正并行：OCR 可能已报到 58-86，而解码线程还在报
+    3-58。若直接透传，GUI 进度条会来回跳、文字在“解码+分段”和“OCR”
+    之间反复横跳。本类只允许：
+      - 百分比严格前进；或
+      - 进入更靠后的阶段（decode→OCR→纠错）时即使百分比相同也切换。
+    同一阶段内百分比相同的重复消息会被丢弃（例如 OCR 多个末段都报
+    86.0 时只显示第一条）。
+    """
+    def __init__(self, emit) -> None:
+        self._emit = emit
+        self._lock = threading.Lock()
+        self._last_pct = -1.0
+        self._last_phase = -1
+
+    @staticmethod
+    def _phase(msg: str, pct: float) -> int:
+        # 按消息内容判断阶段，避免 58.0 这种边界值被 pct 误判：
+        # 解码最后一条也是 58.0，而 OCR 第一条也是 58.0。
+        if msg == "检测纠正..." or msg == "完成":
+            return 2
+        if msg.startswith("[OCR]"):
+            return 1
+        return 0
+
+    def __call__(self, msg: str, pct: float) -> None:
+        phase = self._phase(msg, pct)
+        with self._lock:
+            if pct < self._last_pct:
+                return
+            if pct == self._last_pct and phase <= self._last_phase:
+                return
+            self._last_pct = pct
+            self._last_phase = phase
+        self._emit(msg, pct)
+
+
 def _ocr_batch_size() -> int:
     """OCR 批大小（段数）：RVTOL_OCR_BATCH 实验钩子 > config.OCR_BATCH_SIZE。"""
     _env = _os.environ.get("RVTOL_OCR_BATCH")
@@ -504,7 +543,7 @@ class SegmentPipeline:
         eng = OcrEngine(self._ocr_model, self._ocr_engine_type(),
                         fill_width=self._fill_width,
                         num_threads=self._ocr_num_threads(),
-                        progress_cb=lambda msg: self._progress(msg, 2.0))
+                        progress_cb=lambda msg: self._progress(msg, 2.5))
         self._ocr_backend_used = eng.backend_name
         seg_vals = []
         rep_frames = []
@@ -590,23 +629,31 @@ class SegmentPipeline:
     # ── 主入口（流水线：解码∥分段∥段OCR 重叠 → 检测纠正 → CSV）──
     def run(self, output_path):
         t_total = time.perf_counter()
-        self._progress("解码+分段+段值OCR...", 2.0)
-        frames, segs, seg_vals, rep_frames = self._run_pipelined()
-        self._cancel()
-        self._progress("检测纠正...", 88.0)
-        t_corr = time.perf_counter()
-        seg_times = [seg[len(seg) // 2] for seg in segs]
-        conf = self._confidence(seg_vals, seg_times,
-                                [len(s) for s in segs])
-        self._conf_vals = list(conf)       # 供 finalize/flag 判定复用
-        corr, self._n_corr = self._dense_correct(seg_vals, seg_times, conf)
-        self.timing["correction"] = time.perf_counter() - t_corr
-        self.rows = self._build_rows(frames, segs, corr, raw=seg_vals,
-                                     conf=conf)
-        self._store_run_state(frames, self.crops, segs, seg_vals, rep_frames, corr)
-        self._write_csv(self.rows, output_path)
-        self.timing["total"] = time.perf_counter() - t_total
-        self._progress("完成", 100.0)
+        # 并行进度收敛：解码线程和 OCR 线程各自报百分比，可能互相“倒车”，
+        # 这里用 gate 保证 GUI 只看到单调进度（完成后恢复原始回调，
+        # 允许同一 pipeline 对象再次 run）。
+        _orig_progress = self._progress
+        self._progress = _ProgressGate(_orig_progress)
+        try:
+            self._progress("解码+分段+段值OCR...", 2.0)
+            frames, segs, seg_vals, rep_frames = self._run_pipelined()
+            self._cancel()
+            self._progress("检测纠正...", 88.0)
+            t_corr = time.perf_counter()
+            seg_times = [seg[len(seg) // 2] for seg in segs]
+            conf = self._confidence(seg_vals, seg_times,
+                                    [len(s) for s in segs])
+            self._conf_vals = list(conf)       # 供 finalize/flag 判定复用
+            corr, self._n_corr = self._dense_correct(seg_vals, seg_times, conf)
+            self.timing["correction"] = time.perf_counter() - t_corr
+            self.rows = self._build_rows(frames, segs, corr, raw=seg_vals,
+                                         conf=conf)
+            self._store_run_state(frames, self.crops, segs, seg_vals, rep_frames, corr)
+            self._write_csv(self.rows, output_path)
+            self.timing["total"] = time.perf_counter() - t_total
+            self._progress("完成", 100.0)
+        finally:
+            self._progress = _orig_progress
         return self.rows
 
     def _run_pipelined(self):
@@ -698,7 +745,7 @@ class SegmentPipeline:
                     config.HYBRID_OCR_ENV, "").strip().lower() in \
                     ("1", "true", "yes", "on")
                 _t_eng = time.perf_counter()
-                _engine_progress = lambda msg: self._progress(msg, 2.0)
+                _engine_progress = lambda msg: self._progress(msg, 2.5)
                 if _hybrid_ocr:
                     engines = [
                         OcrEngine(self._ocr_model, "tensorrt",
