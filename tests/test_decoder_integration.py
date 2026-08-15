@@ -7,7 +7,7 @@ get_codec）也会被 _require_fork_api 显式跳过。
 
 测试视频：tests/fixtures/videos/smoke_speedo.mp4（60 帧 160×100 30fps
 h264；生成参考脚本同目录 generate_smoke_video.py）。
-参考哈希在 decord v0.7.9 上采集——软件解码同一构建逐位确定，可跨机器
+参考哈希在 decord v0.7.10 上采集——软件解码同一构建逐位确定，可跨机器
 比对；升级 decord 版本或重新生成视频导致哈希变化时需重新采集（属有意变更）。
 """
 from __future__ import annotations
@@ -28,7 +28,7 @@ ROI = (10, 30, 130, 90)          # 半开区间 (x1, y1, x2, y2)
 EXPECT_FRAMES = 60
 EXPECT_FPS = 30.0
 EXPECT_ROI_SHAPE = (60, 120, 3)  # (y2-y1, x2-x1, 3)
-EXPECT_ROI0_SHA16 = "4045c7a10a945e95"  # decord v0.7.9 首帧 ROI 确定性校验
+EXPECT_ROI0_SHA16 = "4045c7a10a945e95"  # decord v0.7.10 首帧 ROI 确定性校验
 
 
 def _require_fork_api():
@@ -65,7 +65,7 @@ def test_next_roi_shape_and_determinism():
         assert f0.shape == EXPECT_ROI_SHAPE
         assert f0.dtype == np.uint8
         assert _roi0_sha16(f0) == EXPECT_ROI0_SHA16, (
-            "首帧 ROI 哈希与 decord v0.7.9 参考不一致（解码行为变化，"
+            "首帧 ROI 哈希与 decord v0.7.10 参考不一致（解码行为变化，"
             "请确认是否有意）")
     finally:
         del vr
@@ -108,6 +108,31 @@ def test_gray_output_single_channel():
         assert np.abs(g[..., 0].astype(np.float32) - gray).max() <= 2.0
     finally:
         del vr
+
+
+def test_yuv420_luma_matches_gray():
+    """fork ≥0.7.10：output_format='yuv420' 原始 Y + range 展开 = gray 输出。"""
+    _require_fork_api()
+    from decord import VideoReader, cpu
+    from video_utils import _nv12_luma_full
+    vr = VideoReader(str(VIDEO), ctx=cpu(0), output_format="yuv420")
+    try:
+        cr = vr.get_color_range()
+        yuv = vr.next_roi(*ROI).asnumpy()
+        h = EXPECT_ROI_SHAPE[0]
+        w = EXPECT_ROI_SHAPE[1]
+        assert yuv.shape == (h + (h + 1) // 2, w)
+        assert yuv.dtype == np.uint8
+        assert cr in (0, 1)
+    finally:
+        del vr
+    vr_g = VideoReader(str(VIDEO), ctx=cpu(0), output_format="gray")
+    try:
+        g = vr_g.next_roi(*ROI).asnumpy()
+    finally:
+        del vr_g
+    assert np.array_equal(_nv12_luma_full(yuv, cr), g[..., 0]), \
+        "yuv420 展开后的 Y 平面必须与 gray 输出逐位一致"
 
 
 def test_gpu_gray_matches_cpu_gray():

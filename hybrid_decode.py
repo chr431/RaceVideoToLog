@@ -20,21 +20,24 @@ def _hybrid_ranges(frames: list, calib_n: int,
 
 
 def _decode_range_worker(vr, fis, q, roi, th, err,
-                         batch: int = config.DECODE_BATCH_SIZE):
+                         batch: int = config.DECODE_BATCH_SIZE,
+                         yuv: bool = False, color_range: int = 0):
     """批量解码帧区间 [fis] → (fi, crop, gray, sharp, bin) 入队。
 
     CPU+NVDEC 混合解码的解码线程体：_run_pipelined 传 th（分段阈值，
     bin 参与增量分段）；_decode_all 传 th=None（bin=None 不用，参考
     路径）。批量特征（gray/std/二值化）在解码线程内向量化完成，与
-    消费者分段线程重叠。异常记入 err 并放哨兵，保证消费者不被卡死。
+    消费者分段线程重叠。yuv=True 时 crops 为 packed YUV420，取 Y 平面
+    并按 color_range 展开后再算特征。异常记入 err 并放哨兵。
     roi 为半开区间。
     """
-    from segmentation import _gray_seg_batch
+    from segmentation import _gray_seg_batch, _gray_seg_yuv_batch
     try:
         for bstart in range(0, len(fis), batch):
             bend = min(bstart + batch, len(fis))
             crops = vr.get_batch(fis[bstart:bend], roi=roi).asnumpy()
-            g = _gray_seg_batch(crops)
+            g = (_gray_seg_yuv_batch(crops, color_range) if yuv
+                 else _gray_seg_batch(crops))
             sharp = g.std(axis=(1, 2))
             bs = (g > th) if th is not None else None
             for k, fi in enumerate(fis[bstart:bend]):

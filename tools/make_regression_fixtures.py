@@ -84,7 +84,7 @@ def main() -> None:
         roi, f_start, f_end, fps, ms, ma, mw, truth = load_meta(v)
         pipe = SegmentPipeline(f"{VIDEO_DIR}/{v}.mp4", roi, ms, ma,
                                fps, f_start, f_end, force_aspect=mw,
-                               gray_output=True)
+                               yuv_output=True)
         print(f"== {v}: 生产管线运行中 ...")
         pipe.run(str(PROJECT / "outputs" / f"_fx_{v}.csv"))
         series = {

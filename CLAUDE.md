@@ -35,7 +35,7 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
   `test_hybrid_decoder.py`（cpu+nvdec 识别/切分/解码 worker）、
   `test_decoder_integration.py`（缺 decord 显式跳过）。
 - CI（.github/workflows/ci.yml）：test job 跑全量 pytest；decoder-smoke job
-  从 chr431/decord release v0.7.9 下载 fork 真实跑解码集成测试（下载失败
+  从 chr431/decord release v0.7.10 下载 fork 真实跑解码集成测试（下载失败
   显式跳过不红）；version-check 跑 tools/version.py。
 - 1-2 km/h 平滑偏移漏纠是信息论极限（与真实平滑不可区分）——局部物理约束
   无解，勿重复探索。
@@ -162,8 +162,9 @@ HEVC/AV1 CPU 明显更慢，hybrid10 在 HEVC 还拖慢 0.7s。**维持 auto=GPU
   （纯解码 13.8s vs auto 14.7s，OCR 隐藏于解码之下非瓶颈），混合仅对
   "TRT 可用但强制 OCR=cpu"有意义；准确率无扰动（test2 8/8、test6
   0/0 与基线一致）。
-- **decord v0.7.9（ROI-first + 撕裂帧 + seek VFR 越位 + 双解码器背压 +
-  GPU 色度 siting 修复 + GPU gray 输出，fork 仓库 D:\Repo\decord）**：
+- **decord v0.7.10（在 v0.7.9 的 ROI-first + 撕裂帧 + seek VFR 越位 +
+  双解码器背压 + GPU 色度 siting 修复 + GPU gray 输出之上新增 YUV420
+  输出，fork 仓库 D:\Repo\decord）**：
   - v0.7.5 起：解码器只输出 ROI 矩形（CPU filter crop 先于 format，yuv420p
     x/y/w/h 全偶数约束用偶数超集+顶部精裁绕过；GPU kernel 只算 ROI 窗口
     + 输出池 ROI 尺寸）；同步 D2H 撕裂帧修复（v0.7.4 非阻塞流并发管线
@@ -249,8 +250,13 @@ HEVC/AV1 CPU 明显更慢，hybrid10 在 HEVC 还拖慢 0.7s。**维持 auto=GPU
   - ✅ v0.7.8：GPU 色度 siting 修复（RGB 跨后端收敛 ±3）+ GPU
     output_format='gray' 直出 Y（按流 range 展开，与 CPU GRAY8
     逐位一致）。
-  - ✅ v0.7.9：当前生产版本（2026-08-15 发布，CPU/GPU 解码结果与
-    v0.7.8 逐位一致，解码集成测试哈希已重新采集确认）。
+  - ✅ v0.7.9：ROI-first/撕裂帧/seek/背压/GPU gray 生产版本（2026-08-15
+    发布，CPU/GPU 解码结果与 v0.7.8 逐位一致，解码集成测试哈希已重新采集）。
+  - ✅ v0.7.10：新增真正的 YUV420 输出（`output_format='yuv420'`，
+    packed NV12：原始 Y + interleaved U/V；`get_color_range()` 供调用方
+    按 gray 同语义展开 Y）。RaceVideoToLog 生产管线解码 YUV、分段/OCR
+    只取 Y（与 gray 输出逐位一致，门禁 11 错不变），代表帧保留 YUV，
+    最终检查前 `prepare_review_rgb()` 一次转成 RGB 显示。
   - **GPU 真批量异步解码 = 已验证死路（2026-08-15 实测）**：display 回调
     去 sync + 延迟解映射 + 32 surface + 批级 SyncStream 的完整实现放在
     fork 分支 `experiment/async-batch-decode`（980 帧 A/B 与同步版逐位

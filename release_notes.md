@@ -1,13 +1,15 @@
 # Release Notes
 
-## v2.15.1（2026-08-15）— 代码清理与 decord 0.7.9
+## v2.15.1（2026-08-15）— 代码清理与 decord 0.7.10
 
 > 本节面向使用者：只讲你能直接感知到的变化。技术细节见下方各节。
 
 ### 🔧 依赖与打包
 
-- 自建解码 fork 升级到 **decord v0.7.9**（CPU/GPU 解码结果与 v0.7.8
-  逐位一致；回归门禁 11 错误不变）
+- 自建解码 fork 升级到 **decord v0.7.10**：新增真正的
+  **YUV420 输出**（packed NV12 布局，Y/U/V 原始 4:2:0）——
+  生产管线解码 YUV，分段/OCR 只取 Y 平面（与旧 gray 输出逐位一致，
+  回归门禁 11 错误不变），代表帧保留 YUV
 - PyInstaller 产物进一步瘦身（实测 ~390MB → ~348MB）：移除未使用的
   Pillow（~12.8MB）、重复的 OpenSSL x64 DLL 对（~5.6MB）、decord 的
   avdevice/ffprobe（~4MB）、cuda-python 未用绑定（nvml/nvrtc/cudla 等
@@ -16,9 +18,10 @@
 
 ### 🧹 代码与行为
 
-- 最终检查对话框直接显示管线随 segments 缓存的**代表帧灰度图**
-  （不再另开 RGB 解码器做彩色预览）；同时修复了初始预览被放大裁边
-  的问题，切段/窗口缩放只重缩放已生成的 QPixmap，不重新解码
+- 最终检查恢复**彩色预览**：管线只在解码阶段保留代表帧的 YUV420
+  （~1.5 字节/像素），打开最终检查前把所有代表帧一次转成 RGB
+  （test5 2.5k 段 ~0.2s、test6 8.1k 段 ~0.9s），随后显示/缩放不再
+  重复转换；同时修复了初始预览被放大裁边的问题
 - CSV 头只写入 `ocr_backend` = **本次实际推理引擎**（onnxruntime /
   tensorrt，与老版本对齐，不再写请求值 auto）；从 CSV 导入设置会把它
   归一化回可请求参数（onnxruntime → CPU、tensorrt → TensorRT），

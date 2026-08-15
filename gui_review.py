@@ -41,9 +41,9 @@ class ReviewDialog(ReviewChartMixin, QDialog):
         self._max_speed = max_speed
         self._max_accel = max_accel
         self._fps = fps
-        # 预览源图缓存：代表帧灰度图已随 segments 保存在内存中，
-        # 切段/窗口缩放只重新缩放已缓存的 QPixmap，不重新解码
-        # （修复初次显示裁剪与切段卡顿）
+        # 预览源图缓存：代表帧图像已随 segments 保存在内存中（YUV 模式
+        # 在打开本对话框前已转 RGB；gray 模式为灰度图），切段/窗口缩放
+        # 只重新缩放已缓存的 QPixmap，不重新解码
         self._preview_source: QPixmap | None = None
         self._preview_source_seg: int = -1
         # 修正：段索引 → 新值（应用到整个段范围）
@@ -204,10 +204,11 @@ class ReviewDialog(ReviewChartMixin, QDialog):
     # ═══════════════ 图像 + 导航 ═══════════════
 
     def _show_seg_image(self, si: int) -> None:
-        """显示段 si 已缓存的代表帧灰度图（仅首次转 QPixmap）。
+        """显示段 si 已缓存的代表帧图（RGB 或灰度，仅首次转 QPixmap）。
 
-        rep_crop 由生产管线随 segments 一并保存，无需 seek/解码；切换
-        段或缩放窗口只重新缩放已生成的 QPixmap，不重复转换数组。
+        rep_crop 由生产管线随 segments 一并保存（YUV 模式已在打开
+        对话框前转成 RGB），无需 seek/解码；切换段或缩放窗口只重新
+        缩放已生成的 QPixmap，不重复转换数组。
         """
         if not (0 <= si < len(self._segments)):
             self._img_label.setText("(无图像)")

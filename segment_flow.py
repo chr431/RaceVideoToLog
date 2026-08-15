@@ -33,8 +33,9 @@ from constants import Flag
 from ocr_engine import extract_speed_value
 from segmentation import (  # noqa: F401 — 兼容 tools/tests 的历史导入路径
     _apply_gamma, _cluster_win3, _gray, _gray_batch, _gray_seg,
-    _gray_seg_batch, _otsu, _seg_gamma,
+    _gray_seg_batch, _gray_seg_yuv, _gray_seg_yuv_batch, _otsu, _seg_gamma,
 )
+from video_utils import _nv12_luma_full, nv12_to_rgb
 from hybrid_decode import (  # noqa: F401 — 兼容 tests 的历史导入路径
     HYBRID_BACKEND_ALIASES, _decode_range_worker, _drain_queue, _hybrid_ranges,
 )
@@ -84,7 +85,8 @@ class SegmentPipeline:
                  dp_deanchor_jerk_min: float = config.SEG_DP_DEANCHOR_JERK_MIN,
                  dp_deanchor_jerk_max: float = config.SEG_DP_DEANCHOR_JERK_MAX,
                  progress_cb=None, cancel_check=None,
-                 gray_output: bool = False):
+                 gray_output: bool = False,
+                 yuv_output: bool = False):
         self._video_path = Path(video_path)
         self._roi = tuple(roi)
         self._max_speed = max_speed_kmh
@@ -123,6 +125,11 @@ class SegmentPipeline:
         # ≥0.7.9）：直出 Y 平面（与 CPU swscale GRAY8 逐位一致），分段灰度
         # 跨后端统一；跳过 RGB→灰转换与 Python 侧 matmul
         self._gray_output = gray_output
+        # YUV420 输出（decord output_format='yuv420'，fork ≥0.7.10）：
+        # 解码器输出 packed YUV（原始 Y + U/V），分段/OCR 只取 Y 平面，
+        # 代表帧保留 YUV 供 final_check 前转 RGB 预览
+        self._yuv_output = yuv_output
+        self._color_range = 0  # run 时从 decoder get_color_range 读取
         self._progress = progress_cb or (lambda m, p: None)
         self._cancel = cancel_check or (lambda: None)
         self.rows: list = []
@@ -165,7 +172,7 @@ class SegmentPipeline:
         解码器只输出该矩形（CPU filter 先 crop 再转换 / GPU 转换 kernel
         只算 ROI 窗口 + 输出池 ROI 尺寸），免全帧转换与逐帧裁剪。
         """
-        from decord import VideoReader, cpu as _cpu
+        from decord import cpu as _cpu
         try:
             import decord.video_reader as _vr_mod
             _has_roi_api = hasattr(_vr_mod, "_CAPI_VideoReaderSetRoi")
@@ -180,22 +187,18 @@ class SegmentPipeline:
         if backend in ("auto", "nvdec"):
             try:
                 from decord import gpu as _g
-                # GPU 也支持 output_format='gray'（decord ≥0.7.9，直出 Y
-                # 平面与 CPU GRAY8 逐位一致）；旧版忽略该参数仍输出 RGB。
-                vr = VideoReader(str(self._video_path), ctx=_g(0),
-                                 output_format='gray' if self._gray_output
-                                 else 'rgb', **roi_kw)
+                # GPU 支持 gray（≥0.7.9）/ yuv420（≥0.7.10）
+                vr = self._open_decord_reader(_g(0), roi_kw)
                 label = "GPU"
             except Exception:
                 vr = None
                 if backend == "nvdec":
                     logger.warning("NVDEC 解码不可用，回退 CPU")
         if vr is None:
-            vr = VideoReader(str(self._video_path), ctx=_cpu(0),
-                             output_format='gray' if self._gray_output
-                             else 'rgb', **roi_kw)
+            vr = self._open_decord_reader(_cpu(0), roi_kw)
             label = "CPU"
         self._backend = f"decord/{label}"
+        self._remember_color_range(vr)
         return vr
 
     def _hybrid_env_enabled(self) -> bool:
@@ -239,20 +242,74 @@ class SegmentPipeline:
                 pass
         return float(config.HYBRID_CPU_SPLIT)
 
+    def _decord_format(self) -> str:
+        """当前管线请求的 decord output_format。"""
+        if self._yuv_output:
+            return "yuv420"
+        return "gray" if self._gray_output else "rgb"
+
+    def _open_decord_reader(self, ctx, roi_kw: dict):
+        """按当前输出格式打开 decord reader。
+
+        yuv420 仅在 fork ≥0.7.10 可用：旧 DLL 会抛 ValueError，此时
+        回退 gray（分段/OCR 不变，仅代表帧预览退化灰度）并重置标志。
+        """
+        from decord import VideoReader
+        fmt = self._decord_format()
+        try:
+            return VideoReader(str(self._video_path), ctx=ctx,
+                               output_format=fmt, **roi_kw)
+        except ValueError:
+            if not self._yuv_output:
+                raise
+            logger.warning("当前 decord 不支持 yuv420 输出，回退 gray "
+                           "（代表帧预览将为灰度）")
+            self._yuv_output = False
+            self._color_range = 0
+            return VideoReader(str(self._video_path), ctx=ctx,
+                               output_format="gray", **roi_kw)
+
+    def _remember_color_range(self, vr) -> None:
+        """YUV 模式下从 decoder 读取流 color_range（0=limited/tv）。"""
+        if not self._yuv_output:
+            return
+        try:
+            self._color_range = int(vr.get_color_range() or 0)
+        except Exception:
+            self._color_range = 0
+
+    def _crop_luma(self, crop: np.ndarray) -> np.ndarray:
+        """crop → 分段/OCR 灰度：YUV 时取 Y 并按 range 展开，否则 _gray_seg。"""
+        if self._yuv_output:
+            return _gray_seg_yuv(crop, self._color_range)
+        return _gray_seg(crop)
+
+    def _batch_luma(self, crops: np.ndarray) -> np.ndarray:
+        if self._yuv_output:
+            return _gray_seg_yuv_batch(crops, self._color_range)
+        return _gray_seg_batch(crops)
+
+    def _crop_is_expected(self, c: np.ndarray, roi_h: int, roi_w: int) -> bool:
+        """ROI-first 输出尺寸是否符合当前输出格式（旧路径全帧则 False）。"""
+        if self._yuv_output:
+            return (c.ndim == 2 and c.shape[0] == roi_h + (roi_h + 1) // 2
+                    and c.shape[1] == roi_w)
+        return c.shape[0] == roi_h and c.shape[1] == roi_w
+
     def _open_hybrid_vrs(self):
         """CPU+NVDEC 混合解码：打开一对 ROI-first 解码器（CPU 前段 + GPU 后段）。
 
-        与 _open_vr 相同 ROI 语义（闭合框 → 半开 +1）。CPU reader 灰度
-        输出（sws 转换量 1/3，_gray_seg_batch 直接取通道）；GPU reader
-        灰度（decord ≥0.7.9 直出 Y，与 CPU GRAY8 逐位一致）。GPU 不可用
-        → 回退单 CPU reader（vr_gpu=None，调用方按纯 CPU 走）。
+        与 _open_vr 相同 ROI 语义（闭合框 → 半开 +1）。两个 reader 使用
+        同一输出格式：gray（≥0.7.9 直出 Y）或 yuv420（≥0.7.10，Y 平面
+        跨后端一致）。GPU 不可用 → 回退单 CPU reader（vr_gpu=None，
+        调用方按纯 CPU 走）。
         AV1 特判：CPU 软解 AV1 极耗核（~330fps）且与 GPU 段并发竞争拖慢
         GPU 吞吐 → 不再打开 CPU reader，直接返回 (vr_gpu, vr_gpu)；调用方
         见 vr_gpu is vr → 置 hybrid=False 走纯 GPU 分支（无队列/线程开销，
         与纯 GPU 完全一致）。_hybrid_split 同步返回 0（防御性，其他路径兜底）。
         返回 (vr_cpu, vr_gpu)。
         """
-        from decord import VideoReader, cpu as _cpu
+        from decord import cpu as _cpu
         try:
             import decord.video_reader as _vr_mod
             _has_roi_api = hasattr(_vr_mod, "_CAPI_VideoReaderSetRoi")
@@ -264,19 +321,17 @@ class SegmentPipeline:
         # GPU 不可用 → 回退单 CPU reader。
         try:
             from decord import gpu as _g
-            # GPU reader 与 CPU 同语义：_gray_output 时直出 GRAY8（= Y 平面，
-            # 与 CPU swscale GRAY8 逐位一致）→ 分段灰度跨后端统一；
-            # 旧 decord（GPU 忽略 output_format）回退 RGB + matmul 灰度。
-            vr_gpu = VideoReader(str(self._video_path), ctx=_g(0),
-                                 output_format='gray' if self._gray_output
-                                 else 'rgb', **roi_kw)
+            # GPU reader 与 CPU 同输出格式（gray 或 yuv420，Y 平面语义
+            # 跨后端统一）；旧 decord 不支持时由 _open_decord_reader 回退。
+            vr_gpu = self._open_decord_reader(_g(0), roi_kw)
+            self._remember_color_range(vr_gpu)
             self._backend = "decord/CPU+NVDEC"
         except Exception:
             logger.warning("NVDEC 解码不可用，CPU+NVDEC 回退纯 CPU")
             self._backend = "decord/CPU"
-            return VideoReader(str(self._video_path), ctx=_cpu(0),
-                               output_format='gray' if self._gray_output
-                               else 'rgb', **roi_kw), None
+            vr = self._open_decord_reader(_cpu(0), roi_kw)
+            self._remember_color_range(vr)
+            return vr, None
         try:
             self._hybrid_codec = str(vr_gpu.get_codec() or "").lower()
         except Exception:
@@ -286,9 +341,9 @@ class SegmentPipeline:
                            "CPU+NVDEC 按纯 GPU 解码（不打开 CPU reader）")
             self._backend = "decord/GPU"
             return vr_gpu, vr_gpu
-        return VideoReader(str(self._video_path), ctx=_cpu(0),
-                           output_format='gray' if self._gray_output
-                           else 'rgb', **roi_kw), vr_gpu
+        vr = self._open_decord_reader(_cpu(0), roi_kw)
+        self._remember_color_range(vr)
+        return vr, vr_gpu
 
     def _ocr_engine_type(self) -> str:
         """OCR 推理后端：auto/tensorrt → tensorrt（OcrEngine 失败回退 onnx），cpu → onnxruntime。"""
@@ -339,6 +394,7 @@ class SegmentPipeline:
         if self._frame_start > 0:
             vr.seek_accurate(self._frame_start)
         frames = list(range(self._frame_start, end))
+        DECODE_BATCH = config.DECODE_BATCH_SIZE
         crops = {}
         grays = {}
         sharp = {}
@@ -357,7 +413,9 @@ class SegmentPipeline:
             if cpu_fis:
                 t = threading.Thread(target=_decode_range_worker,
                                      args=(vr, cpu_fis, q_cpu, roi_half,
-                                           None, err), daemon=True)
+                                           None, err, DECODE_BATCH,
+                                           self._yuv_output,
+                                           self._color_range), daemon=True)
                 t.start()
                 threads.append(t)
             else:
@@ -371,7 +429,9 @@ class SegmentPipeline:
                 else:
                     t = threading.Thread(target=_decode_range_worker,
                                          args=(vr_gpu, gpu_fis, q_gpu,
-                                               roi_half, None, err),
+                                               roi_half, None, err, DECODE_BATCH,
+                                               self._yuv_output,
+                                               self._color_range),
                                          daemon=True)
                     t.start()
                     threads.append(t)
@@ -379,11 +439,11 @@ class SegmentPipeline:
                 if q is None:
                     continue
                 for fi, c, g, s, _b in _drain_queue(q):
-                    if c.shape[0] != y2 - y1 + 1 \
-                            or c.shape[1] != x2 - x1 + 1:
+                    if not self._crop_is_expected(c, y2 - y1 + 1,
+                                                  x2 - x1 + 1):
                         # 旧版非 ROI-first 解码器：全帧输出 → 子裁剪
                         c = c[y1:y2 + 1, x1:x2 + 1]
-                        g = _gray_seg(c)
+                        g = self._crop_luma(c)
                         s = float(g.std())
                     crops[fi] = c
                     grays[fi] = g
@@ -395,10 +455,11 @@ class SegmentPipeline:
         else:
             for k, fi in enumerate(frames):
                 c = vr.next_roi(x1, y1, x2 + 1, y2 + 1).asnumpy()
-                if c.shape[0] != y2 - y1 + 1 or c.shape[1] != x2 - x1 + 1:
+                if not self._crop_is_expected(c, y2 - y1 + 1,
+                                              x2 - x1 + 1):
                     c = c[y1:y2 + 1, x1:x2 + 1]
                 crops[fi] = c
-                g = _gray_seg(c)
+                g = self._crop_luma(c)
                 grays[fi] = g
                 sharp[fi] = float(g.std())
                 if k % 500 == 0:
@@ -454,9 +515,13 @@ class SegmentPipeline:
         reps = [max(seg, key=lambda fi: sharp[fi]) for seg in segs]
         for k in range(0, len(segs), B):
             chunk = segs[k:k + B]
-            procs = [_preprocess_standard(crops[rep],
-                                          force_aspect=self._force_aspect)
-                     for rep in reps[k:k + B]]
+            procs = [
+                _preprocess_standard(
+                    _nv12_luma_full(crops[rep], self._color_range)[..., None]
+                    if self._yuv_output else crops[rep],
+                    force_aspect=self._force_aspect)
+                for rep in reps[k:k + B]
+            ]
             results = eng(procs)
             for rep, res in zip(reps[k:k + B], results):
                 sv, _rt, _c = extract_speed_value(res)
@@ -603,10 +668,10 @@ class SegmentPipeline:
             _t_p = time.perf_counter()
             c = vr.next_roi(x1, y1, x2 + 1, y2 + 1).asnumpy()
             self._prof_end("producer", "calib_decode", _t_p)
-            if c.shape[0] != y2 - y1 + 1 or c.shape[1] != x2 - x1 + 1:
+            if not self._crop_is_expected(c, y2 - y1 + 1, x2 - x1 + 1):
                 c = c[y1:y2 + 1, x1:x2 + 1]
             _t_p = time.perf_counter()
-            g = _gray_seg(c)
+            g = self._crop_luma(c)
             self._prof_end("producer", "calib_gray", _t_p)
             calib.append((frames[k], c, g, float(g.std())))
         ths = [_otsu(g) for _fi, _c, g, _s in calib]
@@ -703,9 +768,11 @@ class SegmentPipeline:
                     if not b_idx:
                         return
                     _t_p = time.perf_counter()
-                    procs = [_preprocess_standard(c,
-                                                  force_aspect=self._force_aspect)
-                             for c in b_crops]
+                    procs = [_preprocess_standard(
+                        _nv12_luma_full(c, self._color_range)[..., None]
+                        if self._yuv_output else c,
+                        force_aspect=self._force_aspect)
+                        for c in b_crops]
                     self._prof_end("ocr", "preprocess", _t_p)
                     infer_q.put((list(b_idx), list(b_reps), procs,
                                  list(b_fracs)))
@@ -763,7 +830,8 @@ class SegmentPipeline:
                 t = threading.Thread(
                     target=_decode_range_worker,
                     args=(vr, cpu_fis, cpu_q, roi_half, th, dec_err,
-                          DECODE_BATCH), daemon=True)
+                          DECODE_BATCH, self._yuv_output,
+                          self._color_range), daemon=True)
                 t.start()
                 dec_threads.append(t)
             else:
@@ -778,7 +846,8 @@ class SegmentPipeline:
                     t = threading.Thread(
                         target=_decode_range_worker,
                         args=(vr_gpu, gpu_fis, gpu_q, roi_half, th, dec_err,
-                              DECODE_BATCH), daemon=True)
+                              DECODE_BATCH, self._yuv_output,
+                              self._color_range), daemon=True)
                     t.start()
                     dec_threads.append(t)
 
@@ -809,7 +878,7 @@ class SegmentPipeline:
                     # numpy 释放 GIL，不与 OCR 预处理线程互斥）；gray 输出
                     # (B,H,W,1) 时直接取通道（跳过 matmul）
                     _t_g = time.perf_counter()
-                    g = _gray_seg_batch(crops)
+                    g = self._batch_luma(crops)
                     self._prof_end("producer", "gray_batch", _t_g)
                     _t_s = time.perf_counter()
                     sharp = g.std(axis=(1, 2))
@@ -894,6 +963,21 @@ class SegmentPipeline:
         del vr, vr_gpu
         return frames, segs, [results[i][0] for i in range(seg_idx)], \
             [results[i][1] for i in range(seg_idx)]
+
+    def prepare_review_rgb(self) -> None:
+        """最终检查前：把全部代表帧 packed YUV420 就地转成 RGB。
+
+        只转换代表帧（每段一张，不转换全片帧）：test5 ~2.5k 段、
+        test6 ~8.1k 段均为毫秒~亚秒级 numpy 操作。转换后释放
+        self.crops 的 YUV 引用（segments 内已换成 RGB，finalize 不需要）。
+        """
+        if not self._yuv_output:
+            return
+        for seg in self.segments:
+            crop = seg.get("rep_crop")
+            if crop is not None and crop.ndim == 2:
+                seg["rep_crop"] = nv12_to_rgb(crop)
+        self.crops.clear()
 
     def _store_run_state(self, frames, crops, segs, seg_vals, rep_frames, corr):
         """保存 run() 的中间状态，供 GUI 段级 review / finalize 使用。"""

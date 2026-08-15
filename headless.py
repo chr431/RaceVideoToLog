@@ -83,9 +83,9 @@ def run_headless(args: argparse.Namespace) -> None:
         progress_cb=_progress,
         force_aspect=getattr(args, 'force_aspect', 0.0),
         fps=None,
-        # 灰度解码输出（decord ≥0.7.9 CPU/GPU 都支持）：直出 Y 平面，
-        # 分段灰度跨后端统一（GPU 路径省 RGB→灰转换与 matmul）
-        gray_output=True,
+        # YUV420 解码输出（fork ≥0.7.10 CPU/GPU 都支持）：分段/OCR 只取
+        # Y 平面（跨后端统一），代表帧保留 YUV 供最终检查转 RGB 预览
+        yuv_output=True,
     )
 
     t0 = time.perf_counter()

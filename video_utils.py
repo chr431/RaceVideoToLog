@@ -24,6 +24,89 @@ def _gray(crop: np.ndarray) -> np.ndarray:
     return (crop.astype(np.float32) @ _GRAY_W).astype(np.uint8)
 
 
+# ── decord yuv420（packed NV12）转换 ───────────────────────────────────
+# 布局：前 h 行 = 原始 Y，后 ceil(h/2) 行 = interleaved U/V（原始 4:2:0）。
+# get_color_range() 给出 0=limited/tv、1=full/pc；按它展开 Y 后与 decord
+# gray 输出逐位一致。
+def _nv12_luma(crop: "np.ndarray") -> "np.ndarray":
+    """取 packed NV12 的原始 Y 平面（(h+ceil(h/2), w) → (h, w)）。"""
+    h = crop.shape[0] * 2 // 3
+    return crop[:h]
+
+
+def _nv12_batch_luma(crops: "np.ndarray") -> "np.ndarray":
+    """批量取 packed NV12 的原始 Y 平面（(B, h+ceil(h/2), w) → (B, h, w)）。"""
+    h = crops.shape[1] * 2 // 3
+    return crops[:, :h]
+
+
+def _nv12_luma_full(crop: "np.ndarray", color_range: int = 0) -> "np.ndarray":
+    """packed NV12 的 Y 平面按流 color_range 展开（复刻 decord gray 输出）。
+
+    limited/tv(0)：floor((raw-16)*255/219 + 0.5) 后 clip 0..255 —— 与
+    decord CPU swscale GRAY8 / GPU gray kernel 逐位一致；full/pc(1) 原样。
+    """
+    y = _nv12_luma(crop)
+    if color_range == 1:
+        return y
+    v = (y.astype(np.float32) - 16.0) * (255.0 / 219.0)
+    return np.clip(np.floor(v + 0.5), 0, 255).astype(np.uint8)
+
+
+def _nv12_batch_luma_full(crops: "np.ndarray", color_range: int = 0) -> "np.ndarray":
+    y = _nv12_batch_luma(crops)
+    if color_range == 1:
+        return y
+    v = (y.astype(np.float32) - 16.0) * (255.0 / 219.0)
+    return np.clip(np.floor(v + 0.5), 0, 255).astype(np.uint8)
+
+
+def nv12_to_rgb(crop: "np.ndarray") -> "np.ndarray":
+    """packed NV12 → RGB（uint8，BT.601 limited 色度矩阵）。
+
+    Y 已由 decoder 按流 range 展开（与 gray 输出一致），UV 为原始
+    4:2:0：chroma 按 2x2 块 nearest 上采样（decord RGB 路径的 MPEG-2
+    siting 语义），再做与 decord improc 相同的 BT.601 矩阵转换。
+    """
+    if crop.ndim != 2:
+        return crop[..., :3] if crop.ndim == 3 else crop
+    rows, w = crop.shape
+    h = rows * 2 // 3
+    # decord yuv420 的 Y/U/V 均为原始 8-bit。RGB 转换复刻 decord improc
+    # 的 BT.601 矩阵语义（系数 1.164/1.596/2.017，0..1 输入、偏移 16/128）
+    y = (crop[:h].astype(np.float32) - 16.0) / 255.0
+    uv_rows = (h + 1) // 2
+    uv = crop[h:h + uv_rows, :w // 2 * 2]
+    u = uv[:, 0::2].astype(np.float32)
+    v = uv[:, 1::2].astype(np.float32)
+    # nearest 上采样到 luma 分辨率（每个 2x2 块共用同一 chroma 样本；
+    # 奇数宽/高时末行末列补中性色度 128）
+    if u.shape[0] * 2 < h:
+        u = np.pad(u, ((0, h - u.shape[0] * 2), (0, 0)),
+                   mode='constant', constant_values=128)
+    if v.shape[0] * 2 < h:
+        v = np.pad(v, ((0, h - v.shape[0] * 2), (0, 0)),
+                   mode='constant', constant_values=128)
+    u = np.repeat(u, 2, axis=0)[:h]
+    v = np.repeat(v, 2, axis=0)[:h]
+    if u.shape[1] * 2 < w:
+        u = np.pad(u, ((0, 0), (0, w - u.shape[1] * 2)),
+                   mode='constant', constant_values=128)
+    if v.shape[1] * 2 < w:
+        v = np.pad(v, ((0, 0), (0, w - v.shape[1] * 2)),
+                   mode='constant', constant_values=128)
+    u = np.repeat(u, 2, axis=1)[:, :w]
+    v = np.repeat(v, 2, axis=1)[:, :w]
+    un = (u - 128.0) / 255.0
+    vn = (v - 128.0) / 255.0
+    r = 1.164383 * y + 1.596027 * vn
+    g = 1.164383 * y - 0.391762 * un - 0.812968 * vn
+    b = 1.164383 * y + 2.017232 * un
+    rgb = np.stack([r, g, b], axis=-1)
+    np.clip(rgb, 0.0, 1.0, out=rgb)
+    return (rgb * 255.0).astype(np.uint8)
+
+
 @dataclass
 class VideoMetadata:
     path: Path

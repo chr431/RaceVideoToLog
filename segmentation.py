@@ -6,13 +6,15 @@ import os as _os
 import numpy as np
 
 import config
-from video_utils import _gray, _GRAY_W
+from video_utils import (_gray, _GRAY_W, _nv12_luma_full,
+                         _nv12_batch_luma_full)
 
 
 def _gray_batch(crops: np.ndarray) -> np.ndarray:
     """批量灰度：(B,H,W,3) → (B,H,W)；decord gray 输出 (B,H,W,1) 直接取通道。
 
-    gray 输出模式（CPU/GPU 解码，decord ≥0.7.9）crops 已是 1 通道，跳过 matmul。
+    gray 输出模式（CPU/GPU 解码，decord ≥0.7.9）crops 已是 1 通道，跳过 matmul；
+    yuv420 模式（≥0.7.10）请用 _gray_seg_yuv/_gray_seg_yuv_batch。
     """
     if crops.shape[-1] == 1:
         return crops[..., 0]
@@ -50,6 +52,16 @@ def _gray_seg(crop: np.ndarray) -> np.ndarray:
 def _gray_seg_batch(crops: np.ndarray) -> np.ndarray:
     """批量分段灰度（_gray_seg 的批量版，含 gamma 钩子）。"""
     return _apply_gamma(_gray_batch(crops), _seg_gamma())
+
+
+def _gray_seg_yuv(crop: np.ndarray, color_range: int = 0) -> np.ndarray:
+    """decord yuv420 crop → 分段灰度：取 Y 平面 + range 展开 + gamma。"""
+    return _apply_gamma(_nv12_luma_full(crop, color_range), _seg_gamma())
+
+
+def _gray_seg_yuv_batch(crops: np.ndarray, color_range: int = 0) -> np.ndarray:
+    """decord yuv420 批量 crops → 批量分段灰度。"""
+    return _apply_gamma(_nv12_batch_luma_full(crops, color_range), _seg_gamma())
 
 
 def _otsu(g: np.ndarray) -> int:

@@ -144,9 +144,9 @@ class ExportControllerMixin:
             frame_start=s["frame_start_edit"].text(),
             frame_end=s["frame_end_edit"].text(),
             monitor_enabled=monitor_enabled,
-            # 灰度解码输出（decord ≥0.7.9 CPU/GPU 都支持）：直出 Y 平面，
-            # 分段灰度跨后端统一（GPU 路径省 RGB→灰转换与 matmul）
-            gray_output=True,
+            # YUV420 解码输出（decord ≥0.7.10）：分段/OCR 只取 Y 平面，
+            # 代表帧保留 YUV 供最终检查前转 RGB 预览
+            yuv_output=True,
             output_path=Path(out),
             parent=self,
         )
@@ -180,8 +180,12 @@ class ExportControllerMixin:
         out = getattr(self, "_review_output_path", None)
         if pipeline is None or out is None:
             return
-        # 段级 review：段值 + 段内缓存的代表帧灰度图，用户可改段值
-        # （段内不混速度，改段=改全段）
+        # 段级 review：段值 + 代表帧彩色预览（YUV 在最终检查前转 RGB），
+        # 用户可改段值（段内不混速度，改段=改全段）
+        try:
+            pipeline.prepare_review_rgb()
+        except Exception:
+            pass  # 转换失败保留灰度/原数组，review 仍可用
         from gui_review import ReviewDialog  # 延迟导入（pyqtgraph ~0.8s）
         dlg = ReviewDialog(self, pipeline.segments,
                            pipeline._max_speed, pipeline._max_accel,

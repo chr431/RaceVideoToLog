@@ -12,7 +12,7 @@
 | cuda-python | — | PyPI | CUDA Python 绑定（TRT 执行 + decord GPU DLL 注册） |
 | tensorrt_cu13_bindings | 11 | PyPI | TensorRT Python 绑定（~1MB） |
 | psutil | 6 | PyPI | 资源监测 RSS / CPU%（可选：缺失时降级为 None，GPU 采样不受影响） |
-| decord | 0.7.9 | 自建仓库 chr431/decord | NVDEC 硬解 + CPU 软件解码；FFmpeg 8.x DLL。**PyPI 版不支持 next_roi / CPU ROI 优化**，见 setup_venv.bat |
+| decord | 0.7.10 | 自建仓库 chr431/decord | NVDEC 硬解 + CPU 软件解码；FFmpeg 8.x DLL。**PyPI 版不支持 next_roi / CPU ROI 优化 / YUV420 输出**，见 setup_venv.bat |
 
 ## GPU 加速（运行时，不打包）
 
@@ -108,7 +108,7 @@ git checkout master && git merge dev && git push
 
 1. 校验版本引用一致性（`tools/version.py`，不一致即中止）
 2. 读取 `config.__version__`，确认 tag `v<版本>` 不存在
-3. 下载 decord fork 发布产物 `decord-<ver>-win64-gpu.zip`（`decord-version` 输入，默认 `0.7.9`）到 `_decord_build\`
+3. 下载 decord fork 发布产物 `decord-<ver>-win64-gpu.zip`（`decord-version` 输入，默认 `0.7.10`）到 `_decord_build\`
 4. `setup_venv.bat --ci` + `build_exe.bat --ci` 构建 EXE（跳过 pause）
 5. 打包 `RaceVideoToLog.<版本>.zip`（dist 布局与现有 release 一致）
 6. 打 tag `v<版本>` + push，创建 GitHub Release（notes 取自 `release_notes.md` 对应节）
