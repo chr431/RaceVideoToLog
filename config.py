@@ -220,6 +220,14 @@ SEG_CONF_MIN_NEIGHBORS: int = 3
 SEG_CONF_SHORT_NEIGHBOR: float = 30.0
 SEG_CONF_EDGE: float = 100.0
 SEG_CONF_MED_GATE: float = 50.0
+# 一致性孤岛下限：连续相同值的累计帧数少于该值，即使局部中值贴合，
+# conf 也封顶到 SHORT_RUN_CAP（不能成为 HIGH_TRUST/DP 锚点）。
+# 两个单帧 127 形成 2 帧孤岛 → 不信任；3 帧以上相同值才允许高置信。
+SEG_CONF_MIN_CONSISTENT_FRAMES: int = 3
+SEG_CONF_SHORT_RUN_CAP: float = 15.0
+# 一致性孤岛还需“脱离曲线”：短相同值相对 run 外邻居中值的偏差
+# > 局部带宽×该倍率 才封顶（防止误伤坡道上的正常短段）
+SEG_CONF_ISLAND_DEV_MULT: float = 3.0
 # A4 孤立尖峰豁免的 conf 上界（下界=SEG_DP_ANCHOR_CONF）
 SEG_DP_DEANCHOR_CONF_MAX: float = 50.0
 # OCR 引擎内部：ONNX 单批上限与 CTC 归约分块（内存峰值控制）

@@ -28,6 +28,8 @@
   CLI `--from-csv` 与 GUI「导入 CSV 设置」均生效
 - 进度条/CLI 进度现在跟随真实管线：解码 3→58、OCR 58→86、纠错 88→100，
   TensorRT 首次构建引擎时会明确提示“正在构建”
+- 后处理新增“一致性孤岛”保护：连续相同值的累计帧数过少、且明显脱离
+  局部曲线时，不再获得 HIGH_TRUST / DP 锚定（防止两个误读互相撑腰）
 - 日志级别（CLI `--log-level` / GUI 下拉）现在真正生效：normal=INFO、
   detailed=项目 DEBUG、debug=全部 DEBUG
 - 清理大量无调用者代码（邻帧一致性评分、候选生成、旧 GPU 后端选择、

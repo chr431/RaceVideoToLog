@@ -123,6 +123,26 @@ def correct_segments(seg_vals: list, seg_times: list, suspect: list, *,
     return out, n_corr
 
 
+def _consistent_run_frames(seg_vals: list, seg_lens, i: int) -> int:
+    """连续相同值的累计帧数（一致性孤岛长度）。
+
+    只看“值完全相同”的相邻段；seg_lens 缺省时按每段 1 帧计。
+    """
+    v = seg_vals[i]
+    if v is None:
+        return 0
+    total = int(seg_lens[i]) if seg_lens is not None and i < len(seg_lens) else 1
+    j = i - 1
+    while j >= 0 and seg_vals[j] == v:
+        total += int(seg_lens[j]) if seg_lens is not None and j < len(seg_lens) else 1
+        j -= 1
+    j = i + 1
+    while j < len(seg_vals) and seg_vals[j] == v:
+        total += int(seg_lens[j]) if seg_lens is not None and j < len(seg_lens) else 1
+        j += 1
+    return total
+
+
 def confidence_scores(seg_vals: list, seg_times: list, seg_lens=None, *,
                       med_k: int = config.SEG_MED_K,
                       detect_floor: float = config.SEG_DETECT_FLOOR,
@@ -141,20 +161,26 @@ def confidence_scores(seg_vals: list, seg_times: list, seg_lens=None, *,
     n = len(seg_vals)
     bw_raw = local_bandwidth(seg_vals, seg_times, win)
     conf = [0.0] * n
+    # 结构性分支（邻居不足/边缘）不参与“一致性孤岛”封顶：它们已有
+    # 各自的保守/信任语义，且视频起止的短段不应被误伤。
+    island_cap_eligible = [True] * n
     for i in range(n):
         if seg_vals[i] is None:
             conf[i] = 0.0
+            island_cap_eligible[i] = False
             continue
         lo = max(0, i - med_k)
         hi = min(n, i + med_k + 1)
         nbrs = [seg_vals[j] for j in range(lo, hi) if seg_vals[j] is not None]
         if len(nbrs) < config.SEG_CONF_MIN_NEIGHBORS:
             conf[i] = config.SEG_CONF_SHORT_NEIGHBOR
+            island_cap_eligible[i] = False
             continue
         lefts = any(seg_vals[j] is not None for j in range(lo, i))
         rights = any(seg_vals[j] is not None for j in range(i + 1, hi))
         if not (lefts and rights):
             conf[i] = config.SEG_CONF_EDGE
+            island_cap_eligible[i] = False
             continue
         med = float(np.median(nbrs))
         dev = abs(seg_vals[i] - med)
@@ -173,6 +199,33 @@ def confidence_scores(seg_vals: list, seg_times: list, seg_lens=None, *,
             conf[i] = (conf_w_med * med_score + conf_w_jerk * jerk_score)
         else:
             conf[i] = med_score
+    # 一致性孤岛封顶：连续相同值累计帧数太少、且该值明显脱离 run 外邻居
+    # 的中值（局部曲线）时，即使原 conf 高分也不能作为 HIGH_TRUST / DP 锚点。
+    # 坡道上的正常短段（如 315 夹在 311/318 之间）偏差小，不封顶。
+    for i in range(n):
+        if seg_vals[i] is None or not island_cap_eligible[i]:
+            continue
+        if _consistent_run_frames(seg_vals, seg_lens, i) \
+                >= config.SEG_CONF_MIN_CONSISTENT_FRAMES:
+            continue
+        v = seg_vals[i]
+        lo = max(0, i - med_k)
+        hi = min(n, i + med_k + 1)
+        # 找出连续相同值区间 [l, r]，只取区间外的邻居评估“曲线支持”
+        l = r = i
+        while l > 0 and seg_vals[l - 1] == v:
+            l -= 1
+        while r + 1 < n and seg_vals[r + 1] == v:
+            r += 1
+        outside = [seg_vals[j] for j in range(lo, hi)
+                   if seg_vals[j] is not None and (j < l or j > r)]
+        if len(outside) < config.SEG_CONF_MIN_NEIGHBORS:
+            continue
+        outside_med = float(np.median(outside))
+        dev = abs(v - outside_med)
+        if dev > max(bw_raw[i], detect_floor) \
+                * config.SEG_CONF_ISLAND_DEV_MULT:
+            conf[i] = min(conf[i], config.SEG_CONF_SHORT_RUN_CAP)
     return conf
 
 
