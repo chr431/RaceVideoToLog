@@ -68,6 +68,37 @@ def test_explicit_arg_equals_form_wins(tmp_path):
     assert args.buffer == 32, "--flag=value 形式也应被识别为显式指定"
 
 
+# ═══════════════ ocr_backend 实际引擎导入 ═══════════════
+
+def test_csv_ocr_backend_actual_engine_normalized(tmp_path):
+    """CSV 只写实际引擎：onnxruntime 应归一化为可请求的 cpu。"""
+    csv = _csv(tmp_path, "# ocr_backend=onnxruntime")
+    args = _args(from_csv=csv)
+    apply_csv_settings(args, DEFAULTS, argv=["prog"])
+    assert args.ocr_backend == "cpu"
+
+
+def test_csv_ocr_backend_tensorrt_roundtrip(tmp_path):
+    csv = _csv(tmp_path, "# ocr_backend=tensorrt")
+    args = _args(from_csv=csv)
+    apply_csv_settings(args, DEFAULTS, argv=["prog"])
+    assert args.ocr_backend == "tensorrt"
+
+
+def test_csv_ocr_backend_hybrid_maps_auto(tmp_path):
+    csv = _csv(tmp_path, "# ocr_backend=tensorrt+onnxruntime")
+    args = _args(from_csv=csv)
+    apply_csv_settings(args, DEFAULTS, argv=["prog"])
+    assert args.ocr_backend == "auto"
+
+
+def test_explicit_ocr_backend_wins_over_csv(tmp_path):
+    csv = _csv(tmp_path, "# ocr_backend=onnxruntime")
+    args = _args(from_csv=csv, ocr_backend="tensorrt")
+    apply_csv_settings(args, DEFAULTS, argv=["prog", "--ocr-backend", "tensorrt"])
+    assert args.ocr_backend == "tensorrt"
+
+
 # ═══════════════ 只读字段与坏值 ═══════════════
 
 def test_readonly_fields_skipped(tmp_path):

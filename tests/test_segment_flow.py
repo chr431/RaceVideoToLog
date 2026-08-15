@@ -136,6 +136,7 @@ def test_write_csv_header_parsable(tmp_path):
     p = _pipe()
     p._fps = 30.0
     p._backend = "decord/GPU"
+    p._ocr_backend_used = "tensorrt"
     p._n_segments = 5
     p._n_corr = 1
     p.timing = {"decode": 1.0, "total": 2.0}
@@ -145,3 +146,5 @@ def test_write_csv_header_parsable(tmp_path):
     assert s, "CSV 头应能被解析"
     assert parse_csv_setting("roi", s["roi"]) == [0, 0, 10, 10]
     assert float(s["max_speed"]) == 400.0
+    assert s["ocr_backend"] == "tensorrt", "CSV 只写实际使用的 OCR 引擎"
+    assert "ocr_backend_requested" not in s, "请求值 auto 不得写入 CSV 头"

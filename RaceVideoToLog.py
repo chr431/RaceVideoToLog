@@ -40,7 +40,8 @@ def apply_csv_settings(args, defaults: dict, argv=None) -> "object":
     """
     if not getattr(args, "from_csv", None):
         return args
-    from ocr_engine import parse_csv_header, parse_csv_setting, csv_field_dest
+    from ocr_engine import (parse_csv_header, parse_csv_setting,
+                            csv_field_dest, normalize_ocr_backend)
     argv = sys.argv if argv is None else argv
     # 命令行显式写出的参数（即使等于默认值）优先于 CSV。
     _explicit = {
@@ -57,7 +58,12 @@ def apply_csv_settings(args, defaults: dict, argv=None) -> "object":
         cur = getattr(args, dest)
         if cur != defaults.get(dest):
             continue  # 已非默认值 — 跳过
-        parsed = parse_csv_setting(key, val)
+        if key == "ocr_backend":
+            # CSV 记录的是实际引擎（onnxruntime/tensorrt/…），需归一化
+            # 到 CLI 可请求值（auto/cpu/tensorrt）再回填
+            parsed = normalize_ocr_backend(val)
+        else:
+            parsed = parse_csv_setting(key, val)
         if parsed is not None:
             setattr(args, dest, parsed)
     return args

@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 # ── 公共符号 re-export（只保留实际有消费者的 API）──
 from csv_io import (  # noqa: F401
     parse_csv_setting, csv_field_dest, parse_csv_header,
+    normalize_ocr_backend,
 )
 from ocr_text import (  # noqa: F401
     extract_speed_value,

@@ -6,6 +6,8 @@
 """
 from __future__ import annotations
 
+import threading
+
 import numpy as np
 
 import config
@@ -31,7 +33,9 @@ class ReviewDialog(ReviewChartMixin, QDialog):
                  max_speed: float,
                  max_accel: float = config.DEFAULT_MAX_ACCEL,
                  fps: float = 1.0,
-                 preview_loader=None) -> None:
+                 preview_loader=None,
+                 is_crop_cached=None,
+                 preload_loader=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("最终检查 — 点击图中任意段修正该段速度")
         self.resize(1200, 750)
@@ -45,10 +49,24 @@ class ReviewDialog(ReviewChartMixin, QDialog):
         # preview_loader(frame) -> RGB ROI ndarray；None 时回退到段内保存的
         # 灰度代表帧（生产管线 gray 输出不含色彩）
         self._preview_loader = preview_loader
+        # is_crop_cached(frame) -> bool：帧的 RGB 是否已进 pipeline 缓存。
+        # 未缓存时主线程不调用 preview_loader（其内部会 seek 解码卡 UI），
+        # 先显示灰度占位，等后台预取完成后再重试换彩。
+        self._is_crop_cached = is_crop_cached
+        # preload_loader(frames, priority_frame=..., stop_event=...)：
+        # 后台批量预取全部代表帧 RGB 的 pipeline 入口。
+        self._preload_loader = preload_loader
+        self._preload_thread: threading.Thread | None = None
+        self._preload_stop = threading.Event()
+        # 可变优先级 {"frame": int, "rev": int}：用户跳到未缓存段时更新，
+        # 后台预取线程据此把该目标重排到剩余队列最前
+        self._preload_priority: dict | None = None
+        self._rgb_retry_pending: set[int] = set()
         # 预览源图缓存：切段/窗口缩放只重新缩放已解码的 QPixmap，
         # 不重复 seek/解码（修复初次显示裁剪与切段卡顿）
         self._preview_source: QPixmap | None = None
         self._preview_source_seg: int = -1
+        self._preview_source_rgb: bool = False
         # 修正：段索引 → 新值（应用到整个段范围）
         self._corrections: dict[int, float] = {}
         self._current_seg: int = 0
@@ -60,6 +78,9 @@ class ReviewDialog(ReviewChartMixin, QDialog):
         # 等布局真正完成后再初始化当前段显示，避免用布局尚未稳定时的
         # label 尺寸缩放图像（旧 bug：初始图被放大裁边）
         QTimer.singleShot(0, lambda: self._navigate_to(self._current_seg))
+        # 后台开始缓存全部代表帧 RGB：按距离当前段排序，附近先可用；
+        # 长距离点击时若目标尚未缓存，先显示灰度占位，不阻塞 UI
+        QTimer.singleShot(100, self._start_rgb_preload)
 
     # ═══════════════ UI 构建 ═══════════════
 
@@ -207,30 +228,46 @@ class ReviewDialog(ReviewChartMixin, QDialog):
     # ═══════════════ 图像 + 导航 ═══════════════
 
     def _show_seg_image(self, si: int) -> None:
-        """加载段 si 的代表帧原图（仅首次），随后按当前 label 尺寸缩放。
+        """加载段 si 的代表帧（仅首次），随后按当前 label 尺寸缩放。
 
         源图缓存为 QPixmap；resizeEvent/切回已看段都只做缩放，不重新解码。
+        彩色源图来自 pipeline 的 RGB 缓存：后台预取完成前先显示段内灰度
+        占位并定时重试，主线程绝不 seek/解码（长距离跳转不卡 UI）。
         """
         if not (0 <= si < len(self._segments)):
             self._img_label.setText("(无图像)")
             return
         if si == self._preview_source_seg and self._preview_source is not None:
-            self._apply_image_scale()
-            return
+            # 已是彩色源图（或没有 loader 可升级）→ 直接缩放显示。
+            # 灰度占位时继续往下走，等待 RGB 缓存就绪后升级。
+            if self._preview_loader is None or self._preview_source_rgb:
+                self._apply_image_scale()
+                return
         seg = self._segments[si]
         crop = seg.get("rep_crop")
-        # 生产管线保存的是 gray 输出；需要原始 RGB 时通过 preview_loader
-        # 惰性解码（失败/无 loader 则回退灰度显示，保证不会黑屏）
-        if crop is not None and self._preview_loader is not None:
-            try:
-                color = self._preview_loader(int(seg.get("rep_frame", -1)))
-                if color is not None and color.size > 0:
-                    crop = color
-            except Exception:
-                pass
+        rep_frame = int(seg.get("rep_frame", -1))
+        color = None
+        # 生产管线保存的是 gray 输出；原始 RGB 在 pipeline 缓存里按需取。
+        # 仅在确认缓存就绪后调用 loader（未就绪的调用会 seek+解码阻塞 UI）
+        if self._preview_loader is not None and rep_frame >= 0:
+            cached = (self._is_crop_cached is None
+                      or self._is_crop_cached(rep_frame))
+            if cached:
+                try:
+                    color = self._preview_loader(rep_frame)
+                except Exception:
+                    color = None
+            if color is None and self._is_crop_cached is not None:
+                # 后台预取还没跑到这一帧：把目标提到剩余队列最前，
+                # 先灰度显示，稍后自动升级为彩色
+                self._prioritize_rgb_preload(rep_frame)
+                self._schedule_rgb_retry(si)
+        if color is not None and color.size > 0:
+            crop = color
         if crop is None or crop.size <= 0:
             self._preview_source = None
             self._preview_source_seg = -1
+            self._preview_source_rgb = False
             self._img_label.setText("(无图像)")
             return
         if crop.ndim == 2:
@@ -247,7 +284,21 @@ class ReviewDialog(ReviewChartMixin, QDialog):
                       QImage.Format.Format_RGB888).copy()
         self._preview_source = QPixmap.fromImage(qimg)
         self._preview_source_seg = si
+        self._preview_source_rgb = (color is not None and color.size > 0)
         self._apply_image_scale()
+
+    def _schedule_rgb_retry(self, si: int) -> None:
+        """RGB 缓存未就绪时安排一次重试（同一段只挂一个定时器）。"""
+        if si in self._rgb_retry_pending:
+            return
+        self._rgb_retry_pending.add(si)
+        QTimer.singleShot(250, lambda: self._retry_rgb(si))
+
+    def _retry_rgb(self, si: int) -> None:
+        self._rgb_retry_pending.discard(si)
+        if (self.isVisible() and si == self._current_seg
+                and 0 <= si < len(self._segments)):
+            self._show_seg_image(si)
 
     def _apply_image_scale(self) -> None:
         """把缓存的源图按当前 label 尺寸缩放显示（窗口变化时不重新解码）。"""
@@ -313,26 +364,60 @@ class ReviewDialog(ReviewChartMixin, QDialog):
                                         else f"速度: {v:.0f} km/h")
         self._btn_delete.setEnabled(si in self._corrections)
         self._redraw_chart()
-        # 延迟预取相邻段原图：用户连续翻段/点击附近散点时命中缓存，
-        # 消除每次切段都 seek 解码的卡顿
-        QTimer.singleShot(30, lambda: self._prefetch_neighbors(si))
 
-    def _prefetch_neighbors(self, si: int) -> None:
-        if self._preview_loader is None:
+    def _start_rgb_preload(self) -> None:
+        """后台缓存全部代表帧 RGB：先按当前段排序，点击新目标时重排。"""
+        if self._preload_loader is None or not self._segments:
             return
-        targets = [j for j in range(si - 3, si + 4)
-                   if 0 <= j < len(self._segments) and j != si]
+        frames: list[int] = []
+        for seg in self._segments:
+            rf = int(seg.get("rep_frame", -1))
+            if rf >= 0:
+                frames.append(rf)
+        if not frames:
+            return
+        if self._preload_priority is None:
+            priority = None
+            if 0 <= self._current_seg < len(self._segments):
+                priority = int(self._segments[self._current_seg].get(
+                    "rep_frame", -1))
+            self._preload_priority = {"frame": priority or 0, "rev": 0}
+        self._preload_stop.clear()
 
         def _worker() -> None:
-            for j in targets:
-                try:
-                    self._preview_loader(
-                        int(self._segments[j].get("rep_frame", -1)))
-                except Exception:
-                    pass
+            try:
+                self._preload_loader(
+                    list(frames),
+                    priority_frame=self._preload_priority["frame"],
+                    stop_event=self._preload_stop,
+                    priority_ref=self._preload_priority)
+            except Exception:
+                # 预取失败不阻断：点击未缓存段时走灰度占位 + 重试
+                pass
 
-        import threading
-        threading.Thread(target=_worker, daemon=True).start()
+        self._preload_thread = threading.Thread(
+            target=_worker, name="rgb-preload", daemon=True)
+        self._preload_thread.start()
+
+    def _prioritize_rgb_preload(self, rep_frame: int) -> None:
+        """通知预取线程：用户刚跳到 rep_frame，把它提到剩余队列最前。"""
+        if self._preload_priority is None:
+            self._preload_priority = {"frame": int(rep_frame), "rev": 1}
+        else:
+            self._preload_priority["frame"] = int(rep_frame)
+            self._preload_priority["rev"] = self._preload_priority.get(
+                "rev", 0) + 1
+
+    def stop_rgb_preload(self) -> None:
+        """停止后台 RGB 预取（对话框关闭时调用，允许安全释放 reader）。"""
+        self._preload_stop.set()
+        thread = self._preload_thread
+        if (thread is not None and thread.is_alive()
+                and thread is not threading.current_thread()):
+            # 最多等一个批解码完成；超时后 daemon 线程也会在下一批
+            # 开始前检查 stop_event 退出，pipeline 锁保证不会重开 reader
+            thread.join(timeout=2.0)
+        self._preload_thread = None
 
     def _on_spinbox_changed(self, value: int) -> None:
         si = self._current_seg
@@ -344,6 +429,7 @@ class ReviewDialog(ReviewChartMixin, QDialog):
         self._redraw_chart()
 
     def closeEvent(self, event) -> None:
+        self.stop_rgb_preload()
         ThemeManager.unregister(getattr(self, '_theme_cb', lambda dark: None))
         super().closeEvent(event)
 

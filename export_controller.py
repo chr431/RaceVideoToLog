@@ -71,6 +71,13 @@ class ExportControllerMixin:
                 "auto": 0, "cpu": 1, "nvdec": 2,
                 "decord/cpu": 1, "decord/gpu": 2,
             }),
+            # CSV 的 ocr_backend 记录实际引擎：onnxruntime → CPU；
+            # tensorrt+onnxruntime 是实验混合（env 开关），GUI 无对应
+            # 项，归一到 auto（开启 RVTOL_HYBRID_OCR 时 auto 可重现）
+            "ocr_backend": (s["ocr_backend_combo"], {
+                "auto": 0, "cpu": 1, "onnxruntime": 1,
+                "tensorrt": 2, "tensorrt+onnxruntime": 0,
+            }),
         }
         for key, (combo, mapping) in _combo_map.items():
             val = parse_csv_setting(key, settings.get(key, ""))
@@ -178,10 +185,18 @@ class ExportControllerMixin:
         dlg = ReviewDialog(self, pipeline.segments,
                            pipeline._max_speed, pipeline._max_accel,
                            pipeline._fps or 1.0,
-                           preview_loader=pipeline.load_rgb_crop)
+                           preview_loader=pipeline.load_rgb_crop,
+                           is_crop_cached=pipeline.is_rgb_cached,
+                           preload_loader=pipeline.preload_rgb_crops)
         self._gui_mark("final_check: before exec")
         accepted = dlg.exec() == QDialog.DialogCode.Accepted
         corrections = dlg.get_corrections()
+        # 停止后台 RGB 预取并释放全部代表帧缓存（~87MB 量级）
+        dlg.stop_rgb_preload()
+        try:
+            pipeline.clear_rgb_cache()
+        except Exception:
+            pass
         self._gui_mark("final_check: dialog closed")
         # finalize（写 CSV/统计）在 frozen 环境可能被安全扫描拖慢数秒 →
         # 后台执行，完成后回主线程收尾

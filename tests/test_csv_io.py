@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from csv_io import parse_csv_header, parse_csv_setting, csv_field_dest
+from csv_io import (parse_csv_header, parse_csv_setting, csv_field_dest,
+                    normalize_ocr_backend)
 
 
 # ═══════════════ parse_csv_header ═══════════════
@@ -64,6 +65,7 @@ def test_parse_setting_types():
     assert parse_csv_setting("fill_width", "224") == 224
     assert parse_csv_setting("format", "km/h") == "km/h"
     assert parse_csv_setting("model", "v6_small") == "v6_small"
+    assert parse_csv_setting("ocr_backend", "onnxruntime") == "onnxruntime"
 
 
 def test_parse_setting_failures():
@@ -82,4 +84,17 @@ def test_field_dest_mapping():
     assert csv_field_dest("model") == "ocr_model"          # key ≠ dest
     assert csv_field_dest("fps") == "fps"
     assert csv_field_dest("codec") == "codec"
+    assert csv_field_dest("ocr_backend") == "ocr_backend"  # 实际引擎 → argparse dest
     assert csv_field_dest("no_such") is None
+
+
+# ═══════════════ ocr_backend 实际引擎归一化 ═══════════════
+
+def test_normalize_ocr_backend_actual_engine():
+    assert normalize_ocr_backend("onnxruntime") == "cpu"
+    assert normalize_ocr_backend("tensorrt") == "tensorrt"
+    assert normalize_ocr_backend("cpu") == "cpu"
+    assert normalize_ocr_backend("auto") == "auto"
+    # 实验混合（env 开关）：GUI/CLI 无对应项，归一化到 auto
+    assert normalize_ocr_backend("tensorrt+onnxruntime") == "auto"
+    assert normalize_ocr_backend(" Unknown ") is None
