@@ -1,10 +1,8 @@
-"""OCR 文本提取与候选生成。"""
+"""OCR 文本提取（速度数字解析）。"""
 from __future__ import annotations
-import math
 import re
 
-from config import SOURCE_TO_KMH
-from constants import OCR_NUMBER_RE, CONFUSION_MAP as _CONFUSION_MAP
+from constants import OCR_NUMBER_RE
 
 
 def normalize_ocr_text(text: str) -> str:
@@ -31,6 +29,8 @@ def normalize_ocr_text(text: str) -> str:
         }
     )
     return text.translate(translation)
+
+
 def _extract_speed_from_text(raw_text: str, conf: float) -> tuple[float | None, str | None, float]:
     """从单行识别文本提取速度值（extract_speed_value 的核心逻辑）。
 
@@ -50,6 +50,8 @@ def _extract_speed_from_text(raw_text: str, conf: float) -> tuple[float | None, 
         return int(float(digits)), digits, conf
     except ValueError:
         return None, None, conf
+
+
 def extract_speed_value(ocr_result: "object | None") -> tuple[float | None, str | None, float]:
     """从 OCR 结果（OcrEngine RecOut，带 .txts/.scores）中提取速度值和置信度。
 
@@ -68,55 +70,3 @@ def extract_speed_value(ocr_result: "object | None") -> tuple[float | None, str 
         return _extract_speed_from_text(str(txts[0]), conf)
 
     return None, None, 0.0
-def build_speed_candidates(raw_text: str, max_speed_kmh: float) -> list[int]:
-    """根据 OCR 原始文本生成可能的速度候选值。
-
-    策略:
-    1. 数字后缀扩展: OCR "60" → 候选 60/160/260(处理丢位)
-    2. 常见字符混淆替换: 6↔8, 3↔8, 5↔6, 0↔8, 1↔7 等
-    """
-    if max_speed_kmh <= 0:
-        return []
-
-    text = re.sub(r"\D", "", raw_text)
-    if not text:
-        return []
-
-    max_speed_int = int(math.floor(max_speed_kmh))
-    if max_speed_int < 0:
-        return []
-
-    candidates: set[int] = set()
-
-    # 策略1: 保留原始值
-    try:
-        val = int(text)
-        if val <= max_speed_int:
-            candidates.add(int(val))
-    except ValueError:
-        pass
-
-    # 策略2: 后缀扩展（处理丢位）
-    min_suffix_len = 1 if len(text) == 1 else max(1, len(text) - 2)
-    for suffix_len in range(min_suffix_len, len(text) + 1):
-        suffix_text = text[-suffix_len:]
-        try:
-            suffix_value = int(suffix_text)
-        except ValueError:
-            continue
-        step = 10 ** suffix_len
-        for candidate in range(suffix_value, max_speed_int + 1, step):
-            candidates.add(int(candidate))
-
-    # 策略3: 常见 OCR 字符混淆替换（对称映射）
-    for i, ch in enumerate(text):
-        for alt in _CONFUSION_MAP.get(ch, []):
-            altered = text[:i] + alt + text[i+1:]
-            try:
-                val = int(altered)
-                if val <= max_speed_int:
-                    candidates.add(int(val))
-            except ValueError:
-                pass
-
-    return sorted(candidates)

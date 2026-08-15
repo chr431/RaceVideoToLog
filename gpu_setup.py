@@ -1,78 +1,23 @@
-"""GPU 加速配置 — 后端选择 + DLL 搜索路径注册。
+"""GPU DLL 搜索路径注册。
 
-从 PATH 扫描 CUDA / TensorRT 目录，注册到 Windows DLL 搜索路径，
-并提供自动后端选择（TensorRT → CPU 回退链）。
+从 PATH 扫描 CUDA / cuDNN / TensorRT 目录并注册到 Windows DLL 搜索路径。
+OcrEngine 初始化 TensorRT 前调用 ensure_gpu_initialized()；旧的后端选择
+（select_backend/get_engine_type/get_setup_advice）已废弃：OcrEngine 自身
+按 engine_type 直接初始化并在失败时回退 ONNX。
 """
 from __future__ import annotations
 import logging
 import os as _os
 
-import config
-
-# ── ONNX CPU 性能优化：设置 OpenMP 环境变量 ──
-# 避免线程忙等，降低 CPU 空转
-_os.environ.setdefault("OMP_WAIT_POLICY", "PASSIVE")
-
 logger = logging.getLogger("RaceVideoToLog.gpu_setup")
 
 # ═══════════════════ 内部状态 ═══════════════════
 _gpu_initialized: bool = False
-_gpu_backend: str = "CPU"
 _dll_dir_cookies: list = []  # 保持 os.add_dll_directory() 返回值存活
 
-# 后端优先级：用户选择 → 回退链
-_BACKEND_FALLBACK: dict[str, list[str]] = {
-    "auto": ["TensorRT", "CPU"],
-    "tensorrt": ["TensorRT", "CPU"],
-    "cpu":  ["CPU"],
-}
 
-def get_gpu_backend() -> str:
-    """返回当前实际使用的 GPU 后端名称（TensorRT / CUDA / CPU）。"""
-    return _gpu_backend
-
-
-def get_engine_type() -> str:
-    """返回引擎类型字符串 ('tensorrt' | 'onnxruntime')。"""
-    return "tensorrt" if _gpu_backend == "TensorRT" else "onnxruntime"
-
-
-def _has_nvidia_gpu() -> bool:
-    """检测是否存在 NVIDIA GPU（通过驱动）。不依赖 CUDA Toolkit。"""
-    try:
-        import ctypes as _ct
-        _ct.CDLL("nvcuda.dll")
-        return True
-    except (OSError, Exception):
-        pass
-    # Fallback: 检查 WMI
-    try:
-        import subprocess as _sp
-        _result = _sp.run(
-            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
-            capture_output=True, text=True, timeout=10,
-            creationflags=0x08000000 if _os.name == "nt" else 0)
-        return _result.returncode == 0 and bool(_result.stdout.strip())
-    except Exception:
-        pass
-    return False
-
-
-def get_setup_advice() -> str | None:
-    """返回面向用户的 GPU 加速配置建议。None 表示已在使用 GPU。"""
-    if _gpu_backend != "CPU":
-        return None
-    if not _has_nvidia_gpu():
-        return "未检测到 NVIDIA 显卡，OCR 将使用 CPU 推理。"
-    return (
-        "检测到 NVIDIA 显卡，但 PATH 中未找到 TensorRT DLL。\n"
-        "将 CUDA Toolkit 13.x 和 TensorRT 11.x 的 bin 目录加入 PATH 即可。\n"
-        "详见 README 的「GPU 加速配置」章节。"
-    )
-
-
-def _ensure_gpu_initialized() -> None:
-    """延迟初始化 GPU：首次调用时扫描并加载 CUDA/cuDNN DLL。"""
+def ensure_gpu_initialized() -> None:
+    """延迟初始化 GPU：首次调用时扫描并加载 CUDA/cuDNN/TensorRT DLL。"""
     global _gpu_initialized
     if not _gpu_initialized:
         _gpu_initialized = True
@@ -181,45 +126,3 @@ def _register_gpu_dlls() -> None:
         logger.info("TensorRT DLL 未在 PATH 中找到 (搜索了 %d 个目录)", len(_path_entries))
     logger.info("GPU DLL 搜索路径注册: %d 个目录 (TRT:%d CUDA:%d)",
         _registered, len(_found_trt), len(_found_cuda))
-
-
-def select_backend(preferred: str = "auto") -> str:
-    """按用户偏好选择 OCR 后端，不可用时自动回退。
-
-    首次调用时触发 GPU DLL 延迟初始化。返回后端名称字符串。
-    """
-    global _gpu_backend
-
-    _ensure_gpu_initialized()
-
-    chain = _BACKEND_FALLBACK.get(preferred.lower(), _BACKEND_FALLBACK["auto"])
-    chosen: str | None = None
-
-    for candidate in chain:
-        if candidate == "TensorRT":
-            try:
-                import tensorrt as _trt_check  # noqa: F401
-                chosen = "TensorRT"
-                break
-            except Exception as _trt_err:
-                logger.info("TensorRT import failed (%s), falling back", _trt_err)
-                continue
-        else:
-            chosen = "CPU"
-            break
-    if chosen is None:
-        chosen = "CPU"
-
-
-
-    _gpu_backend = chosen
-    config.set_gpu_backend(chosen)
-    logger.info("OCR 后端已选择: %s", chosen)
-    return _gpu_backend
-
-
-def reset_backend() -> None:
-    """重置后端选择状态，允许用户在运行时切换后端。"""
-    global _gpu_backend
-    _gpu_backend = "CPU"
-    config.set_gpu_backend("CPU")

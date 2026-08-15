@@ -1,0 +1,105 @@
+{
+  "version": "2.15.1",
+  "note": "错误案例代表帧的 OCR 行为锁定（expected_raw 是基线产出）。若 OCR/预处理/模型改动改变读数，属有意改动：先跑完整漏斗（tools/accuracy_breakdown.py）确认无回归，再重新生成本夹具。",
+  "cases": [
+    {
+      "file": "test_frame_00798.npy",
+      "video": "test",
+      "seg_index": 73,
+      "rep_frame": 798,
+      "expected_raw": 101,
+      "expected_corr": 101,
+      "truth": 103
+    },
+    {
+      "file": "test_frame_01462.npy",
+      "video": "test",
+      "seg_index": 324,
+      "rep_frame": 1462,
+      "expected_raw": 169,
+      "expected_corr": 169,
+      "truth": 167
+    },
+    {
+      "file": "test_frame_03435.npy",
+      "video": "test",
+      "seg_index": 1253,
+      "rep_frame": 3435,
+      "expected_raw": 121,
+      "expected_corr": 121,
+      "truth": 123
+    },
+    {
+      "file": "test2_frame_01141.npy",
+      "video": "test2",
+      "seg_index": 228,
+      "rep_frame": 1141,
+      "expected_raw": 118,
+      "expected_corr": 118,
+      "truth": 116
+    },
+    {
+      "file": "test2_frame_01439.npy",
+      "video": "test2",
+      "seg_index": 339,
+      "rep_frame": 1439,
+      "expected_raw": 168,
+      "expected_corr": 168,
+      "truth": 170
+    },
+    {
+      "file": "test2_frame_01596.npy",
+      "video": "test2",
+      "seg_index": 387,
+      "rep_frame": 1596,
+      "expected_raw": 140,
+      "expected_corr": 144,
+      "truth": 146
+    },
+    {
+      "file": "test2_frame_01620.npy",
+      "video": "test2",
+      "seg_index": 403,
+      "rep_frame": 1620,
+      "expected_raw": 143,
+      "expected_corr": 143,
+      "truth": 145
+    },
+    {
+      "file": "test2_frame_01841.npy",
+      "video": "test2",
+      "seg_index": 483,
+      "rep_frame": 1841,
+      "expected_raw": 154,
+      "expected_corr": 154,
+      "truth": 156
+    },
+    {
+      "file": "test2_frame_02466.npy",
+      "video": "test2",
+      "seg_index": 750,
+      "rep_frame": 2466,
+      "expected_raw": 168,
+      "expected_corr": 168,
+      "truth": 166
+    },
+    {
+      "file": "test2_frame_02871.npy",
+      "video": "test2",
+      "seg_index": 923,
+      "rep_frame": 2871,
+      "expected_raw": 21,
+      "expected_corr": 213,
+      "truth": 215
+    },
+    {
+      "file": "test2_frame_03095.npy",
+      "video": "test2",
+      "seg_index": 957,
+      "rep_frame": 3095,
+      "expected_raw": 223,
+      "expected_corr": 223,
+      "truth": 221
+    }
+  ]
+}

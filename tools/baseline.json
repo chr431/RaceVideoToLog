@@ -1,0 +1,62 @@
+{
+  "tol": 1.0,
+  "version": "2.15.1",
+  "updated": "2026-08-14",
+  "note": "最终错误数是唯一门禁指标（任何算法/预处理改动不得使任一视频或总量的最终错误数增加）。其余指标仅供诊断。",
+  "videos": {
+    "test": {
+      "seg": 1536,
+      "raw": 74,
+      "fix": 71,
+      "fix_wrong": 0,
+      "missed": 3,
+      "harm": 0,
+      "final": 3
+    },
+    "test2": {
+      "seg": 1264,
+      "raw": 54,
+      "fix": 46,
+      "fix_wrong": 2,
+      "missed": 6,
+      "harm": 0,
+      "final": 8
+    },
+    "test3": {
+      "seg": 1146,
+      "raw": 0,
+      "fix": 0,
+      "fix_wrong": 0,
+      "missed": 0,
+      "harm": 0,
+      "final": 0
+    },
+    "test5": {
+      "seg": 2533,
+      "raw": 7,
+      "fix": 7,
+      "fix_wrong": 0,
+      "missed": 0,
+      "harm": 0,
+      "final": 0
+    },
+    "test6": {
+      "seg": 8096,
+      "raw": 17,
+      "fix": 17,
+      "fix_wrong": 0,
+      "missed": 0,
+      "harm": 0,
+      "final": 0
+    }
+  },
+  "total": {
+    "seg": 14575,
+    "raw": 152,
+    "fix": 141,
+    "fix_wrong": 2,
+    "missed": 9,
+    "harm": 0,
+    "final": 11
+  }
+}

@@ -21,6 +21,7 @@ from widget_utils import (make_static_card, make_int_spinbox,
     make_brush, ModPlotWidget)
 
 from analysis import parse_csv, smooth_data
+from analysis_plot import plot_segmented_pg, plot_wrapped_pg
 import config
 from config import (COLOR_BLUE, COLOR_ORANGE, COLOR_GREEN, MPS_TO_KMH, chart_colors)
 
@@ -38,15 +39,6 @@ def _shift_csv(times, dists, speeds, flags, offset: int):
             speeds[k:] + speeds[:k], flags[k:] + flags[:k])
 
 
-def _read_fps(path: str) -> float:
-    """读取 CSV 头的 fps（偏移秒数换算用）。"""
-    from csv_io import parse_csv_header
-    try:
-        return float(parse_csv_header(path).get("fps", "0"))
-    except (ValueError, TypeError):
-        return 0.0
-
-
 class AnalysisTab:
     """数据分析 Tab — 嵌入 QStackedWidget，修改自动刷新。"""
 
@@ -54,6 +46,9 @@ class AnalysisTab:
         # pyqtgraph：无 Figure 类缓存
 
         self._stack = stack
+
+        # 由 _build_tab 创建的顶层 QWidget（切 tab 用）
+        self._tab: QWidget | None = None
 
         # 状态
         self._csvs: list[str | None] = [None, None, None]
@@ -66,13 +61,13 @@ class AnalysisTab:
         self._smooth_str: int = 0
         self._span_selector = None
         self._offsets: list[int] = [0, 0, 0]  # 每行 CSV 的帧偏移（仅 GUI）
-        self._fps: list[float] = [0.0, 0.0, 0.0]  # 每行 CSV 的 fps（偏移换算用）
         self._offset_timer: QTimer | None = None
 
         self._build_tab()
 
     def _build_tab(self) -> None:
         tab = QWidget()
+        self._tab = tab
         self._stack.addWidget(tab)
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(12, 10, 12, 6)
@@ -146,7 +141,7 @@ class AnalysisTab:
         cl.addLayout(row2, 1, 0, 1, 4)
         layout.addWidget(ctrl)
 
-        # ── Matplotlib 画布 ──
+        # ── pyqtgraph 画布 ──
         import pyqtgraph as pg
         pg.setConfigOptions(antialias=False)
         plot = ModPlotWidget()
@@ -163,6 +158,10 @@ class AnalysisTab:
         self._plot = plot
         layout.addWidget(plot, 1)
         self._ready = True
+
+    def widget(self) -> QWidget | None:
+        """返回嵌入 QStackedWidget 的顶层 QWidget。"""
+        return self._tab
 
     # ═══════════════════ 事件 ═══════════════════
 
@@ -448,7 +447,6 @@ class AnalysisTab:
             # ── 解析 + 缓存 CSV 数据 ──
             all_x: list[list[float]] = [[], [], []]
             all_y: list[list[float]] = [[], [], []]
-            all_flags: list[list[int]] = [[], [], []]
             all_raw: list = [None, None, None]
             name1 = name2 = label = ""
             has_data = False
@@ -478,7 +476,6 @@ class AnalysisTab:
                         continue
                     try:
                         times, dists, speeds, flags = parse_csv(csv_path)
-                        self._fps[i] = _read_fps(csv_path)
                         name = Path(csv_path).stem
                         # 循环卷绕偏移（帧 = 索引位移）；周期取模重标起点：
                         # 新 t=0 / x=0 起点，之后按圈周期卷绕（x/t 始终 >= 0，
@@ -499,7 +496,6 @@ class AnalysisTab:
                         else:
                             x_data = times if is_vt else dists
                         all_x[i] = x_data; all_y[i] = speeds
-                        all_flags[i] = flags
                         all_raw[i] = (x_data, speeds, flags)
                         has_data = True
                     except Exception as e:
@@ -512,8 +508,8 @@ class AnalysisTab:
 
             # ── 缓存原始数据 ──
             self._render_cache = {
-                'all_x': all_x, 'all_y': all_y, 'all_flags': all_flags,
-                'all_raw': all_raw, 'is_dtx': is_dtx, 'is_vt': is_vt,
+                'all_x': all_x, 'all_y': all_y, 'all_raw': all_raw,
+                'is_dtx': is_dtx, 'is_vt': is_vt,
                 'name1': name1, 'name2': name2, 'label': label,
             }
             self._render_cache_key = csv_key
@@ -537,20 +533,17 @@ class AnalysisTab:
             plot.setBackground(bg)
 
             # ── 绘制主曲线 ──
-            self._chart_items = []  # 缓存曲线引用用于增量更新
             if is_dtx:
                 d1 = all_x[0]; dt_list = all_y[0]
                 x_vals, y_vals = smooth_data(d1, dt_list, smooth_str) if smooth_str > 0 else (d1, dt_list)
-                item = _plot_wrapped_pg(plot, x_vals, y_vals, colors[0])
-                self._chart_items.append((item, 0, d1, dt_list, None))
+                plot_wrapped_pg(plot, x_vals, y_vals, colors[0])
             else:
                 for i, raw in enumerate(all_raw):
                     if raw is None:
                         continue
                     x_data, speeds, flags = raw
-                    item, segs = _plot_segmented_pg(plot, x_data, speeds, flags,
-                                                    colors[i], show_cd, smooth_str)
-                    self._chart_items.append((item, i, x_data, speeds, flags))
+                    plot_segmented_pg(plot, x_data, speeds, flags,
+                                      colors[i], show_cd, smooth_str)
 
             # ── 标签 ──
             if is_dtx:
@@ -612,21 +605,18 @@ class AnalysisTab:
             # 增量：清除旧曲线（保留 region/hover 等交互 item）
             for it in list(plot.listDataItems()):
                 plot.removeItem(it)
-            self._chart_items = []
 
             if is_dtx:
                 d1 = cache['all_x'][0]; dt_list = cache['all_y'][0]
                 x_vals, y_vals = smooth_data(d1, dt_list, smooth_str) if smooth_str > 0 else (d1, dt_list)
-                item = _plot_wrapped_pg(plot, x_vals, y_vals, colors[0])
-                self._chart_items.append((item, 0, d1, dt_list, None))
+                plot_wrapped_pg(plot, x_vals, y_vals, colors[0])
             else:
                 for i, raw in enumerate(all_raw):
                     if raw is None:
                         continue
                     x_data, speeds, flags = raw
-                    item, segs = _plot_segmented_pg(plot, x_data, speeds, flags,
-                                                    colors[i], show_cd, smooth_str)
-                    self._chart_items.append((item, i, x_data, speeds, flags))
+                    plot_segmented_pg(plot, x_data, speeds, flags,
+                                      colors[i], show_cd, smooth_str)
 
     # ═══════════════════ 其他 ═══════════════════
 
@@ -660,86 +650,3 @@ class AnalysisTab:
             exp.export(path)
         except Exception as e:
             QMessageBox.critical(self._stack, "导出失败", str(e))
-
-
-# ═══════════════════ pyqtgraph 绘制辅助 ═══════════════════
-
-def _plot_wrapped_pg(plot, x, y, color, width=1.0):
-    """绘制可能循环卷绕的数据：x 下降跳变处断线（分段绘制）。"""
-    import pyqtgraph as pg
-    x = list(x); y = list(y)
-    item = pg.PlotDataItem(pen=pg.mkPen(color, width=width))
-    plot.addItem(item)
-    brk = None
-    for i in range(1, len(x)):
-        if x[i] < x[i - 1]:
-            brk = i
-            break
-    if brk is None:
-        item.setData(x, y)
-    else:
-        # 两段拼接（中间 NaN 断线）
-        xs = x[:brk] + [x[brk - 1], x[brk]] + x[brk:]
-        ys = y[:brk] + [float('nan'), float('nan')] + y[brk:]
-        item.setData(xs, ys)
-    return item
-
-
-def _plot_segmented_pg(plot, x, y, flags, color, show_red, smooth_strength):
-    """平滑 + 纠错段着色（pyqtgraph）：主曲线 + 红/绿段覆盖。"""
-    import pyqtgraph as pg
-    red = "#F44336"
-    green = "#81C784"
-    x = list(x); y = list(y); flags = list(flags)
-    if smooth_strength > 0:
-        x, y = smooth_data(x, y, smooth_strength)
-    item = pg.PlotDataItem(pen=pg.mkPen(color, width=1.0))
-    item.setData(x, y)
-    plot.addItem(item)
-    segs = []
-    if show_red and any(f >= 1 for f in flags):
-        n_orig = len(flags)
-        n_smooth = len(x)
-        rx, ry = [], []
-        i = 0
-        while i < n_orig:
-            if 10 <= flags[i] <= 19:
-                j = i
-                while j < n_orig and 10 <= flags[j] <= 19:
-                    j += 1
-                si = int(max(0, i - 0.5) * n_smooth / n_orig)
-                ei = int(min(n_orig, j + 0.5) * n_smooth / n_orig)
-                si = max(0, min(si, n_smooth - 2))
-                ei = min(n_smooth, max(ei, si + 1))
-                rx.extend(x[si:ei] + [float('nan')])
-                ry.extend(y[si:ei] + [float('nan')])
-                i = j + 1
-            else:
-                i += 1
-        if rx:
-            seg = pg.PlotDataItem(pen=pg.mkPen(red, width=2.0))
-            seg.setData(rx, ry)
-            plot.addItem(seg)
-            segs.append(seg)
-        gx, gy = [], []
-        i = 0
-        while i < n_orig:
-            if flags[i] >= 20:
-                j = i
-                while j < n_orig and flags[j] >= 20:
-                    j += 1
-                si = int(max(0, i - 0.5) * n_smooth / n_orig)
-                ei = int(min(n_orig, j + 0.5) * n_smooth / n_orig)
-                si = max(0, min(si, n_smooth - 2))
-                ei = min(n_smooth, max(ei, si + 1))
-                gx.extend(x[si:ei] + [float('nan')])
-                gy.extend(y[si:ei] + [float('nan')])
-                i = j + 1
-            else:
-                i += 1
-        if gx:
-            seg = pg.PlotDataItem(pen=pg.mkPen(green, width=1.5))
-            seg.setData(gx, gy)
-            plot.addItem(seg)
-            segs.append(seg)
-    return item, segs

@@ -6,7 +6,7 @@ while keeping widget references for export/import operations.
 from __future__ import annotations
 
 from qfluentwidgets import (
-    CardWidget, ComboBox, LineEdit, RadioButton, CheckBox,
+    ComboBox, LineEdit, RadioButton, CheckBox,
     BodyLabel, StrongBodyLabel, CaptionLabel, PushButton,
 )
 
@@ -69,7 +69,8 @@ def build_settings_panel(parent) -> dict:
     pl = QGridLayout(perf_card)
     pl.addWidget(StrongBodyLabel("性能"), 0, 0, 1, 4)
     pl.addWidget(BodyLabel("队列缓冲"), 1, 0)
-    widgets["buffer_spin"] = make_int_spinbox(4, 256, config.DEFAULT_BUFFER_SIZE, 70)
+    widgets["buffer_spin"] = make_int_spinbox(
+        *config.BUFFER_SIZE_RANGE, config.DEFAULT_BUFFER_SIZE, 70)
     pl.addWidget(widgets["buffer_spin"], 1, 1)
     pl.addWidget(BodyLabel("宽高比"), 1, 2)
     widgets["force_aspect_edit"] = LineEdit()
@@ -77,8 +78,8 @@ def build_settings_panel(parent) -> dict:
     widgets["force_aspect_edit"].setFixedWidth(70)
     pl.addWidget(widgets["force_aspect_edit"], 1, 3)
     pl.addWidget(BodyLabel("填充宽度"), 2, 0)
-    widgets["fill_width_spin"] = make_int_spinbox(160, 320,
-                                                     config.DEFAULT_FILL_WIDTH, 70)
+    widgets["fill_width_spin"] = make_int_spinbox(
+        *config.FILL_WIDTH_RANGE, config.DEFAULT_FILL_WIDTH, 70)
     pl.addWidget(widgets["fill_width_spin"], 2, 1)
     pl.addWidget(CaptionLabel("宽高比：0=自动；>0 宽度=48×此值"), 2, 2, 1, 2)
     pl.addWidget(BodyLabel("解码后端"), 3, 0)
@@ -86,7 +87,7 @@ def build_settings_panel(parent) -> dict:
     widgets["backend_combo"].addItems(
         [config.DECODE_BACKEND_LABELS[k] for k in config.DECODE_BACKEND_KEYS])
     widgets["backend_combo"].setCurrentIndex(0)
-    widgets["backend_combo"].setFixedWidth(95)
+    widgets["backend_combo"].setFixedWidth(115)
     pl.addWidget(widgets["backend_combo"], 3, 1)
     pl.addWidget(BodyLabel("OCR 后端"), 3, 2)
     widgets["ocr_backend_combo"] = ComboBox()

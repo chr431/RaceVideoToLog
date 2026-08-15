@@ -1,11 +1,12 @@
-# RaceVideoToLog v2.14.0
+# RaceVideoToLog v2.15.1
 
 从赛车视频中提取速度数据，生成时间-速度-距离 CSV 文件。
 
 ## 前置要求
 
 - Python 3.11+
-- NVIDIA 显卡 + 最新驱动（GPU 视频解码；无 GPU 自动使用 CPU 软件解码，性能差异约 15%）
+- NVIDIA 显卡 + 最新驱动（GPU 视频解码；无 GPU 自动使用 CPU 软件解码，
+  性能差异约 5% —— OCR 全物理核线程预算下两者接近）
 - （可选）CUDA Toolkit 13.x + TensorRT 11.x（GPU OCR 推理；无则自动使用 CPU）
 
 ## 一键安装
@@ -25,9 +26,12 @@ setup_venv.bat
 
 本项目**不依赖 PyPI decord**（CPU-only、无 `next_roi` / `get_codec`、CPU 解码内存溢出）。自建 fork（chr431/decord）支持 NVDEC GPU 硬解码 + CPU 软件解码，只传输识别 ROI（解码提速 ~45%，编码信息直接来自 decord），且 GPU API 运行时动态加载 —— 无 NVIDIA 设备自动回退 CPU 解码。
 
-**版本要求：≥ v0.7.3**（v2.14 起批量解码 `get_batch(roi)` 是性能路径的硬依赖——CPU 软解 +22% 靠它；旧版 decord 会报 `_CAPI_VideoReaderGetBatchRoi` 不存在）。
+**版本要求：≥ v0.7.10**（当前开发版；在 v0.7.9 的 ROI-first 解码管线
+（解码器只输出识别矩形——CPU filter 先裁剪再转换、GPU 转换 kernel 只算
+ROI 窗口）之上新增 YUV420 输出，供最终检查彩色预览）。v0.7.9 回退
+YUV→灰度预览，功能正常；旧版会报 `_CAPI_VideoReaderGetBatchRoi` 不存在）。
 
-获取 decord 发布产物（推荐）：运行 [chr431/decord](https://github.com/chr431/decord) 的 **Release workflow**（Actions → Release → Run workflow，输入版本号如 `0.7.3`），它会构建并发布 `decord-<ver>-win64-gpu.zip`。解压到本仓库 `_decord_build\`：
+获取 decord 发布产物（推荐）：运行 [chr431/decord](https://github.com/chr431/decord) 的 **Release workflow**（Actions → Release → Run workflow，输入版本号如 `0.7.10`），它会构建并发布 `decord-<ver>-win64-gpu.zip`。解压到本仓库 `_decord_build\`：
 
 ```text
 _decord_build\
@@ -66,7 +70,7 @@ _decord_build\
 ## 输出格式
 
 ```csv
-# RaceVideoToLog v2.14.0
+# RaceVideoToLog v2.15.1
 # video=test5.mp4, fps=59.767
 # roi=843,993,948,1025, format=km/h, frame_start=362, frame_end=7585
 # max_speed=400.0, max_accel=50.0, force_aspect=0.0, fill_width=224
@@ -100,7 +104,7 @@ python RaceVideoToLog.py [video] [options]
   --force-aspect N               强制宽高比 (默认: 0=不启用；>0 宽度=48×此值)
   --fill-width N                 预处理 pad 宽度下限 px (默认: 224；速度窄图更准)
   --buffer N                     解码∥OCR 流水线队列缓冲，段数 (默认: 128)
-  --decode-backend {auto,cpu,nvdec}  解码后端 (默认: auto 自动选 GPU)
+  --decode-backend {auto,cpu,nvdec}  解码后端 (默认: auto 自动选 GPU；实验性 CPU+NVDEC 混合：设环境变量 RVTOL_HYBRID_DECODE=1 后 auto/nvdec 内部走 CPU+NVDEC 并行)
   --ocr-backend {auto,cpu,tensorrt}  OCR 推理后端 (默认: auto 自动选 GPU)
   --log-level {normal,detailed,debug} 日志级别 (默认: normal)
   --frame-start N                起始帧号
@@ -110,6 +114,51 @@ python RaceVideoToLog.py [video] [options]
   --from-csv PATH                从 CSV 文件头导入设置（显式参数优先）
   -o, --output PATH              输出 CSV 路径
 ```
+
+## 测试与回归门禁
+
+### 单元/集成测试（CI 每推必跑）
+
+```bash
+.venv\Scripts\python -m pytest tests/ -v
+```
+
+覆盖：分段/纠错链（`test_segment_flow` / `test_correction_chain`）、CSV 解析
+与 from-csv 显式参数优先（`test_csv_io` / `test_from_csv`）、打包清单完整性
+（`test_packaging`）、以及无视频即可复跑的回归夹具（见下）。`test_decoder_integration`
+在缺 decord 时显式跳过——CI 的 decoder-smoke job 会从 chr431/decord release
+下载 fork 并真实运行它。
+
+### 准确率漏斗（最终门禁，本机跑）
+
+```bash
+.venv\Scripts\python tools/accuracy_breakdown.py        # 跑 5 个测试视频并对比基线
+.venv\Scripts\python tools/accuracy_breakdown.py --update-baseline   # 有意改动后更新基线
+```
+
+跑 test/test2/test3/test5/test6（测试视频在 `D:\Videos\racelog_test`，truth 在
+`ground_truth_csv/`）并与 `tools/baseline.json` 对比：任一视频或总量的最终错误数
+增加即退出码 1（回归）。当前基线 12 错误（test 4 / test2 8 / test3/5/6 0）。
+
+### CI 回归夹具（tests/fixtures/，无视频可跑）
+
+- `seg_series/*.json` + `tests/test_seg_series.py`：生产 run() 的全量段级序列，
+  CI 重构置信度+稠密 DP 纠错并逐段断言与基线一致。
+- `ocr_frames/` + `tests/test_ocr_fixtures.py`：12 个错误案例代表帧的原始 ROI
+  裁剪，onnxruntime CPU 锁定 OCR 行为基线。
+- `videos/smoke_speedo.mp4`：解码集成测试的迷你视频（127KB，仓库内唯一入库视频）。
+
+夹具由 `tools/make_regression_fixtures.py` 生成（需本机 decord + 测试视频）。
+任何算法/预处理/模型改动使夹具读数变化 → CI 失败；属有意改动时先跑完整漏斗
+确认无回归，再重新生成夹具并更新基线。
+
+## 线程预算（自动）
+
+OCR 推理线程数默认 = **全部物理核**：NVDEC 解码时 CPU 全部让给 OCR；CPU
+解码时 FFmpeg 帧线程 + filter 走 decord fork 默认（占 SMT 份额，不抢物理核）。
+16C32T 实测（test5 7223 帧）：GPU 解码+CPU OCR 8.9s / CPU 解码+CPU OCR 9.3s
+（旧 8 线程预算分别为 11.3s / 12.8s）。超过物理核（超线程）不再提升，
+故自动封顶。`RVTOL_OCR_THREADS` 环境变量可覆盖（实验用）。
 
 ## 打包
 
@@ -121,7 +170,7 @@ build_exe.bat
 
 ## 变更记录
 
-完整发布日志（v2.7.1 → v2.14.0）见 [release_notes.md](release_notes.md)。
+完整发布日志（v2.7.1 → v2.15.1）见 [release_notes.md](release_notes.md)。
 
 ## 运行时缓存（卸载时需删除）
 

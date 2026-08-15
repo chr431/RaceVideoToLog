@@ -5,11 +5,10 @@ v2.13 起：分段流水线（segment_flow.py）为唯一管线，原逐帧纠�
 """
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
-__version__ = "2.14.0"
+__version__ = "2.15.1"
 
 # ═══════════════════ 数据目录 ═══════════════════
 
@@ -42,7 +41,18 @@ DEFAULT_BUFFER_SIZE: int = 128          # 解码∥OCR 流水线队列缓冲（�
                                         # -0.3s；256 无进一步收益）
 DEFAULT_DECODE_BACKEND: str = "auto"   # 解码后端 (auto / cpu / nvdec)
 DECODE_BACKEND_KEYS: list[str] = ["auto", "cpu", "nvdec"]
-DECODE_BACKEND_LABELS: dict[str, str] = {"auto": "自动", "cpu": "CPU", "nvdec": "NVDEC"}
+DECODE_BACKEND_LABELS: dict[str, str] = {"auto": "自动", "cpu": "CPU",
+                                         "nvdec": "NVDEC"}
+# 实验性 CPU+NVDEC 混合解码开关（不暴露给 GUI/CLI 参数）：
+# 环境变量置 1/true/yes/on 后，GPU 模式（auto / nvdec）内部改走
+# CPU+NVDEC 双解码器并行（CPU 前段 + GPU 后段，见 _open_hybrid_vrs）；
+# 默认关闭（纯 GPU 足够好，混合收益不确定且增加复杂度）。
+HYBRID_DECODE_ENV: str = "RVTOL_HYBRID_DECODE"
+# 实验性 OCR 混合开关（不暴露给 GUI/CLI 参数）：置 1/true/yes/on 后
+# OCR 同时用 TensorRT（GPU）+ onnxruntime（CPU）双引擎并发处理段批
+# （OCR 无状态约束，结果按段索引聚合，顺序无关 → 实现简单）。
+# 默认关闭（TRT 可用时 OCR 已隐藏于解码阶段之下，非瓶颈）。
+HYBRID_OCR_ENV: str = "RVTOL_HYBRID_OCR"
 DEFAULT_OCR_BACKEND: str = "auto"      # OCR 推理后端 (auto / cpu / tensorrt)
 OCR_BACKEND_KEYS: list[str] = ["auto", "cpu", "tensorrt"]
 OCR_BACKEND_LABELS: dict[str, str] = {"auto": "自动", "cpu": "CPU", "tensorrt": "TensorRT"}
@@ -67,6 +77,27 @@ MONITOR_INTERVAL_S: float = 1.0        # 资源采样间隔（秒）
 MONITOR_GPU: bool = True               # 是否采样 GPU 利用率/显存/温度
 
 # ═══════════════════ 段管线参数 ═══════════════════
+HYBRID_CPU_SPLIT: float = 0.10    # 实验性混合解码（HYBRID_DECODE_ENV=1 时生效）
+                                  # 的 CPU 段帧数比例（保守分法）。
+                                  # 只有 CPU/GPU 吞吐相近（h264：CPU 软解
+                                  # ~1260fps ≈ NVDEC 2Gp/s 上限 ~960fps）时
+                                  # 对半分（55/45）才有 decode 砍半优势；
+                                  # HEVC/AV1 的 CPU 软解只有 NVDEC 的 1/3~1/5，
+                                  # 大份额 CPU 段反成瓶颈（test6 AV1 混合
+                                  # 43.6s vs GPU 14.4s）。10% 保守分法下
+                                  # wall = max(CPU 10% 耗时, GPU 90% 耗时)，
+                                  # h264/HEVC ≤ 纯 GPU（实测 test HEVC 2.7 vs
+                                  # 2.9s / test3 h264 3.1 vs 3.4s / test5 h264
+                                  # 7.1 vs 7.6s decode）；AV1 特判：CPU 软解
+                                  # AV1 极耗核且并发竞争拖慢 GPU 段（混合 19.1s
+                                  # vs 纯 GPU 14.4s）→ _hybrid_split 返回 0，
+                                  # 等效纯 GPU。env RVTOL_HYBRID_SPLIT 可覆盖
+                                  # （实验）。
+SEG_GAMMA: float = 0.0             # 分段/代表帧选择的灰度 gamma 增强指数。
+                                   # 0 = raw 灰度（锁定基线，v2.14 现状：分段与
+                                   # OCR 正式预处理 gray+gamma2.0 不一致但已接受）。
+                                   # >0 = 255*(g/255)^g 增强后分段（与 OCR 预处理
+                                   # 对齐实验，env RVTOL_SEG_GAMMA 可覆盖）。
 SEG_C: float = 5.0              # 分段聚类阈值：max 3×3 窗口和 < C ⇒ 显示未变
 SEG_WIN: int = 30               # 段级检测带宽窗口（换算成帧：×中位段间距，上限 120 帧）
 SEG_MULT: float = 2.0           # 检测门限倍率：|值-中值| > 带宽×mult ⇒ suspect
@@ -163,19 +194,64 @@ SOURCE_TO_KMH: dict[str, float] = {
     "mile/h": 1.609344,
 }
 
-# ═══════════════════ GPU 后端公共 API ═══════════════════
-_gpu_backend: str = "CPU"
-
-def get_gpu_backend() -> str:
-    """返回当前实际使用的 GPU 后端名称（CUDA 或 CPU）。"""
-    return _gpu_backend
-
-def set_gpu_backend(backend: str) -> None:
-    """由 gpu_setup 调用，设置实际使用的 GPU 后端。"""
-    global _gpu_backend
-    _gpu_backend = backend
-
-# ═══════════════════ 邻帧一致性评分（signals 使用，GUI 已改段级）═══════════════════
-CONSISTENCY_TIME_WINDOW: float = 0.5    # 时间窗 (秒)
-CONSISTENCY_DECAY_TAU: float = 0.06     # 指数衰减常数 exp(-dt/tau)
-CONSISTENCY_PINNED_WEIGHT: float = 3.0  # 已固定帧权重倍率
+# ═══════════════════ 运行参数（v2.15.1 起从代码中收敛） ═══════════════════
+# OCR 模型固定输入高度（rapidocr resize_norm_img 语义，训练尺寸）
+OCR_TARGET_H: int = 48
+# 高度已接近目标时跳过 resize 的相对容差（2%）
+OCR_RESIZE_TOL: float = 0.02
+# 灰度权重（Rec.601；分段与 OCR 预处理共用，逐位一致性依赖此权重）
+GRAY_RGB_WEIGHTS: tuple[float, float, float] = (0.299, 0.587, 0.114)
+# 段管线批大小：OCR 批（段数）与解码批（帧数）
+OCR_BATCH_SIZE: int = 16
+DECODE_BATCH_SIZE: int = 16
+# 流水线队列：混合解码各后端队列上限；OCR 预处理→推理队列上限
+HYBRID_QUEUE_SIZE: int = 8
+OCR_INFER_QUEUE_SIZE: int = 4
+# 分段 Otsu 阈值校准帧数（前 N 帧；seek 校准代价高，前段与全片抽样一致）
+SEG_CALIB_FRAMES: int = 50
+# Otsu 无法计算时的兜底阈值（0-255）
+OTSU_FALLBACK_THRESH: int = 127
+# 解码器无法给出 fps 时的兜底帧率
+DEFAULT_FPS_FALLBACK: float = 30.0
+# _local_bandwidth 的帧窗口上限（config.SEG_WIN 注释中 "上限 120 帧" 的实体）
+SEG_WIN_MAX_FRAMES: float = 120.0
+# 段级置信度的结构性门槛（历史调参结论，勿单独改动）
+SEG_CONF_MIN_NEIGHBORS: int = 3
+SEG_CONF_SHORT_NEIGHBOR: float = 30.0
+SEG_CONF_EDGE: float = 100.0
+SEG_CONF_MED_GATE: float = 50.0
+# 一致性孤岛下限（近似/带波动 run）：累计帧数少于该值，即使局部中值贴合，
+# conf 也封顶到 SHORT_RUN_CAP（不能成为 HIGH_TRUST/DP 锚点）。
+# 127,128 这类 2 帧近似孤岛 → 不信任；带小波动的 3 帧以上才允许高置信。
+SEG_CONF_MIN_CONSISTENT_FRAMES: int = 3
+# 完全相同（无内部波动）的 run 需要更多帧才允许高置信：4 帧连续 127 这种
+# 短促平坦孤岛仍不锚定；带小波动的近似 run 反而 3 帧即可信（更像真实斜坡）。
+SEG_CONF_MIN_CONSISTENT_FRAMES_EXACT: int = 5
+SEG_CONF_SHORT_RUN_CAP: float = 15.0
+# 一致性孤岛的“近似相同”容差 (km/h)：孤岛内允许的小波动范围。
+# 只靠完全相同会把 127,128 这种两个误读互相撑腰的短孤岛漏掉。
+SEG_CONF_ISLAND_TOL: float = 2.0
+# 一致性孤岛还需“脱离曲线”：短近似相同值相对 run 外邻居中值的偏差
+# > 局部带宽×该倍率 才封顶（防止误伤坡道上的正常短段）
+SEG_CONF_ISLAND_DEV_MULT: float = 3.0
+# A4 孤立尖峰豁免的 conf 上界（下界=SEG_DP_ANCHOR_CONF）
+SEG_DP_DEANCHOR_CONF_MAX: float = 50.0
+# OCR 引擎内部：ONNX 单批上限与 CTC 归约分块（内存峰值控制）
+OCR_ONNX_CHUNK: int = 16
+OCR_CTC_CHUNK: int = 64
+# TensorRT 引擎构建：默认 batch profile、输入宽 profile 与 workspace
+TRT_PROFILE_BATCH: int = 6
+TRT_PROFILE_MIN_W: int = 32
+TRT_PROFILE_OPT_W: int = 320
+TRT_PROFILE_MAX_W: int = 2048
+TRT_WORKSPACE_BYTES: int = 1 << 30
+# TRT 引擎缓存文件名的 SM 后缀（引擎与 GPU 架构绑定）
+TRT_ENGINE_SM: str = "sm89"
+# GUI 段 review 的加速度容差倍率（允许输入值超出物理约束的倍数）
+REVIEW_ACCEL_TOLERANCE: float = 3.0
+# GUI 参数范围（gui_settings 使用；默认值仍取 DEFAULT_* 常量）
+BUFFER_SIZE_RANGE: tuple[int, int] = (4, 256)
+FILL_WIDTH_RANGE: tuple[int, int] = (160, 320)
+# 分析 Tab 的 SG 平滑窗口换算系数（strength 0-100 → 窗口比例）
+SMOOTH_WIN_FACTOR: float = 0.0175
+SMOOTH_MIN_WIN: int = 5

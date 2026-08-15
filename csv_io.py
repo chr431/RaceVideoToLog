@@ -2,7 +2,6 @@
 from __future__ import annotations
 import logging
 import re
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +21,7 @@ _CSV_FIELD_MAP: dict[str, tuple[str, str]] = {
     "force_aspect":  ("force_aspect",  "float"),
     "fill_width":    ("fill_width",    "int"),
     "backend":       ("backend",       "str"),
+    "ocr_backend":   ("ocr_backend",   "str"),
     "buffer":        ("buffer",        "int"),
     "frame_start":   ("frame_start",   "int"),
     "frame_end":     ("frame_end",     "int"),
@@ -29,6 +29,30 @@ _CSV_FIELD_MAP: dict[str, tuple[str, str]] = {
     "fps":          ("fps",          "float"),
     "codec":        ("codec",        "str"),
 }
+
+# CSV 头记录的是"本次实际使用的 OCR 引擎"（onnxruntime/tensorrt，
+# 实验混合为 tensorrt+onnxruntime），而 CLI/GUI 的可选请求值是
+# auto/cpu/tensorrt。导入时统一归一化到可请求值：
+#   onnxruntime → cpu（实际跑 ONNX 即 CPU 后端）
+#   tensorrt    → tensorrt
+#   tensorrt+onnxruntime → auto（实验混合仅由 RVTOL_HYBRID_OCR 开启，
+#                           auto 在开启该环境变量时可重现混合）
+_OCR_BACKEND_IMPORT_MAP: dict[str, str] = {
+    "auto": "auto",
+    "cpu": "cpu",
+    "onnxruntime": "cpu",
+    "tensorrt": "tensorrt",
+    "tensorrt+onnxruntime": "auto",
+}
+
+
+def normalize_ocr_backend(raw_value: str) -> str | None:
+    """把 CSV 头的实际 OCR 引擎名归一化为 CLI/GUI 可请求值。"""
+    if raw_value is None:
+        return None
+    key = str(raw_value).strip().lower()
+    return _OCR_BACKEND_IMPORT_MAP.get(key)
+
 
 def parse_csv_setting(key: str, raw_value: str):
     """Parse a single CSV header value according to its declared type.

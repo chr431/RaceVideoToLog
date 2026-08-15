@@ -2,6 +2,7 @@
 
 分段已验证不混合速度（可用 truth 视频 0 混合段），段值对段内所有帧可靠；
 段级修正即可保证全段正确。橙点 = 需审核段（管线已纠正 / OCR 未读出）。
+图表渲染在 review_chart.ReviewChartMixin 中。
 """
 from __future__ import annotations
 
@@ -13,20 +14,17 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QWidget, QLabel,
     QMessageBox, QSplitter,
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QShortcut, QKeySequence
 from PySide6.QtGui import QPixmap, QImage, QPalette, QColor
+from review_chart import ReviewChartMixin
 from theme_manager import ThemeManager
 from qfluentwidgets import (BodyLabel, StrongBodyLabel, CaptionLabel,
     PrimaryPushButton, PushButton, isDarkTheme)
-from widget_utils import (make_static_card, disable_spin_flyout,
-    make_brush, ModPlotWidget)
-from config import (COLOR_RED, COLOR_ORANGE, COLOR_GREEN, COLOR_BLUE,
-    COLOR_LIGHT_GRAY, COLOR_LIGHTER_GRAY, chart_colors)
-import pyqtgraph as pg
+from widget_utils import (make_static_card, disable_spin_flyout)
 
 
-class ReviewDialog(QDialog):
+class ReviewDialog(ReviewChartMixin, QDialog):
     """段级最终检查 — 段值曲线 + 代表帧预览 + 段值修正。"""
 
     def __init__(self, parent: QWidget, segments: list[dict],
@@ -43,6 +41,11 @@ class ReviewDialog(QDialog):
         self._max_speed = max_speed
         self._max_accel = max_accel
         self._fps = fps
+        # 预览源图缓存：代表帧图像已随 segments 保存在内存中（YUV 模式
+        # 在打开本对话框前已转 RGB；gray 模式为灰度图），切段/窗口缩放
+        # 只重新缩放已缓存的 QPixmap，不重新解码
+        self._preview_source: QPixmap | None = None
+        self._preview_source_seg: int = -1
         # 修正：段索引 → 新值（应用到整个段范围）
         self._corrections: dict[int, float] = {}
         self._current_seg: int = 0
@@ -51,6 +54,9 @@ class ReviewDialog(QDialog):
 
         self._build_ui()
         self._register_theme_callbacks()
+        # 等布局真正完成后再初始化当前段显示，避免用布局尚未稳定时的
+        # label 尺寸缩放图像（旧 bug：初始图被放大裁边）
+        QTimer.singleShot(0, lambda: self._navigate_to(self._current_seg))
 
     # ═══════════════ UI 构建 ═══════════════
 
@@ -195,297 +201,55 @@ class ReviewDialog(QDialog):
     def _needs_review_count(self) -> int:
         return sum(1 for si in range(len(self._segments)) if self._needs_review(si))
 
-    # ═══════════════ 图表 ═══════════════
-
-    def _create_chart(self):
-        import pyqtgraph as pg
-        pg.setConfigOptions(antialias=False)
-        dark = isDarkTheme()
-        bg, fg = chart_colors(dark)
-        plot = ModPlotWidget()
-        plot.setMinimumHeight(150)
-        plot.setBackground(bg)
-        plot.showGrid(x=True, y=True, alpha=0.15 if dark else 0.25)
-        plot.hideButtons()
-        plot.setMenuEnabled(False)
-        plot_item = plot.getPlotItem()
-        assert plot_item is not None
-        vb = plot_item.getViewBox()
-        assert vb is not None
-        vb.setBorder(pg.mkPen(fg))
-        vb.setMouseEnabled(x=True, y=True)
-        self._plot = plot
-        self._chart_params = {'dark': dark, 'bg': bg, 'fg': fg}
-        self._chart_artists = {}
-        self._saved_range = None
-        self._user_zoomed = False
-        vb.sigRangeChangedManually.connect(self._on_range_changed)
-        self._setup_hover(plot)
-        self._redraw_chart(plot)
-        return plot
-
-    def _on_range_changed(self, mask) -> None:
-        self._user_zoomed = True
-        plot_item = self._plot.plotItem
-        assert plot_item is not None
-        vb = plot_item.vb
-        assert vb is not None
-        self._saved_range = vb.viewRange()
-
-    def _setup_hover(self, plot) -> None:
-        import pyqtgraph as pg
-        from PySide6.QtCore import Qt as _Qt
-        self._hover_line = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen(
-            config.COLOR_GRAY, width=1, style=_Qt.PenStyle.DashLine))
-        self._hover_line.setVisible(False)
-        plot.addItem(self._hover_line, ignoreBounds=True)
-        fg = chart_colors(isDarkTheme())[1]
-        self._hover_text = pg.TextItem("", color=fg, anchor=(0, 0))
-        self._hover_text.setVisible(False)
-        plot.addItem(self._hover_text, ignoreBounds=True)
-        if not hasattr(self, '_hover_connected'):
-            plot.scene().sigMouseMoved.connect(self._on_hover_moved)
-            plot.plotItem.vb.sigRangeChanged.connect(self._pin_hover_text)
-            self._hover_connected = True
-        self._pin_hover_text()
-
-    def _pin_hover_text(self, *args) -> None:
-        plot_item = self._plot.plotItem
-        assert plot_item is not None
-        vb = plot_item.vb
-        assert vb is not None
-        xmin, xmax = vb.viewRange()[0]
-        ymin, ymax = vb.viewRange()[1]
-        self._hover_text.setPos(xmin, ymax)
-
-    def _on_hover_moved(self, pos) -> None:
-        plot = self._plot
-        plot_item = plot.plotItem
-        assert plot_item is not None
-        vb = plot_item.vb
-        assert vb is not None
-        if not plot.sceneBoundingRect().contains(pos):
-            self._hover_line.setVisible(False)
-            self._hover_text.setVisible(False)
-            return
-        pt = vb.mapSceneToView(pos)
-        x = pt.x()
-        cache = getattr(self, '_chart_cache', None)
-        xs = (cache or {}).get('xs') or []
-        sidx = (cache or {}).get('sidx') or []
-        if not xs:
-            return
-        import bisect
-        idx = bisect.bisect_left(xs, x)
-        if idx >= len(xs):
-            idx = len(xs) - 1
-        elif idx > 0 and abs(xs[idx - 1] - x) < abs(xs[idx] - x):
-            idx -= 1
-        si = sidx[idx]
-        seg = self._segments[si]
-        v = self._seg_value(si)
-        self._hover_line.setPos(x)
-        self._hover_line.setVisible(True)
-        text = (f"段#{si} [{seg['start']}-{seg['end']}]: {v:.0f} km/h"
-                if v is not None and v >= 0 else f"段#{si}: (无效)")
-        self._hover_text.setText(text)
-        self._hover_text.setVisible(True)
-
-    def _frame_data(self):
-        """逐帧数据：所有采样帧的 (x=帧号, y=段值, 段索引, 连线数组)。
-
-        y 取当前段值（含修正预览）；None 段 y=-1（无效标记）。连线数组
-        connect[i]=同段相邻帧 → 段内连线、段间断开。
-        """
-        xs, ys, sidx = [], [], []
-        for si, seg in enumerate(self._segments):
-            v = self._seg_value(si)
-            frames = seg.get('frames') or [seg['start']]
-            xs.extend(frames)
-            ys.extend([v if v is not None else -1] * len(frames))
-            sidx.extend([si] * len(frames))
-        n = len(xs)
-        # connect 数组长度 = N（点数）：True 连接点 i → i+1（同段相连，段间断开）
-        sidx_arr = np.asarray(sidx)
-        conn = np.zeros(n, dtype=bool)
-        if n > 1:
-            conn[:-1] = sidx_arr[1:] == sidx_arr[:-1]
-        return xs, ys, sidx, conn
-
-    def _redraw_chart(self, plot=None) -> None:
-        if plot is None:
-            plot = self._plot
-        plot_item = plot.plotItem
-        assert plot_item is not None
-        vb = plot_item.vb
-        assert vb is not None
-        saved_range = self._saved_range if getattr(self, '_user_zoomed', False) else None
-
-        dark = isDarkTheme()
-        bg, fg = chart_colors(dark)
-        prev_dark = getattr(self, '_chart_params', {}).get('dark')
-        prev_corr = getattr(self, '_chart_corrections_fs', None)
-        cur_corr = frozenset(self._corrections.keys())
-        self._chart_corrections_fs = cur_corr
-
-        pv_seg = self._preview[0] if self._preview else None
-        pv_val = self._preview[1] if self._preview else None
-
-        xs, ys, sidx, conn = self._frame_data()
-        prev_data = self._chart_cache.get('data_hash', 0) if hasattr(self, '_chart_cache') else 0
-        data_hash = hash((len(xs), xs[0] if xs else 0, xs[-1] if xs else 0,
-                          sum(ys), len(self._corrections)))
-        self._chart_cache = {'xs': xs, 'ys': ys, 'sidx': sidx,
-                             'data_hash': data_hash}
-        prev_preview = getattr(self, '_chart_preview', None)
-        cur_preview = self._preview
-        self._chart_preview = cur_preview
-        needs_rebuild = (prev_dark != dark or not hasattr(self, '_chart_cache')
-                         or prev_corr != cur_corr or prev_preview != cur_preview
-                         or prev_data != data_hash)
-
-        if needs_rebuild:
-            plot.clear()
-            self._chart_params = {'dark': dark, 'bg': bg, 'fg': fg}
-            plot.setBackground(bg)
-            plot.showGrid(x=True, y=True, alpha=0.15 if dark else 0.25)
-            self._setup_hover(plot)
-            self._chart_artists = {}
-
-            gray_c = COLOR_LIGHT_GRAY if not dark else COLOR_LIGHTER_GRAY
-            # 段连线（step 曲线）：预览段 NaN 隐藏 + 断开其连接
-            line_ys = list(ys)
-            conn_line = conn.copy()
-            if pv_seg is not None:
-                for k in range(len(xs)):
-                    if sidx[k] == pv_seg:
-                        line_ys[k] = float('nan')
-                for k in range(len(xs) - 1):
-                    if sidx[k] == pv_seg or sidx[k + 1] == pv_seg:
-                        conn_line[k] = False
-            line = pg.PlotDataItem(xs, line_ys, connect=conn_line,
-                                   pen=pg.mkPen(gray_c, width=1))
-            plot.addItem(line)
-            self._chart_artists['seg_line'] = line
-
-            # 散点分层：正常灰 / 需审核橙 / 已修正蓝（跳过预览段）
-            gx, gy, gi, ox, oy, oi = [], [], [], [], [], []
-            for k in range(len(xs)):
-                si = sidx[k]
-                if si == pv_seg:
-                    continue
-                if si in self._corrections:
-                    continue
-                if ys[k] < 0 or self._needs_review(si):
-                    ox.append(xs[k]); oy.append(ys[k]); oi.append(si)
-                else:
-                    gx.append(xs[k]); gy.append(ys[k]); gi.append(si)
-            gray = pg.ScatterPlotItem(size=4, brush=make_brush(gray_c, 100), pen=None)
-            gray.setData(x=gx, y=gy, data=gi)
-            gray.sigClicked.connect(self._on_scatter_clicked)
-            plot.addItem(gray)
-            self._chart_artists['bg_gray'] = gray
-            orange = pg.ScatterPlotItem(size=5, brush=make_brush(COLOR_ORANGE, 180), pen=None)
-            orange.setData(x=ox, y=oy, data=oi)
-            orange.sigClicked.connect(self._on_scatter_clicked)
-            plot.addItem(orange)
-            self._chart_artists['bg_orange'] = orange
-
-            # 临时预览段（绿色虚线 + 实心点）：隐藏现有段后渲染新位置
-            if pv_seg is not None:
-                frames = self._segments[pv_seg]['frames']
-                px = list(frames)
-                py_ = [pv_val] * len(px)
-                pline = pg.PlotDataItem(
-                    px, py_, connect='all',
-                    pen=pg.mkPen(COLOR_GREEN, width=1.5,
-                                 style=Qt.PenStyle.DashLine))
-                plot.addItem(pline)
-                self._chart_artists['preview_line'] = pline
-                ppts = pg.ScatterPlotItem(size=7, brush=pg.mkBrush(COLOR_GREEN),
-                                          pen=pg.mkPen('w', width=1.0))
-                ppts.setData(x=px, y=py_)
-                plot.addItem(ppts)
-                self._chart_artists['preview_pts'] = ppts
-
-            corr = pg.ScatterPlotItem(size=6, brush=pg.mkBrush(COLOR_BLUE),
-                                      pen=pg.mkPen('w', width=1.0))
-            plot.addItem(corr)
-            self._chart_artists['corrections'] = corr
-            cur = pg.ScatterPlotItem(size=6, brush=pg.mkBrush(COLOR_RED),
-                                     pen=pg.mkPen('w', width=1.5))
-            plot.addItem(cur)
-            self._chart_artists['cur_highlight'] = cur
-            self._update_corr_and_cur()
-
-            plot.setLabel('bottom', '帧', color=fg)
-            plot.setLabel('left', '速度 (km/h)', color=fg)
-            plot_item = plot.getPlotItem()
-            assert plot_item is not None
-            for ax_name in ('left', 'bottom'):
-                ax_item = plot_item.getAxis(ax_name)
-                ax_item.setTextPen(fg)
-                ax_item.setPen(fg)
-            vb.setBorder(pg.mkPen(fg))
-        else:
-            self._update_corr_and_cur()
-
-        if saved_range is not None:
-            xr, yr = saved_range
-            vb.setXRange(xr[0], xr[1], padding=0)
-            vb.setYRange(yr[0], yr[1], padding=0)
-        vb.enableAutoRange(None, False)
-
-    def _update_corr_and_cur(self) -> None:
-        corr = self._chart_artists.get('corrections')
-        cur = self._chart_artists.get('cur_highlight')
-        if corr is None or cur is None:
-            return
-        cache = self._chart_cache
-        xs = cache.get('xs') or []
-        ys = cache.get('ys') or []
-        sidx = cache.get('sidx') or []
-        pv_seg = self._preview[0] if self._preview else None
-        # 修正蓝点：已修正段的全部帧（预览段被覆盖层替代，跳过）
-        corr_set = set(self._corrections.keys())
-        if pv_seg is not None:
-            corr_set.discard(pv_seg)
-        cx = [xs[k] for k in range(len(xs)) if sidx[k] in corr_set]
-        cy = [ys[k] for k in range(len(xs)) if sidx[k] in corr_set]
-        corr.setData(x=cx, y=cy)
-        # 当前红点：预览时隐藏（绿色预览段替代）；否则高亮选中段全部帧
-        si = self._current_seg
-        if pv_seg is not None:
-            cur.setData(x=[], y=[])
-        else:
-            sel = [k for k in range(len(xs)) if sidx[k] == si]
-            cur.setData(x=[xs[k] for k in sel], y=[ys[k] for k in sel])
-            cur.setBrush(make_brush(COLOR_BLUE if si in self._corrections else COLOR_RED))
-
-    def _on_scatter_clicked(self, scatter, points) -> None:
-        for pt in points:
-            idx = pt.data()
-            if idx is not None:
-                self._navigate_to(int(idx))
-                break
-
     # ═══════════════ 图像 + 导航 ═══════════════
 
     def _show_seg_image(self, si: int) -> None:
-        if 0 <= si < len(self._segments):
-            crop = self._segments[si].get("rep_crop")
-            if crop is not None and crop.size > 0:
-                rgb = crop
-                h, w, ch = rgb.shape
-                qimg = QImage(rgb.data, w, h, ch * w, QImage.Format.Format_RGB888)
-                pm = QPixmap.fromImage(qimg)
-                lw = max(50, self._img_label.width() - 8); lh = max(50, self._img_label.height() - 8)
-                scaled = pm.scaled(lw, lh,
-                                    Qt.AspectRatioMode.KeepAspectRatio,
-                                    Qt.TransformationMode.SmoothTransformation)
-                self._img_label.setPixmap(scaled)
-                return
-        self._img_label.setText("(无图像)")
+        """显示段 si 已缓存的代表帧图（RGB 或灰度，仅首次转 QPixmap）。
+
+        rep_crop 由生产管线随 segments 一并保存（YUV 模式已在打开
+        对话框前转成 RGB），无需 seek/解码；切换段或缩放窗口只重新
+        缩放已生成的 QPixmap，不重复转换数组。
+        """
+        if not (0 <= si < len(self._segments)):
+            self._img_label.setText("(无图像)")
+            return
+        if si == self._preview_source_seg and self._preview_source is not None:
+            self._apply_image_scale()
+            return
+        crop = self._segments[si].get("rep_crop")
+        if crop is None or crop.size <= 0:
+            self._preview_source = None
+            self._preview_source_seg = -1
+            self._img_label.setText("(无图像)")
+            return
+        if crop.ndim == 2:
+            rgb = np.repeat(crop[..., None], 3, axis=-1)
+        elif crop.shape[-1] == 1:
+            rgb = np.repeat(crop, 3, axis=-1)
+        elif crop.shape[-1] >= 4:
+            rgb = crop[..., :3]
+        else:
+            rgb = crop
+        rgb = np.ascontiguousarray(rgb, dtype=np.uint8)
+        h, w, _ch = rgb.shape
+        qimg = QImage(rgb.data, w, h, 3 * w,
+                      QImage.Format.Format_RGB888).copy()
+        self._preview_source = QPixmap.fromImage(qimg)
+        self._preview_source_seg = si
+        self._apply_image_scale()
+
+    def _apply_image_scale(self) -> None:
+        """把缓存的源图按当前 label 尺寸缩放显示（窗口变化时不重新解码）。"""
+        if self._preview_source is None or self._preview_source.isNull():
+            self._img_label.setText("(无图像)")
+            return
+        lw = max(50, self._img_label.width() - 8)
+        lh = max(50, self._img_label.height() - 8)
+        scaled = self._preview_source.scaled(
+            lw, lh,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation)
+        self._img_label.setPixmap(scaled)
 
     def eventFilter(self, obj, event) -> bool:
         from PySide6.QtCore import QEvent
@@ -554,8 +318,8 @@ class ReviewDialog(QDialog):
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        if hasattr(self, '_current_seg'):
-            self._show_seg_image(self._current_seg)
+        if hasattr(self, '_preview_source'):
+            self._apply_image_scale()
 
     # ═══════════════ 修正操作 ═══════════════
 
@@ -581,14 +345,14 @@ class ReviewDialog(QDialog):
                 dt_min = min(dt_min, max(abs(dt), 1e-3))
         if dt_min == float("inf"):
             return True, ""  # 无相邻段，无需检查
-        # m/s² → km/h/s 是 ×3.6（1 m/s = 3.6 km/h）；除以 3.6 会把阈值算小 13×
-        max_dv = self._max_accel * 3.6 * dt_min  # km/h
+        # m/s² × dt = m/s；转 km/h 用 config.MPS_TO_KMH（×3.6）
+        max_dv = self._max_accel * config.MPS_TO_KMH * dt_min  # km/h
         worst = max(abs(v - nv) for nv in neighbors)
-        if worst > max_dv * 3.0:  # 3× 容差（段间可能跨真实跳变）
+        if worst > max_dv * config.REVIEW_ACCEL_TOLERANCE:  # 容差倍率（段间可能跨真实跳变）
             msg = (f"段 #{si} 输入值 {v:.0f} km/h 与相邻段物理不一致\n\n"
                     f"相邻段值: {neighbors}\n"
                     f"在 {self._max_accel:.0f} m/s² 约束与 {dt_min:.2f}s 间隔下允许 "
-                    f"{max_dv * 3.0:.0f} km/h。\n\n确定要使用此值吗？")
+                    f"{max_dv * config.REVIEW_ACCEL_TOLERANCE:.0f} km/h。\n\n确定要使用此值吗？")
             return False, msg
         return True, ""
 

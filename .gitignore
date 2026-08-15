@@ -28,6 +28,9 @@ Thumbs.db
 *.avi
 *_log.csv
 
+# 唯一允许入库的视频：CI 解码集成测试的迷你视频（127KB）
+!tests/fixtures/videos/*.mp4
+
 # Self-built decord binaries
 _decord_build/
 
@@ -61,3 +64,6 @@ _patch_*.py
 *_diagnostics.csv
 RaceVideoToLog.egg-info/
 assets/ocr_models/models/
+
+# decord 帧索引缓存（诊断脚本 CWD 下的运行时产物）
+index/

@@ -8,15 +8,103 @@ from functools import lru_cache
 
 import numpy as np
 
-from config import OCR_GAMMA as _OCR_GAMMA_DEFAULT
+import config
 
-# OCR 预处理灰度权重（segment_flow._gray 共用）。
-_GRAY_W = np.array([0.299, 0.587, 0.114], dtype=np.float32)
+# OCR/分段预处理灰度权重（Rec.601，与 config.GRAY_RGB_WEIGHTS 单一事实源一致）。
+_GRAY_W = np.asarray(config.GRAY_RGB_WEIGHTS, dtype=np.float32)
 
 
 def _gray(crop: np.ndarray) -> np.ndarray:
-    """RGB → 灰度（uint8）。权重与 _GRAY_W 一致（分段与 OCR 预处理共用）。"""
+    """RGB → 灰度（uint8）。权重与 _GRAY_W 一致（分段与 OCR 预处理共用）。
+
+    decord gray 输出 (H,W,1) 直接取通道（跳过 matmul）。
+    """
+    if crop.shape[-1] == 1:
+        return crop[..., 0]
     return (crop.astype(np.float32) @ _GRAY_W).astype(np.uint8)
+
+
+# ── decord yuv420（packed NV12）转换 ───────────────────────────────────
+# 布局：前 h 行 = 原始 Y，后 ceil(h/2) 行 = interleaved U/V（原始 4:2:0）。
+# get_color_range() 给出 0=limited/tv、1=full/pc；按它展开 Y 后与 decord
+# gray 输出逐位一致。
+def _nv12_luma(crop: "np.ndarray") -> "np.ndarray":
+    """取 packed NV12 的原始 Y 平面（(h+ceil(h/2), w) → (h, w)）。"""
+    h = crop.shape[0] * 2 // 3
+    return crop[:h]
+
+
+def _nv12_batch_luma(crops: "np.ndarray") -> "np.ndarray":
+    """批量取 packed NV12 的原始 Y 平面（(B, h+ceil(h/2), w) → (B, h, w)）。"""
+    h = crops.shape[1] * 2 // 3
+    return crops[:, :h]
+
+
+def _nv12_luma_full(crop: "np.ndarray", color_range: int = 0) -> "np.ndarray":
+    """packed NV12 的 Y 平面按流 color_range 展开（复刻 decord gray 输出）。
+
+    limited/tv(0)：floor((raw-16)*255/219 + 0.5) 后 clip 0..255 —— 与
+    decord CPU swscale GRAY8 / GPU gray kernel 逐位一致；full/pc(1) 原样。
+    """
+    y = _nv12_luma(crop)
+    if color_range == 1:
+        return y
+    v = (y.astype(np.float32) - 16.0) * (255.0 / 219.0)
+    return np.clip(np.floor(v + 0.5), 0, 255).astype(np.uint8)
+
+
+def _nv12_batch_luma_full(crops: "np.ndarray", color_range: int = 0) -> "np.ndarray":
+    y = _nv12_batch_luma(crops)
+    if color_range == 1:
+        return y
+    v = (y.astype(np.float32) - 16.0) * (255.0 / 219.0)
+    return np.clip(np.floor(v + 0.5), 0, 255).astype(np.uint8)
+
+
+def nv12_to_rgb(crop: "np.ndarray") -> "np.ndarray":
+    """packed NV12 → RGB（uint8，BT.601 limited 色度矩阵）。
+
+    Y 已由 decoder 按流 range 展开（与 gray 输出一致），UV 为原始
+    4:2:0：chroma 按 2x2 块 nearest 上采样（decord RGB 路径的 MPEG-2
+    siting 语义），再做与 decord improc 相同的 BT.601 矩阵转换。
+    """
+    if crop.ndim != 2:
+        return crop[..., :3] if crop.ndim == 3 else crop
+    rows, w = crop.shape
+    h = rows * 2 // 3
+    # decord yuv420 的 Y/U/V 均为原始 8-bit。RGB 转换复刻 decord improc
+    # 的 BT.601 矩阵语义（系数 1.164/1.596/2.017，0..1 输入、偏移 16/128）
+    y = (crop[:h].astype(np.float32) - 16.0) / 255.0
+    uv_rows = (h + 1) // 2
+    uv = crop[h:h + uv_rows, :w // 2 * 2]
+    u = uv[:, 0::2].astype(np.float32)
+    v = uv[:, 1::2].astype(np.float32)
+    # nearest 上采样到 luma 分辨率（每个 2x2 块共用同一 chroma 样本；
+    # 奇数宽/高时末行末列补中性色度 128）
+    if u.shape[0] * 2 < h:
+        u = np.pad(u, ((0, h - u.shape[0] * 2), (0, 0)),
+                   mode='constant', constant_values=128)
+    if v.shape[0] * 2 < h:
+        v = np.pad(v, ((0, h - v.shape[0] * 2), (0, 0)),
+                   mode='constant', constant_values=128)
+    u = np.repeat(u, 2, axis=0)[:h]
+    v = np.repeat(v, 2, axis=0)[:h]
+    if u.shape[1] * 2 < w:
+        u = np.pad(u, ((0, 0), (0, w - u.shape[1] * 2)),
+                   mode='constant', constant_values=128)
+    if v.shape[1] * 2 < w:
+        v = np.pad(v, ((0, 0), (0, w - v.shape[1] * 2)),
+                   mode='constant', constant_values=128)
+    u = np.repeat(u, 2, axis=1)[:, :w]
+    v = np.repeat(v, 2, axis=1)[:, :w]
+    un = (u - 128.0) / 255.0
+    vn = (v - 128.0) / 255.0
+    r = 1.164383 * y + 1.596027 * vn
+    g = 1.164383 * y - 0.391762 * un - 0.812968 * vn
+    b = 1.164383 * y + 2.017232 * un
+    rgb = np.stack([r, g, b], axis=-1)
+    np.clip(rgb, 0.0, 1.0, out=rgb)
+    return (rgb * 255.0).astype(np.uint8)
 
 
 @dataclass
@@ -28,12 +116,8 @@ class VideoMetadata:
     fps: float
     codec: str
     frame_count: int
-@dataclass
-class SpeedObservation:
-    timestamp: float
-    raw_speed_kmh: int
-    raw_text: str
-    confidence: float = 0.0  # OCR model confidence [0, 1], 0 if unavailable
+
+
 def format_duration(seconds: float) -> str:
     seconds = max(0.0, float(seconds))
     total = int(round(seconds))
@@ -42,63 +126,6 @@ def format_duration(seconds: float) -> str:
     if hours:
         return f"{hours:d}:{minutes:02d}:{secs:02d}"
     return f"{minutes:d}:{secs:02d}"
-def _parse_int_or_none(s: str) -> int | None:
-    """解析字符串为 int，空字符串返回 None。"""
-    s = s.strip()
-    if not s:
-        return None
-    try:
-        return int(s)
-    except ValueError:
-        return None
-def next_frame_roi(vr, x1: int, y1: int, x2: int, y2: int) -> "np.ndarray":
-    """Grab next frame, returning the ROI crop (RGB uint8 HxWx3).
-
-    Uses ``vr.next_roi(x1, y1, x2, y2)`` (half-open bounds, numpy slice
-    semantics — pass closed bounds + 1) when the DLL provides it; the GPU
-    path copies only the ROI from device memory.  Falls back to
-    ``vr.next()`` + Python crop for old DLLs / CPU builds.  Raises
-    StopIteration on EOF.
-    """
-    roi = getattr(vr, "next_roi", None)
-    if roi is not None:
-        arr = roi(x1, y1, x2, y2)
-        f = arr.asnumpy()
-        if f.ndim == 3 and f.shape[2] == 3:
-            # GPU：next_roi 已裁剪；CPU reader 的 next_roi 回退全帧
-            # （decord 的 NextFrameRoi 对 CPU 返回 NextFrameImpl()）→ 裁剪
-            if f.shape[0] != y2 - y1 or f.shape[1] != x2 - x1:
-                return f[y1:y2, x1:x2].copy()
-            return f
-        raise StopIteration()
-    f = vr.next().asnumpy()
-    # 必须 .copy()：视图会引用整个 6MB 全帧缓冲区，调用方持有返回值
-    # （如 pipeline 的 raw_frames）时每帧泄漏一帧（实测 3000 帧 → 18GB）
-    return f[y1:y2, x1:x2].copy()
-
-
-def clamp_region(x1: int, y1: int, x2: int, y2: int, width: int, height: int) -> tuple[int, int, int, int]:
-    x1, x2 = sorted((max(0, min(width - 1, x1)), max(0, min(width - 1, x2))))
-    y1, y2 = sorted((max(0, min(height - 1, y1)), max(0, min(height - 1, y2))))
-    return x1, y1, x2, y2
-def compute_video_hash(video_path: str | Path, chunk_size: int = 1_048_576) -> str:
-    """计算视频文件的快速哈希（头尾各 1MB + 文件大小）。
-
-    使用 SHA-256，足以唯一标识视频文件，同时避免读取整个大文件。
-    """
-    import hashlib
-    video_path = Path(video_path)
-    if not video_path.exists():
-        return "N/A"
-    file_size = video_path.stat().st_size
-    h = hashlib.sha256()
-    h.update(str(file_size).encode())
-    with open(video_path, "rb") as f:
-        h.update(f.read(chunk_size))
-        if file_size > chunk_size * 2:
-            f.seek(-chunk_size, 2)
-            h.update(f.read(chunk_size))
-    return h.hexdigest()[:16]  # 前 16 字符足够区分
 
 
 @lru_cache(maxsize=64)
@@ -143,40 +170,42 @@ def _np_resize(img: "np.ndarray", new_w: int, new_h: int) -> "np.ndarray":
 
 def _preprocess_standard(crop: "np.ndarray", force_aspect: float = 0.0,
                          gamma: "float | None" = None) -> "np.ndarray":
-    """标准预处理：resize 到 48 高 + 可选强制宽高比 + 灰度 gamma。
+    """标准预处理：resize 到 OCR_TARGET_H 高 + 可选强制宽高比 + 灰度 gamma。
 
-    force_aspect > 0 时强制横向宽度 = 48 × force_aspect（px，宽高比固定；
-    可能放大或缩小——"force" 语义，非上限）。0 = 按原宽高比 resize。
-    主识别（pipeline）与 re-OCR（correction）共用，保证一致。
-    输出 float32（与 cv2 路径数值差 <= 1e-5）。
+    force_aspect > 0 时强制横向宽度 = OCR_TARGET_H × force_aspect（px，
+    宽高比固定；可能放大或缩小——"force" 语义，非上限）。0 = 按原宽高比
+    resize。输出 float32（与 cv2 路径数值差 <= 1e-5）。
 
     gamma：灰度对比度增强指数（255*(gray/255)^g）。None = 用 env
     RVTOL_OCR_GAMMA，都没有则 config.OCR_GAMMA（正式默认 2.0）。
     白字黄底等背景色块场景放大高段分离，平滑无裁剪不侵蚀笔画。
     gamma <= 0 跳过灰度变换（保留 RGB，回退旧行为）；
-    灰度权重 [0.299,0.587,0.114] 与 segment_flow._gray 一致。
+    灰度权重与 segment 灰度共用 config.GRAY_RGB_WEIGHTS。
 
     宽度 pad（fill_width）在 OCR 引擎 _resize_norm 层处理（替换固定 224），
     此处不 pad。
     """
-    target_h = 48                       # OCR 模型固定输入高度（v2.14 移除 target_h）
+    target_h = config.OCR_TARGET_H
     h, w = crop.shape[:2]
     new_w = max(1, int(w * target_h / h)) if h > 0 else w
     if force_aspect > 0:
         new_w = max(1, int(round(target_h * force_aspect)))
-    if new_w == w and abs(target_h - h) <= 0.02 * target_h:
-        # 目标尺寸已一致（或高差 ≤2%）→ 跳过无谓 resize；宽高任一需变
+    if new_w == w and abs(target_h - h) <= config.OCR_RESIZE_TOL * target_h:
+        # 目标尺寸已一致（或高差在容差内）→ 跳过无谓 resize；宽高任一需变
         # 都必须走 _np_resize（force_aspect 改宽时不能只比高度）
         resized = crop.astype(np.float32)
     else:
         resized = _np_resize(crop, new_w, target_h)
     if gamma is None:
         _env = _os.environ.get("RVTOL_OCR_GAMMA")
-        gamma = float(_env) if _env else float(_OCR_GAMMA_DEFAULT)
+        gamma = float(_env) if _env else float(config.OCR_GAMMA)
     if gamma > 0:
         # 灰度 + gamma（正式预处理）：RGB 逐通道 gamma 视觉差异小、回归多
         # （tools/_gamma_misread_montage 对比），灰度版视觉更清晰、回归少。
-        gray = resized @ _GRAY_W                          # (h, w) float32
+        if resized.shape[-1] == 1:
+            gray = resized[..., 0]                        # decord gray 输出
+        else:
+            gray = resized @ _GRAY_W                      # (h, w) float32
         resized = 255.0 * np.power(gray / 255.0, gamma)
         resized = np.stack([resized] * 3, axis=-1)
     return resized
