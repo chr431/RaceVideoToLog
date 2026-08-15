@@ -243,7 +243,12 @@ def confidence_scores(seg_vals: list, seg_times: list, seg_lens=None, *,
             continue
         l, r, run_frames, run_med = _consistent_run_bounds(
             seg_vals, seg_lens, i, island_tol)
-        if run_frames >= config.SEG_CONF_MIN_CONSISTENT_FRAMES:
+        run_is_exact = all(seg_vals[j] == seg_vals[i]
+                           for j in range(l, r + 1))
+        min_frames = (config.SEG_CONF_MIN_CONSISTENT_FRAMES_EXACT
+                      if run_is_exact
+                      else config.SEG_CONF_MIN_CONSISTENT_FRAMES)
+        if run_frames >= min_frames:
             continue
         lo = max(0, i - med_k)
         hi = min(n, i + med_k + 1)

@@ -56,3 +56,13 @@ def test_confidence_scores_caps_short_fluctuating_island():
     # 旧逻辑（tol=0）确实会放过第一个 150
     old_conf = confidence_scores(vals, times, [1] * len(vals), island_tol=0.0)
     assert old_conf[10] >= 20
+
+
+def test_confidence_scores_caps_short_exact_four_frame_island():
+    # 用户实际案例：4 帧完全相同的 127 短促平坦孤岛，旧逻辑因“≥3 帧可信”
+    # 放过了中间两帧；现在完全相同 run 需要 ≥5 帧才允许高置信。
+    vals = [197, 197, 197, 197, 127, 127, 127, 127, 178, 198, 198, 198, 198]
+    times = list(range(len(vals)))
+    conf = confidence_scores(vals, times, [1] * len(vals))
+    assert conf[5] < 20
+    assert conf[6] < 20

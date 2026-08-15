@@ -220,10 +220,13 @@ SEG_CONF_MIN_NEIGHBORS: int = 3
 SEG_CONF_SHORT_NEIGHBOR: float = 30.0
 SEG_CONF_EDGE: float = 100.0
 SEG_CONF_MED_GATE: float = 50.0
-# 一致性孤岛下限：连续相同值的累计帧数少于该值，即使局部中值贴合，
+# 一致性孤岛下限（近似/带波动 run）：累计帧数少于该值，即使局部中值贴合，
 # conf 也封顶到 SHORT_RUN_CAP（不能成为 HIGH_TRUST/DP 锚点）。
-# 两个单帧 127 形成 2 帧孤岛 → 不信任；3 帧以上相同值才允许高置信。
+# 127,128 这类 2 帧近似孤岛 → 不信任；带小波动的 3 帧以上才允许高置信。
 SEG_CONF_MIN_CONSISTENT_FRAMES: int = 3
+# 完全相同（无内部波动）的 run 需要更多帧才允许高置信：4 帧连续 127 这种
+# 短促平坦孤岛仍不锚定；带小波动的近似 run 反而 3 帧即可信（更像真实斜坡）。
+SEG_CONF_MIN_CONSISTENT_FRAMES_EXACT: int = 5
 SEG_CONF_SHORT_RUN_CAP: float = 15.0
 # 一致性孤岛的“近似相同”容差 (km/h)：孤岛内允许的小波动范围。
 # 只靠完全相同会把 127,128 这种两个误读互相撑腰的短孤岛漏掉。
