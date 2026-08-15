@@ -115,21 +115,27 @@ class ReviewChartMixin:
         """逐帧数据：所有采样帧的 (x=帧号, y=段值, 段索引, 连线数组)。
 
         y 取当前段值（含修正预览）；None 段 y=-1（无效标记）。连线数组
-        connect[i]=同段相邻帧 → 段内连线、段间断开。
+        connect[i]=同段相邻帧 → 段内连线、段间断开。同时缓存每段点集，
+        供 _update_corr_and_cur 在导航时 O(段长) 更新，避免全量扫描。
         """
         xs, ys, sidx = [], [], []
+        seg_xs: dict = {}
+        seg_ys: dict = {}
         for si, seg in enumerate(self._segments):
             v = self._seg_value(si)
             frames = seg.get('frames') or [seg['start']]
             xs.extend(frames)
             ys.extend([v if v is not None else -1] * len(frames))
             sidx.extend([si] * len(frames))
+            seg_xs[si] = list(frames)
+            seg_ys[si] = [v if v is not None else -1] * len(frames)
         n = len(xs)
         # connect 数组长度 = N（点数）：True 连接点 i → i+1（同段相连，段间断开）
         sidx_arr = np.asarray(sidx)
         conn = np.zeros(n, dtype=bool)
         if n > 1:
             conn[:-1] = sidx_arr[1:] == sidx_arr[:-1]
+        self._chart_seg_points = {"x": seg_xs, "y": seg_ys}
         return xs, ys, sidx, conn
 
     def _redraw_chart(self, plot=None) -> None:
@@ -260,25 +266,25 @@ class ReviewChartMixin:
         cur = self._chart_artists.get('cur_highlight')
         if corr is None or cur is None:
             return
-        cache = self._chart_cache
-        xs = cache.get('xs') or []
-        ys = cache.get('ys') or []
-        sidx = cache.get('sidx') or []
+        points = getattr(self, '_chart_seg_points', None)
+        if points is None:  # 理论上不会发生：_redraw_chart 总会先 _frame_data
+            return
         pv_seg = self._preview[0] if self._preview else None
-        # 修正蓝点：已修正段的全部帧（预览段被覆盖层替代，跳过）
+        # 修正蓝点：只遍历已修正段（通常远少于总段数）
         corr_set = set(self._corrections.keys())
         if pv_seg is not None:
             corr_set.discard(pv_seg)
-        cx = [xs[k] for k in range(len(xs)) if sidx[k] in corr_set]
-        cy = [ys[k] for k in range(len(xs)) if sidx[k] in corr_set]
+        cx, cy = [], []
+        for si in corr_set:
+            cx.extend(points["x"].get(si, ()))
+            cy.extend(points["y"].get(si, ()))
         corr.setData(x=cx, y=cy)
         # 当前红点：预览时隐藏（绿色预览段替代）；否则高亮选中段全部帧
         si = self._current_seg
         if pv_seg is not None:
             cur.setData(x=[], y=[])
         else:
-            sel = [k for k in range(len(xs)) if sidx[k] == si]
-            cur.setData(x=[xs[k] for k in sel], y=[ys[k] for k in sel])
+            cur.setData(x=points["x"].get(si, []), y=points["y"].get(si, []))
             cur.setBrush(make_brush(COLOR_BLUE if si in self._corrections else COLOR_RED))
 
     def _on_scatter_clicked(self, scatter, points) -> None:

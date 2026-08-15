@@ -21,6 +21,7 @@ _CSV_FIELD_MAP: dict[str, tuple[str, str]] = {
     "force_aspect":  ("force_aspect",  "float"),
     "fill_width":    ("fill_width",    "int"),
     "backend":       ("backend",       "str"),
+    "ocr_backend_requested": ("ocr_backend", "str"),
     "buffer":        ("buffer",        "int"),
     "frame_start":   ("frame_start",   "int"),
     "frame_end":     ("frame_end",     "int"),

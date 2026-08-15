@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QWidget, QLabel,
     QMessageBox, QSplitter,
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QShortcut, QKeySequence
 from PySide6.QtGui import QPixmap, QImage, QPalette, QColor
 from review_chart import ReviewChartMixin
@@ -45,6 +45,10 @@ class ReviewDialog(ReviewChartMixin, QDialog):
         # preview_loader(frame) -> RGB ROI ndarray；None 时回退到段内保存的
         # 灰度代表帧（生产管线 gray 输出不含色彩）
         self._preview_loader = preview_loader
+        # 预览源图缓存：切段/窗口缩放只重新缩放已解码的 QPixmap，
+        # 不重复 seek/解码（修复初次显示裁剪与切段卡顿）
+        self._preview_source: QPixmap | None = None
+        self._preview_source_seg: int = -1
         # 修正：段索引 → 新值（应用到整个段范围）
         self._corrections: dict[int, float] = {}
         self._current_seg: int = 0
@@ -53,6 +57,9 @@ class ReviewDialog(ReviewChartMixin, QDialog):
 
         self._build_ui()
         self._register_theme_callbacks()
+        # 等布局真正完成后再初始化当前段显示，避免用布局尚未稳定时的
+        # label 尺寸缩放图像（旧 bug：初始图被放大裁边）
+        QTimer.singleShot(0, lambda: self._navigate_to(self._current_seg))
 
     # ═══════════════ UI 构建 ═══════════════
 
@@ -200,39 +207,60 @@ class ReviewDialog(ReviewChartMixin, QDialog):
     # ═══════════════ 图像 + 导航 ═══════════════
 
     def _show_seg_image(self, si: int) -> None:
-        if 0 <= si < len(self._segments):
-            seg = self._segments[si]
-            crop = seg.get("rep_crop")
-            # 生产管线保存的是 gray 输出；需要原始 RGB 时通过 preview_loader
-            # 惰性解码（失败/无 loader 则回退灰度显示，保证不会黑屏）
-            if crop is not None and self._preview_loader is not None:
-                try:
-                    color = self._preview_loader(int(seg.get("rep_frame", -1)))
-                    if color is not None and color.size > 0:
-                        crop = color
-                except Exception:
-                    pass
-            if crop is not None and crop.size > 0:
-                if crop.ndim == 2:
-                    rgb = np.repeat(crop[..., None], 3, axis=-1)
-                elif crop.shape[-1] == 1:
-                    rgb = np.repeat(crop, 3, axis=-1)
-                elif crop.shape[-1] >= 4:
-                    rgb = crop[..., :3]
-                else:
-                    rgb = crop
-                rgb = np.ascontiguousarray(rgb, dtype=np.uint8)
-                h, w, _ch = rgb.shape
-                qimg = QImage(rgb.data, w, h, 3 * w,
-                              QImage.Format.Format_RGB888).copy()
-                pm = QPixmap.fromImage(qimg)
-                lw = max(50, self._img_label.width() - 8); lh = max(50, self._img_label.height() - 8)
-                scaled = pm.scaled(lw, lh,
-                                    Qt.AspectRatioMode.KeepAspectRatio,
-                                    Qt.TransformationMode.SmoothTransformation)
-                self._img_label.setPixmap(scaled)
-                return
-        self._img_label.setText("(无图像)")
+        """加载段 si 的代表帧原图（仅首次），随后按当前 label 尺寸缩放。
+
+        源图缓存为 QPixmap；resizeEvent/切回已看段都只做缩放，不重新解码。
+        """
+        if not (0 <= si < len(self._segments)):
+            self._img_label.setText("(无图像)")
+            return
+        if si == self._preview_source_seg and self._preview_source is not None:
+            self._apply_image_scale()
+            return
+        seg = self._segments[si]
+        crop = seg.get("rep_crop")
+        # 生产管线保存的是 gray 输出；需要原始 RGB 时通过 preview_loader
+        # 惰性解码（失败/无 loader 则回退灰度显示，保证不会黑屏）
+        if crop is not None and self._preview_loader is not None:
+            try:
+                color = self._preview_loader(int(seg.get("rep_frame", -1)))
+                if color is not None and color.size > 0:
+                    crop = color
+            except Exception:
+                pass
+        if crop is None or crop.size <= 0:
+            self._preview_source = None
+            self._preview_source_seg = -1
+            self._img_label.setText("(无图像)")
+            return
+        if crop.ndim == 2:
+            rgb = np.repeat(crop[..., None], 3, axis=-1)
+        elif crop.shape[-1] == 1:
+            rgb = np.repeat(crop, 3, axis=-1)
+        elif crop.shape[-1] >= 4:
+            rgb = crop[..., :3]
+        else:
+            rgb = crop
+        rgb = np.ascontiguousarray(rgb, dtype=np.uint8)
+        h, w, _ch = rgb.shape
+        qimg = QImage(rgb.data, w, h, 3 * w,
+                      QImage.Format.Format_RGB888).copy()
+        self._preview_source = QPixmap.fromImage(qimg)
+        self._preview_source_seg = si
+        self._apply_image_scale()
+
+    def _apply_image_scale(self) -> None:
+        """把缓存的源图按当前 label 尺寸缩放显示（窗口变化时不重新解码）。"""
+        if self._preview_source is None or self._preview_source.isNull():
+            self._img_label.setText("(无图像)")
+            return
+        lw = max(50, self._img_label.width() - 8)
+        lh = max(50, self._img_label.height() - 8)
+        scaled = self._preview_source.scaled(
+            lw, lh,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation)
+        self._img_label.setPixmap(scaled)
 
     def eventFilter(self, obj, event) -> bool:
         from PySide6.QtCore import QEvent
@@ -285,6 +313,26 @@ class ReviewDialog(ReviewChartMixin, QDialog):
                                         else f"速度: {v:.0f} km/h")
         self._btn_delete.setEnabled(si in self._corrections)
         self._redraw_chart()
+        # 延迟预取相邻段原图：用户连续翻段/点击附近散点时命中缓存，
+        # 消除每次切段都 seek 解码的卡顿
+        QTimer.singleShot(30, lambda: self._prefetch_neighbors(si))
+
+    def _prefetch_neighbors(self, si: int) -> None:
+        if self._preview_loader is None:
+            return
+        targets = [j for j in range(si - 3, si + 4)
+                   if 0 <= j < len(self._segments) and j != si]
+
+        def _worker() -> None:
+            for j in targets:
+                try:
+                    self._preview_loader(
+                        int(self._segments[j].get("rep_frame", -1)))
+                except Exception:
+                    pass
+
+        import threading
+        threading.Thread(target=_worker, daemon=True).start()
 
     def _on_spinbox_changed(self, value: int) -> None:
         si = self._current_seg
@@ -301,8 +349,8 @@ class ReviewDialog(ReviewChartMixin, QDialog):
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        if hasattr(self, '_current_seg'):
-            self._show_seg_image(self._current_seg)
+        if hasattr(self, '_preview_source'):
+            self._apply_image_scale()
 
     # ═══════════════ 修正操作 ═══════════════
 

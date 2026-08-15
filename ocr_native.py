@@ -115,6 +115,11 @@ class OcrEngine:
         else:
             self._init_onnx(models, size)
 
+    @property
+    def backend_name(self) -> str:
+        """实际推理后端：'tensorrt' 或 'onnxruntime'（CSV 头/日志使用）。"""
+        return "tensorrt" if self._trt is not None else "onnxruntime"
+
     # ═══════════════ ONNX 后端 ═══════════════
 
     def _init_onnx(self, models: Path, size: str) -> None:

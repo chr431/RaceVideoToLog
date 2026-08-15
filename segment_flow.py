@@ -22,7 +22,9 @@ from __future__ import annotations
 import csv
 import logging
 import os as _os
+import threading
 import time
+from collections import OrderedDict
 from pathlib import Path
 
 import numpy as np
@@ -136,6 +138,8 @@ class SegmentPipeline:
         # review 预览用：生产管线走 gray 输出（无色彩信息），预览需要原始
         # RGB ROI 时惰性打开一个 CPU RGB reader（见 load_rgb_crop）
         self._rgb_vr = None
+        self._rgb_lock = threading.Lock()
+        self._rgb_crop_cache: OrderedDict[int, np.ndarray] = OrderedDict()
         # 细粒度性能剖面（实验专用，RVTOL_PROFILE=1 才启用；默认零开销）
         self._profile_enabled = _os.environ.get(
             "RVTOL_PROFILE", "").strip().lower() in ("1", "true", "yes", "on")
@@ -244,37 +248,48 @@ class SegmentPipeline:
         """惰性解码一帧原始 RGB ROI（段 review 预览用）。
 
         生产解码器是 gray 输出（Y 平面，无法恢复色彩）；此方法单独维护
-        一个 CPU RGB reader，按需 seek 到目标帧取 ROI。调用方（GUI review）
-        串行使用，失败返回 None 由调用方回退到灰度显示。
+        一个 CPU RGB reader，按需 seek 到目标帧取 ROI。结果按帧缓存
+        （LRU 96 帧），供 review 快速回看/预取。线程安全：GUI 主线程与
+        预取线程串行经 _rgb_lock 访问 reader；失败返回 None。
         """
-        x1, y1, x2, y2 = self._roi
-        try:
-            if self._rgb_vr is None:
-                from decord import VideoReader, cpu as _cpu
-                try:
-                    import decord.video_reader as _vr_mod
-                    _has_roi_api = hasattr(_vr_mod, "_CAPI_VideoReaderSetRoi")
-                except ImportError:
-                    _has_roi_api = False
-                roi_half = (x1, y1, x2 + 1, y2 + 1)
-                roi_kw = {"roi": roi_half} if _has_roi_api else {}
-                self._rgb_vr = VideoReader(str(self._video_path), ctx=_cpu(0),
-                                           output_format="rgb", **roi_kw)
-                self._rgb_roi_half = roi_half
-            self._rgb_vr.seek_accurate(frame)
-            crop = self._rgb_vr.next_roi(*self._rgb_roi_half).asnumpy()
-            if crop.shape[0] != y2 - y1 + 1 or crop.shape[1] != x2 - x1 + 1:
-                # 旧版非 ROI-first 解码器回退全帧 → 子裁剪
-                crop = crop[y1:y2 + 1, x1:x2 + 1]
-            if crop.ndim == 2:
-                crop = crop[..., None]
-            if crop.shape[-1] == 1:
-                crop = np.repeat(crop, 3, axis=-1)
-            elif crop.shape[-1] == 4:
-                crop = crop[..., :3]
-            return np.ascontiguousarray(crop, dtype=np.uint8)
-        except Exception:
-            return None
+        with self._rgb_lock:
+            cached = self._rgb_crop_cache.get(frame)
+            if cached is not None:
+                self._rgb_crop_cache.move_to_end(frame)
+                return cached
+            x1, y1, x2, y2 = self._roi
+            try:
+                if self._rgb_vr is None:
+                    from decord import VideoReader, cpu as _cpu
+                    try:
+                        import decord.video_reader as _vr_mod
+                        _has_roi_api = hasattr(_vr_mod, "_CAPI_VideoReaderSetRoi")
+                    except ImportError:
+                        _has_roi_api = False
+                    roi_half = (x1, y1, x2 + 1, y2 + 1)
+                    roi_kw = {"roi": roi_half} if _has_roi_api else {}
+                    self._rgb_vr = VideoReader(str(self._video_path), ctx=_cpu(0),
+                                               output_format="rgb", **roi_kw)
+                    self._rgb_roi_half = roi_half
+                self._rgb_vr.seek_accurate(frame)
+                crop = self._rgb_vr.next_roi(*self._rgb_roi_half).asnumpy()
+                if crop.shape[0] != y2 - y1 + 1 or crop.shape[1] != x2 - x1 + 1:
+                    # 旧版非 ROI-first 解码器回退全帧 → 子裁剪
+                    crop = crop[y1:y2 + 1, x1:x2 + 1]
+                if crop.ndim == 2:
+                    crop = crop[..., None]
+                if crop.shape[-1] == 1:
+                    crop = np.repeat(crop, 3, axis=-1)
+                elif crop.shape[-1] == 4:
+                    crop = crop[..., :3]
+                rgb = np.ascontiguousarray(crop, dtype=np.uint8)
+                self._rgb_crop_cache[frame] = rgb
+                self._rgb_crop_cache.move_to_end(frame)
+                while len(self._rgb_crop_cache) > 96:
+                    self._rgb_crop_cache.popitem(last=False)
+                return rgb
+            except Exception:
+                return None
 
     def _open_hybrid_vrs(self):
         """CPU+NVDEC 混合解码：打开一对 ROI-first 解码器（CPU 前段 + GPU 后段）。
@@ -481,6 +496,7 @@ class SegmentPipeline:
                         fill_width=self._fill_width,
                         num_threads=self._ocr_num_threads(),
                         progress_cb=lambda msg: self._progress(msg, 2.0))
+        self._ocr_backend_used = eng.backend_name
         seg_vals = []
         rep_frames = []
         t0 = time.perf_counter()
@@ -687,6 +703,9 @@ class SegmentPipeline:
                         fill_width=self._fill_width,
                         num_threads=self._ocr_num_threads(),
                         progress_cb=_engine_progress)]
+                self._ocr_backend_used = (
+                    "tensorrt+onnxruntime" if len(engines) == 2
+                    else engines[0].backend_name)
                 self._prof_end("ocr", "engine_init", _t_eng)
                 B = _ocr_batch_size()
                 # 预处理（单线程 numpy，持 GIL）与推理（ONNX 多线程 /
@@ -1032,6 +1051,8 @@ class SegmentPipeline:
             fh.write(f"# max_speed={self._max_speed}, max_accel={self._max_accel}"
                      f", force_aspect={self._force_aspect}, fill_width={self._fill_width}\n")
             fh.write(f"# backend={self._backend}, model={self._ocr_model}\n")
+            fh.write(f"# ocr_backend={getattr(self, '_ocr_backend_used', '')}, "
+                     f"ocr_backend_requested={self._ocr_backend}\n")
             fh.write(f"# segments={self._n_segments}, corrected={self._n_corr}\n")
             tstr = ", ".join(f"{k}={v:.2f}" for k, v in self.timing.items())
             if tstr:
