@@ -6,6 +6,8 @@
 """
 from __future__ import annotations
 
+import numpy as np
+
 import config
 
 from PySide6.QtWidgets import (
@@ -28,7 +30,8 @@ class ReviewDialog(ReviewChartMixin, QDialog):
     def __init__(self, parent: QWidget, segments: list[dict],
                  max_speed: float,
                  max_accel: float = config.DEFAULT_MAX_ACCEL,
-                 fps: float = 1.0) -> None:
+                 fps: float = 1.0,
+                 preview_loader=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("最终检查 — 点击图中任意段修正该段速度")
         self.resize(1200, 750)
@@ -39,6 +42,9 @@ class ReviewDialog(ReviewChartMixin, QDialog):
         self._max_speed = max_speed
         self._max_accel = max_accel
         self._fps = fps
+        # preview_loader(frame) -> RGB ROI ndarray；None 时回退到段内保存的
+        # 灰度代表帧（生产管线 gray 输出不含色彩）
+        self._preview_loader = preview_loader
         # 修正：段索引 → 新值（应用到整个段范围）
         self._corrections: dict[int, float] = {}
         self._current_seg: int = 0
@@ -195,11 +201,30 @@ class ReviewDialog(ReviewChartMixin, QDialog):
 
     def _show_seg_image(self, si: int) -> None:
         if 0 <= si < len(self._segments):
-            crop = self._segments[si].get("rep_crop")
+            seg = self._segments[si]
+            crop = seg.get("rep_crop")
+            # 生产管线保存的是 gray 输出；需要原始 RGB 时通过 preview_loader
+            # 惰性解码（失败/无 loader 则回退灰度显示，保证不会黑屏）
+            if crop is not None and self._preview_loader is not None:
+                try:
+                    color = self._preview_loader(int(seg.get("rep_frame", -1)))
+                    if color is not None and color.size > 0:
+                        crop = color
+                except Exception:
+                    pass
             if crop is not None and crop.size > 0:
-                rgb = crop
-                h, w, ch = rgb.shape
-                qimg = QImage(rgb.data, w, h, ch * w, QImage.Format.Format_RGB888)
+                if crop.ndim == 2:
+                    rgb = np.repeat(crop[..., None], 3, axis=-1)
+                elif crop.shape[-1] == 1:
+                    rgb = np.repeat(crop, 3, axis=-1)
+                elif crop.shape[-1] >= 4:
+                    rgb = crop[..., :3]
+                else:
+                    rgb = crop
+                rgb = np.ascontiguousarray(rgb, dtype=np.uint8)
+                h, w, _ch = rgb.shape
+                qimg = QImage(rgb.data, w, h, 3 * w,
+                              QImage.Format.Format_RGB888).copy()
                 pm = QPixmap.fromImage(qimg)
                 lw = max(50, self._img_label.width() - 8); lh = max(50, self._img_label.height() - 8)
                 scaled = pm.scaled(lw, lh,

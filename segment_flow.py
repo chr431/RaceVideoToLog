@@ -133,6 +133,9 @@ class SegmentPipeline:
         self._ocr_vals: list = []
         self._conf_vals: list = []        # 每段置信度（run 后填充，flag 判定用）
         self._pinned: set = set()          # 用户手动修正的段索引（finalize 时设）
+        # review 预览用：生产管线走 gray 输出（无色彩信息），预览需要原始
+        # RGB ROI 时惰性打开一个 CPU RGB reader（见 load_rgb_crop）
+        self._rgb_vr = None
         # 细粒度性能剖面（实验专用，RVTOL_PROFILE=1 才启用；默认零开销）
         self._profile_enabled = _os.environ.get(
             "RVTOL_PROFILE", "").strip().lower() in ("1", "true", "yes", "on")
@@ -236,6 +239,42 @@ class SegmentPipeline:
             except ValueError:
                 pass
         return float(config.HYBRID_CPU_SPLIT)
+
+    def load_rgb_crop(self, frame: int):
+        """惰性解码一帧原始 RGB ROI（段 review 预览用）。
+
+        生产解码器是 gray 输出（Y 平面，无法恢复色彩）；此方法单独维护
+        一个 CPU RGB reader，按需 seek 到目标帧取 ROI。调用方（GUI review）
+        串行使用，失败返回 None 由调用方回退到灰度显示。
+        """
+        x1, y1, x2, y2 = self._roi
+        try:
+            if self._rgb_vr is None:
+                from decord import VideoReader, cpu as _cpu
+                try:
+                    import decord.video_reader as _vr_mod
+                    _has_roi_api = hasattr(_vr_mod, "_CAPI_VideoReaderSetRoi")
+                except ImportError:
+                    _has_roi_api = False
+                roi_half = (x1, y1, x2 + 1, y2 + 1)
+                roi_kw = {"roi": roi_half} if _has_roi_api else {}
+                self._rgb_vr = VideoReader(str(self._video_path), ctx=_cpu(0),
+                                           output_format="rgb", **roi_kw)
+                self._rgb_roi_half = roi_half
+            self._rgb_vr.seek_accurate(frame)
+            crop = self._rgb_vr.next_roi(*self._rgb_roi_half).asnumpy()
+            if crop.shape[0] != y2 - y1 + 1 or crop.shape[1] != x2 - x1 + 1:
+                # 旧版非 ROI-first 解码器回退全帧 → 子裁剪
+                crop = crop[y1:y2 + 1, x1:x2 + 1]
+            if crop.ndim == 2:
+                crop = crop[..., None]
+            if crop.shape[-1] == 1:
+                crop = np.repeat(crop, 3, axis=-1)
+            elif crop.shape[-1] == 4:
+                crop = crop[..., :3]
+            return np.ascontiguousarray(crop, dtype=np.uint8)
+        except Exception:
+            return None
 
     def _open_hybrid_vrs(self):
         """CPU+NVDEC 混合解码：打开一对 ROI-first 解码器（CPU 前段 + GPU 后段）。
@@ -440,7 +479,8 @@ class SegmentPipeline:
         from video_utils import _preprocess_standard
         eng = OcrEngine(self._ocr_model, self._ocr_engine_type(),
                         fill_width=self._fill_width,
-                        num_threads=self._ocr_num_threads())
+                        num_threads=self._ocr_num_threads(),
+                        progress_cb=lambda msg: self._progress(msg, 2.0))
         seg_vals = []
         rep_frames = []
         t0 = time.perf_counter()
@@ -458,9 +498,9 @@ class SegmentPipeline:
                 sv, _rt, _c = extract_speed_value(res)
                 seg_vals.append(int(sv) if sv is not None and sv >= 0 else None)
                 rep_frames.append(rep)
-            if k % 1000 == 0:
-                self._progress(f"[OCR] 段: {k}/{len(segs)}",
-                               73 + k / max(len(segs), 1) * 15)
+            done = min(k + B, len(segs))
+            self._progress(f"[OCR] 段: {done}/{len(segs)}",
+                           73 + done / max(len(segs), 1) * 15)
         self.timing["ocr"] = time.perf_counter() - t0
         self._n_segments = len(segs)
         return seg_vals, rep_frames
@@ -629,20 +669,24 @@ class SegmentPipeline:
                     config.HYBRID_OCR_ENV, "").strip().lower() in \
                     ("1", "true", "yes", "on")
                 _t_eng = time.perf_counter()
+                _engine_progress = lambda msg: self._progress(msg, 2.0)
                 if _hybrid_ocr:
                     engines = [
                         OcrEngine(self._ocr_model, "tensorrt",
                                   fill_width=self._fill_width,
-                                  num_threads=self._ocr_num_threads()),
+                                  num_threads=self._ocr_num_threads(),
+                                  progress_cb=_engine_progress),
                         OcrEngine(self._ocr_model, "onnxruntime",
                                   fill_width=self._fill_width,
-                                  num_threads=self._ocr_num_threads()),
+                                  num_threads=self._ocr_num_threads(),
+                                  progress_cb=_engine_progress),
                     ]
                 else:
                     engines = [OcrEngine(
                         self._ocr_model, self._ocr_engine_type(),
                         fill_width=self._fill_width,
-                        num_threads=self._ocr_num_threads())]
+                        num_threads=self._ocr_num_threads(),
+                        progress_cb=_engine_progress)]
                 self._prof_end("ocr", "engine_init", _t_eng)
                 B = _ocr_batch_size()
                 # 预处理（单线程 numpy，持 GIL）与推理（ONNX 多线程 /
@@ -650,22 +694,34 @@ class SegmentPipeline:
                 # 推理线程消费。原串行 flush（预处理→推理→预处理→…）
                 # 让多线程推理空转等单线程预处理；重叠后 OCR 总时长逼近推理本身。
                 infer_q: Queue = Queue(maxsize=config.OCR_INFER_QUEUE_SIZE)
+                ocr_progress_frac = [0.0]
+
+                def _report_ocr_progress(idx: int, frac: float) -> None:
+                    # 按解码进度每 1% 报告一次（段数可达数千，避免刷屏；
+                    # 最终段保证报告 100% 位置）
+                    if frac - ocr_progress_frac[0] >= 0.01 or frac >= 1.0:
+                        ocr_progress_frac[0] = frac
+                        # 生产者随段一起携带解码进度 frac（0-1），OCR 完成
+                        # 该段后据此推进 58→86 的进度段，反映真实管线位置
+                        self._progress(f"[OCR] 段 {idx + 1}",
+                                       58.0 + frac * 28.0)
 
                 def infer_worker(eng) -> None:
                     while True:
                         item = infer_q.get()
                         if item is None:  # 哨兵
                             return
-                        idxs, reps, procs = item
+                        idxs, reps, procs, fracs = item
                         _t_i = time.perf_counter()
                         res = eng(procs)
                         self._prof_end("ocr", "infer", _t_i)
                         _t_c = time.perf_counter()
-                        for idx, rep, r in zip(idxs, reps, res):
+                        for idx, rep, r, frac in zip(idxs, reps, res, fracs):
                             sv, _rt, _c = extract_speed_value(r)
                             results[idx] = (
                                 int(sv) if sv is not None and sv >= 0
                                 else None, rep)
+                            _report_ocr_progress(idx, frac)
                         self._prof_end("ocr", "ctc_decode", _t_c)
 
                 infer_threads = [
@@ -674,7 +730,7 @@ class SegmentPipeline:
                     for eng in engines]
                 for t in infer_threads:
                     t.start()
-                b_idx, b_reps, b_crops = [], [], []
+                b_idx, b_reps, b_crops, b_fracs = [], [], [], []
 
                 def flush() -> None:
                     if not b_idx:
@@ -684,8 +740,9 @@ class SegmentPipeline:
                                                   force_aspect=self._force_aspect)
                              for c in b_crops]
                     self._prof_end("ocr", "preprocess", _t_p)
-                    infer_q.put((list(b_idx), list(b_reps), procs))
-                    b_idx.clear(); b_reps.clear(); b_crops.clear()
+                    infer_q.put((list(b_idx), list(b_reps), procs,
+                                 list(b_fracs)))
+                    b_idx.clear(); b_reps.clear(); b_crops.clear(); b_fracs.clear()
 
                 while True:
                     _t_w = time.perf_counter()
@@ -693,8 +750,9 @@ class SegmentPipeline:
                     self._prof_end("ocr", "q_get_wait", _t_w)
                     if item is None:  # 哨兵
                         break
-                    idx, rep, crop = item
+                    idx, rep, crop, frac = item
                     b_idx.append(idx); b_reps.append(rep); b_crops.append(crop)
+                    b_fracs.append(frac)
                     if len(b_idx) >= B:
                         flush()
                 flush()
@@ -818,7 +876,8 @@ class SegmentPipeline:
                         seg = frames[s:k]
                         segs.append(seg)
                         _t_push = time.perf_counter()
-                        q.put((seg_idx, rep_frame, rep_crop))
+                        q.put((seg_idx, rep_frame, rep_crop,
+                               k / max(len(frames), 1)))
                         self._prof_end("producer", "q_put_block", _t_push)
                         rep_crops[rep_frame] = rep_crop
                         seg_idx += 1
@@ -838,7 +897,7 @@ class SegmentPipeline:
             seg = frames[s:]
             segs.append(seg)
             _t_push = time.perf_counter()
-            q.put((seg_idx, rep_frame, rep_crop))
+            q.put((seg_idx, rep_frame, rep_crop, 1.0))
             self._prof_end("producer", "q_put_block", _t_push)
             rep_crops[rep_frame] = rep_crop
             seg_idx += 1

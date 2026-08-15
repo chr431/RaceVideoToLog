@@ -177,7 +177,8 @@ class ExportControllerMixin:
         from gui_review import ReviewDialog  # 延迟导入（pyqtgraph ~0.8s）
         dlg = ReviewDialog(self, pipeline.segments,
                            pipeline._max_speed, pipeline._max_accel,
-                           pipeline._fps or 1.0)
+                           pipeline._fps or 1.0,
+                           preview_loader=pipeline.load_rgb_crop)
         self._gui_mark("final_check: before exec")
         accepted = dlg.exec() == QDialog.DialogCode.Accepted
         corrections = dlg.get_corrections()
