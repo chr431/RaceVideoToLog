@@ -1,4 +1,4 @@
-# RaceVideoToLog v2.15.0
+# RaceVideoToLog v2.15.1
 
 从赛车视频中提取速度数据，生成时间-速度-距离 CSV 文件。
 
@@ -26,12 +26,12 @@ setup_venv.bat
 
 本项目**不依赖 PyPI decord**（CPU-only、无 `next_roi` / `get_codec`、CPU 解码内存溢出）。自建 fork（chr431/decord）支持 NVDEC GPU 硬解码 + CPU 软件解码，只传输识别 ROI（解码提速 ~45%，编码信息直接来自 decord），且 GPU API 运行时动态加载 —— 无 NVIDIA 设备自动回退 CPU 解码。
 
-**版本要求：≥ v0.7.5**（ROI-first 解码管线：解码器只输出识别矩形——CPU
+**版本要求：≥ v0.7.9**（当前发布；ROI-first 解码管线：解码器只输出识别矩形——CPU
 filter 先裁剪再转换、GPU 转换 kernel 只算 ROI 窗口；并修复了 v0.7.4 异步
 D2H 的孤立帧撕裂竞态。v0.7.4 自动回退逐帧裁剪路径，功能正常但略慢；
 旧版会报 `_CAPI_VideoReaderGetBatchRoi` 不存在）。
 
-获取 decord 发布产物（推荐）：运行 [chr431/decord](https://github.com/chr431/decord) 的 **Release workflow**（Actions → Release → Run workflow，输入版本号如 `0.7.7`），它会构建并发布 `decord-<ver>-win64-gpu.zip`。解压到本仓库 `_decord_build\`：
+获取 decord 发布产物（推荐）：运行 [chr431/decord](https://github.com/chr431/decord) 的 **Release workflow**（Actions → Release → Run workflow，输入版本号如 `0.7.9`），它会构建并发布 `decord-<ver>-win64-gpu.zip`。解压到本仓库 `_decord_build\`：
 
 ```text
 _decord_build\
@@ -70,7 +70,7 @@ _decord_build\
 ## 输出格式
 
 ```csv
-# RaceVideoToLog v2.15.0
+# RaceVideoToLog v2.15.1
 # video=test5.mp4, fps=59.767
 # roi=843,993,948,1025, format=km/h, frame_start=362, frame_end=7585
 # max_speed=400.0, max_accel=50.0, force_aspect=0.0, fill_width=224
@@ -170,7 +170,7 @@ build_exe.bat
 
 ## 变更记录
 
-完整发布日志（v2.7.1 → v2.15.0）见 [release_notes.md](release_notes.md)。
+完整发布日志（v2.7.1 → v2.15.1）见 [release_notes.md](release_notes.md)。
 
 ## 运行时缓存（卸载时需删除）
 

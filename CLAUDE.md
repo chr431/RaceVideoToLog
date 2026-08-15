@@ -35,7 +35,7 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
   `test_hybrid_decoder.py`（cpu+nvdec 识别/切分/解码 worker）、
   `test_decoder_integration.py`（缺 decord 显式跳过）。
 - CI（.github/workflows/ci.yml）：test job 跑全量 pytest；decoder-smoke job
-  从 chr431/decord release v0.7.8 下载 fork 真实跑解码集成测试（下载失败
+  从 chr431/decord release v0.7.9 下载 fork 真实跑解码集成测试（下载失败
   显式跳过不红）；version-check 跑 tools/version.py。
 - 1-2 km/h 平滑偏移漏纠是信息论极限（与真实平滑不可区分）——局部物理约束
   无解，勿重复探索。
@@ -162,7 +162,7 @@ HEVC/AV1 CPU 明显更慢，hybrid10 在 HEVC 还拖慢 0.7s。**维持 auto=GPU
   （纯解码 13.8s vs auto 14.7s，OCR 隐藏于解码之下非瓶颈），混合仅对
   "TRT 可用但强制 OCR=cpu"有意义；准确率无扰动（test2 8/8、test6
   0/0 与基线一致）。
-- **decord v0.7.8（ROI-first + 撕裂帧 + seek VFR 越位 + 双解码器背压 +
+- **decord v0.7.9（ROI-first + 撕裂帧 + seek VFR 越位 + 双解码器背压 +
   GPU 色度 siting 修复 + GPU gray 输出，fork 仓库 D:\Repo\decord）**：
   - v0.7.5 起：解码器只输出 ROI 矩形（CPU filter crop 先于 format，yuv420p
     x/y/w/h 全偶数约束用偶数超集+顶部精裁绕过；GPU kernel 只算 ROI 窗口
@@ -228,6 +228,10 @@ HEVC/AV1 CPU 明显更慢，hybrid10 在 HEVC 还拖慢 0.7s。**维持 auto=GPU
 
 - 生产路径：`run()` → `_run_pipelined()`（解码∥分段∥段值 OCR 流水线，
   有界队列背压）→ `_confidence` → `_dense_correct`（稠密格点 DP）→ `_build_rows`
+- 职责拆分（v2.15.1）：segmentation.py（灰度/Otsu/聚类）、hybrid_decode.py
+  （混合解码 worker/队列）、seg_correction.py（检测/置信度/DP 纯函数）、
+  ocr_trt.py（TrtEngine）、analysis_plot.py / review_chart.py / gui_video.py /
+  export_controller.py（GUI 拆分）；segment_flow.py 保留编排与兼容 re-export
 - **串行方法（_decode_all/_segment/_ocr_segments/_detect/_correct）是实验参考
   路径**，只被 tools/ 与测试使用，生产不走——改动需同时考虑两侧
 - 分段：raw 灰度（`_gray_seg`，SEG_GAMMA=0；RVTOL_SEG_GAMMA 可实验 gamma）+
@@ -236,7 +240,7 @@ HEVC/AV1 CPU 明显更慢，hybrid10 在 HEVC 还拖慢 0.7s。**维持 auto=GPU
   22 PINNED（20-29 高可信绿点，10-19 自动纠错红点，GUI 按区间着色）
 - TRT 引擎缓存：`<程序目录>/ocr_engines/`（免安装便携），旧 LOCALAPPDATA
   只读回退；engine 文件名含 sm89（本机 RTX 4060），换卡靠"加载失败→删除→
-  重建"兜底；TRT 10/11 双兼容（getattr 回退 + 输出张量 profile 守卫）
+  重建"兜底；TRT 10/11 双兼容（getattr 回退；实现已迁至 ocr_trt.TrtEngine）
 - **decord fork 解码层状态（fork 仓库 D:\Repo\decord，本地可重建）**：
   - ✅ v0.7.5：CPU filter crop 先于 format；GPU kernel ROI 窗口 + ROI
     输出池；同步 D2H（撕裂帧竞态修复）。
@@ -245,6 +249,8 @@ HEVC/AV1 CPU 明显更慢，hybrid10 在 HEVC 还拖慢 0.7s。**维持 auto=GPU
   - ✅ v0.7.8：GPU 色度 siting 修复（RGB 跨后端收敛 ±3）+ GPU
     output_format='gray' 直出 Y（按流 range 展开，与 CPU GRAY8
     逐位一致）。
+  - ✅ v0.7.9：当前生产版本（2026-08-15 发布，CPU/GPU 解码结果与
+    v0.7.8 逐位一致，解码集成测试哈希已重新采集确认）。
   - **GPU 真批量异步解码 = 已验证死路（2026-08-15 实测）**：display 回调
     去 sync + 延迟解映射 + 32 surface + 批级 SyncStream 的完整实现放在
     fork 分支 `experiment/async-batch-decode`（980 帧 A/B 与同步版逐位

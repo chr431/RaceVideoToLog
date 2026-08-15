@@ -1,4 +1,4 @@
-"""RaceVideoToLog v2.15.0 — 赛车视频速度 OCR 提取工具。
+"""RaceVideoToLog v2.15.1 — 赛车视频速度 OCR 提取工具。
 
 从车载视频中实时 OCR 识别速度数字，支持 TensorRT / CPU 两种后端（自动选择），
 输出时间-速度-距离 CSV 文件。
@@ -68,7 +68,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="RaceVideoToLog - 视频速度提取工具")
     parser.add_argument("video", nargs="?", help="视频文件路径")
     parser.add_argument("--roi", nargs=4, type=int, metavar=("X1","Y1","X2","Y2"), help="识别范围")
-    parser.add_argument("--format", choices=["m/s","km/h","mile/h"], default=config.DEFAULT_SPEED_FORMAT)
+    parser.add_argument("--format", choices=list(config.SOURCE_TO_KMH),
+                        default=config.DEFAULT_SPEED_FORMAT)
     parser.add_argument("--buffer", type=int, default=config.DEFAULT_BUFFER_SIZE,
         help="解码∥OCR 流水线队列缓冲（段数）")
     parser.add_argument("--max-speed", type=float, default=config.DEFAULT_MAX_SPEED)
@@ -106,6 +107,9 @@ def main() -> None:
     # None = 未指定：归一化为配置默认值（显式传 0 必须保留，不能被 CSV 覆盖）
     if getattr(args, "force_aspect", None) is None:
         args.force_aspect = config.DEFAULT_FORCE_ASPECT
+
+    from logging_setup import configure_logging
+    configure_logging(args.log_level)
 
     if args.video:
         from headless import run_headless

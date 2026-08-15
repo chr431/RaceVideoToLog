@@ -2,7 +2,7 @@
 
 与 rapidocr 的 TextRecognizer 输出逐字节对齐（预处理/CTC 后处理复刻）：
 - 预处理: resize 到 48 高 + (x/255 - 0.5) / 0.5 归一化 + pad 到 batch 最大宽
-- 推理:   ONNX (onnxruntime, 动态 batch) / TensorRT (.engine, batch <= profile 上限)
+- 推理:   ONNX (onnxruntime, 动态 batch) / TensorRT（引擎实现见 ocr_trt.py）
 - 后处理: argmax(axis=2) + max(axis=2) + CTC 去重 + blank(0) 过滤 + 字符映射
 - 字符表: rapidocr models/ppocrv6_dict.txt（6904 字符 + 末尾空格 + 开头 blank = 6906）
 
@@ -10,16 +10,22 @@
 """
 from __future__ import annotations
 
+import logging
 import math
 import os
 import sys
 import threading
-from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
 
 import config
+from ocr_trt import TrtEngine
+
+# ONNX CPU 性能优化：避免 OpenMP 线程忙等，降低 CPU 空转。
+os.environ.setdefault("OMP_WAIT_POLICY", "PASSIVE")
+
+log = logging.getLogger(__name__)
 
 
 def _models_dir() -> Path:
@@ -41,17 +47,13 @@ def cpu_physical_cores() -> int:
     return max(2, int(physical))
 
 
-def auto_ocr_thread_count(gpu_decode: bool) -> int:
-    """给 OCR 推理线程预算（根本性解决"CPU 满负荷抢核变慢"）。
+def auto_ocr_thread_count() -> int:
+    """OCR 推理线程预算：全部物理核。
 
-    实测（16C32T，decord v0.7.4 + onnxruntime 1.29，test5 7223 帧）：
-    - GPU 解码：OCR 8→16 线程 11.3s→9.0s，满负荷正收益（超线程上限
-      继续退化，封顶物理核）。
-    - CPU 解码：FFmpeg 帧线程 2（fork 默认）+ filter auto（≈2）只占
-      SMT 份额，OCR 全物理核 16 线程 9.5s（vs OCR 8 线程 12.8s 且
-      RSS 病态 8.2GB）。旧"FFmpeg8+filter1+OCR8"组合在当前栈上
-      13.3s/9.8GB，已过时。
-    两种后端皆返回全部物理核（gpu_decode 参数保留供诊断日志）。
+    实测（16C32T，decord v0.7.9 + onnxruntime，test5 7223 帧）：
+    解码走 NVDEC 卸载 / FFmpeg 帧线程 + filter auto（只占 SMT 份额），
+    OCR 全物理核满负荷正收益；超物理核（超线程）不再提升。CPU 与 GPU
+    解码后端统一使用同一预算。
     """
     return cpu_physical_cores()
 
@@ -72,22 +74,19 @@ class OcrEngine:
     Args:
         variant: "v6_small"（唯一模型，v2.13 起）
         engine_type: "onnxruntime" | "tensorrt"
+        progress_cb: 构建引擎等耗时阶段的进度消息回调 (str)。
+        fill_width: OCR 输入 pad 宽度下限（px）。0 = 用 config 默认。速度窄图
+            对宽 pad 更准，用户可调（GUI 160-320）。
+        num_threads: ONNX 推理线程数。None = RVTOL_OCR_THREADS env →
+            默认物理核/2（仅直接构造 OcrEngine 时）；生产管线会显式传入
+            auto_ocr_thread_count()（全物理核），因此 CPU/GPU 解码后端统一。
     """
 
     def __init__(self, variant: str = "v6_small",
                  engine_type: str = "onnxruntime",
-                 progress_cb: "Callable[[str], None] | None" = None,
+                 progress_cb: "callable | None" = None,
                  fill_width: int = 0,
                  num_threads: int | None = None) -> None:
-        """progress_cb: 构建引擎等耗时阶段的进度消息回调 (str)。
-
-        fill_width: OCR 输入 pad 宽度下限（px，替换固定 OCR_PAD_WIDTH_MIN）。
-        0 = 用 config 默认。速度窄图对宽 pad 更准，用户可调（GUI 160-320）。
-
-        num_threads: ONNX 推理线程数（None = RVTOL_OCR_THREADS env →
-        默认物理核/2）。管线按解码后端注入线程预算（SegmentPipeline.
-        _ocr_num_threads）：NVDEC 解码 → 全物理核；CPU 解码 → 物理核/2。
-        """
         self._variant = variant
         self._progress_cb = progress_cb
         self._fill_width = fill_width
@@ -106,20 +105,24 @@ class OcrEngine:
         self._chars = chars
 
         # ── 模型 ──
+        self._trt: TrtEngine | None = None
         if engine_type == "tensorrt":
-            self._init_trt(models, size)
+            try:
+                self._trt = TrtEngine(models, size, progress_cb=self._progress_cb)
+            except Exception as e:
+                log.warning("TensorRT 引擎不可用 (%s)，回退 ONNX 后端。", e)
+                self._init_onnx(models, size)
         else:
             self._init_onnx(models, size)
 
-    # ═══════════════ 后端初始化 ═══════════════
+    # ═══════════════ ONNX 后端 ═══════════════
 
     def _init_onnx(self, models: Path, size: str) -> None:
         import onnxruntime as ort
-        # 线程数必须显式限制：默认（=全部逻辑核）会让 ONNX 推理占满 CPU
-        # 并与解码器抢核。物理核/2 是 CPU 解码场景的历史最优（8 线程
-        # 0.598ms/帧 vs 16 线程 0.823ms/帧——超线程核上的线程开销）；
-        # GPU 解码场景由 SegmentPipeline._apply_ocr_thread_env 按
-        # auto_ocr_thread_count(全物理核) 覆盖（RVTOL_OCR_THREADS env）。
+        # 直接构造 OcrEngine（未传 num_threads）时默认物理核/2：避免 ONNX
+        # 推理占满全部逻辑核并与解码器抢核。生产管线 SegmentPipeline.
+        # _ocr_num_threads 显式传 auto_ocr_thread_count()（全物理核），
+        # 所以 CPU/GPU 解码场景统一走显式线程预算，不走此默认。
         so = ort.SessionOptions()
         physical = cpu_physical_cores()
         n = max(2, physical // 2)
@@ -147,144 +150,17 @@ class OcrEngine:
         self._session = ort.InferenceSession(
             str(models / f"PP-OCRv6_rec_{size}.onnx"),
             sess_options=so, providers=["CPUExecutionProvider"])
-        self._trt = False
-        self._max_batch = None  # ONNX 动态 batch，不分片
-
-    @staticmethod
-    def _engine_candidates(size: str) -> list[Path]:
-        """engine 查找顺序：模型目录（本机构建）→ 本目录缓存 → 旧 LOCALAPPDATA。
-
-        - [0] 模型目录（打包只读，通常不存在）
-        - [1] 本目录缓存（可写，构建目标 —— 免安装设计，不写 %LOCALAPPDATA%）
-        - [2] 旧版本（≤v2.13）LOCALAPPDATA 缓存（只读兼容：已发布版本用户
-          首次运行新版本可复用，避免重建；不写入）
-        """
-        name = f"multi_PP-OCRv6_rec_{size}_sm89_fp32_tf32unset.engine"
-        cands = [_models_dir() / "models" / name]
-        cands.append(config.app_data_dir() / "ocr_engines" / name)
-        legacy = (Path(os.environ.get("LOCALAPPDATA", str(Path.home())))
-                  / "RaceVideoToLog" / "ocr_engines" / name)
-        cands.append(legacy)
-        return cands
-
-    def _init_trt(self, models: Path, size: str) -> None:
-        """加载或构建 TRT 引擎；任何失败回退 ONNX。
-
-        - engine 不存在 → 本地自动构建（首次运行，几分钟）并缓存到
-          程序目录 ocr_engines/（免安装：不写 %LOCALAPPDATA%）
-        - 版本不兼容的陈旧引擎（TRT 升级后旧产物，序列化版本号不匹配）或
-          GPU 架构不匹配的引擎 → 删除并自动重建，避免静默回退 ONNX
-        """
-        import logging
-        log = logging.getLogger(__name__)
-
-        # 逐个候选尝试加载：已存在的引擎可能是 TRT 版本/GPU 架构不匹配的
-        # 陈旧产物。加载失败 → 删除（可写目录），尝试下一个候选；
-        # 全部失败才进入重建（构建到本目录缓存，可写）。
-        engine_path: Path | None = None
-        for cand in self._engine_candidates(size):
-            if not cand.exists():
-                continue
-            try:
-                self._load_trt_engine(cand)
-                engine_path = cand
-                log.info("TensorRT 引擎已加载: %s", engine_path)
-                break
-            except Exception as e:
-                log.warning("TensorRT 引擎 %s 加载失败 (%s)，删除并尝试下一个候选",
-                            cand.name, e)
-                try:
-                    cand.unlink(missing_ok=True)
-                except OSError:
-                    pass  # 只读目录（打包 EXE 内）删不掉，保留无害
-        try:
-            if engine_path is None:
-                engine_path = self._engine_candidates(size)[1]  # 本目录缓存（可写）
-                if self._progress_cb:
-                    self._progress_cb("TensorRT 引擎不存在，开始本地构建（首次运行，约 2 分钟）...")
-                log.info("TensorRT 引擎不存在，开始本地构建（首次运行，约几分钟）...")
-                self._build_engine(models, size, engine_path)
-                log.info("TensorRT 引擎已构建: %s", engine_path)
-                if self._progress_cb:
-                    self._progress_cb("TensorRT 引擎构建完成")
-                self._load_trt_engine(engine_path)
-            self._trt = True
-        except Exception as e:
-            log.warning("TensorRT 引擎不可用 (%s)，回退 ONNX 后端。", e)
-            self._init_onnx(models, size)
-
-    def _load_trt_engine(self, engine_path: Path) -> None:
-        """反序列化引擎并读取 profile 元数据；失败抛异常（由调用方决定重建/回退）。
-
-        反序列化失败场景：TRT 版本升级后旧产物（序列化版本号不匹配）、
-        GPU 架构不匹配（如 sm89 引擎换到 sm80 卡）。
-        """
-        import tensorrt as trt
-        logger = trt.Logger(trt.Logger.WARNING)  # type: ignore[attr-defined]
-        with open(engine_path, "rb") as f, trt.Runtime(logger) as rt:  # type: ignore[attr-defined]
-            self._trt_engine = rt.deserialize_cuda_engine(f.read())
-        self._trt_ctx = self._trt_engine.create_execution_context()  # type: ignore[attr-defined]
-        in_name = self._trt_engine.get_tensor_name(0)
-        out_name = self._trt_engine.get_tensor_name(1)
-        prof_in = self._trt_engine.get_tensor_profile_shape(in_name, 0)
-        self._trt_in_name = in_name
-        self._trt_out_name = out_name
-        self._max_batch = int(prof_in[2][0])  # profile 的 batch 上限（如 6）
-        self._max_in_shape = tuple(int(v) for v in prof_in[2])
-        # 输出张量 profile 查询仅 TRT 10 支持（TRT 11 只接受输入张量名，
-        # 对输出张量抛异常）。_max_out_shape 为死代码（从未被读取），
-        # TRT 11 下置 None 即可，不影响推理路径。
-        try:
-            prof_out = self._trt_engine.get_tensor_profile_shape(out_name, 0)
-            self._max_out_shape = tuple(int(v) for v in prof_out[2])
-        except Exception:
-            self._max_out_shape = None
-        self._buffers: tuple | None = None  # (dev_in, dev_out, host_in, host_out)
-        self._last_in_shape: tuple | None = None
-        self._out_shape: tuple | None = None
-
-    @staticmethod
-    def _build_engine(models: Path, size: str, engine_path: Path) -> None:
-        """从 ONNX 构建 TRT 引擎（复用 rapidocr 的 rec profile 配置）。"""
-        import tensorrt as trt
-        logger = trt.Logger(trt.Logger.WARNING)  # type: ignore[attr-defined]
-        builder = trt.Builder(logger)  # type: ignore[attr-defined]
-        # TRT 11 移除了 EXPLICIT_BATCH（隐式 batch 自 10 起已删，显式为默认），
-        # getattr 回退保持 10/11 双兼容；TRT 11 下 flags=0 语义即显式 batch。
-        try:
-            flags = 1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)  # type: ignore[attr-defined]
-        except AttributeError:
-            flags = 0
-        network = builder.create_network(flags)
-        parser = trt.OnnxParser(network, logger)  # type: ignore[attr-defined]
-        onnx_path = models / f"PP-OCRv6_rec_{size}.onnx"
-        with open(onnx_path, "rb") as f:
-            if not parser.parse(f.read()):
-                raise RuntimeError(f"ONNX 解析失败: {onnx_path}")
-        config = builder.create_builder_config()
-        config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 1 << 30)  # type: ignore[attr-defined]  # 1 GB
-        profile = builder.create_optimization_profile()
-        profile.set_shape(network.get_input(0).name,
-                          min=(1, 3, 48, 32), opt=(6, 3, 48, 320),
-                          max=(6, 3, 48, 2048))
-        config.add_optimization_profile(profile)
-        serialized = builder.build_serialized_network(network, config)
-        if serialized is None:
-            raise RuntimeError("TRT engine 构建失败")
-        engine_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(engine_path, "wb") as f:
-            f.write(serialized)
 
     # ═══════════════ 预处理（复刻 rapidocr resize_norm_img）═══════════════
 
     @staticmethod
     def _resize_norm(img: np.ndarray, max_wh_ratio: float,
-                     height: int = 48) -> np.ndarray:
-        """resize 到 48 高 + (x/255-0.5)/0.5 归一化 + pad 到 batch 最大宽。
+                     height: int = config.OCR_TARGET_H) -> np.ndarray:
+        """resize 到固定高 + (x/255-0.5)/0.5 归一化 + pad 到 batch 最大宽。
 
-        输入已是 target 高度 float32（pipeline._preprocess_standard 输出）
-        时跳过 _np_resize —— 其等尺寸路径的 astype 拷贝是无谓开销。
-        数值路径不变（省略的是同一 float32 数据的整块拷贝），逐位一致。
+        输入已是目标高度 float32（pipeline._preprocess_standard 输出）时跳过
+        _np_resize —— 其等尺寸路径的 astype 拷贝是无谓开销。数值路径不变
+        （省略的是同一 float32 数据的整块拷贝），逐位一致。
         """
         from video_utils import _np_resize
         img_width = int(height * max_wh_ratio)
@@ -316,18 +192,16 @@ class OcrEngine:
             return self._infer_locked(batch_np)
 
     def _infer_locked(self, batch_np: np.ndarray) -> np.ndarray:
-        if self._trt:
-            assert self._max_batch is not None  # TRT 初始化时已设置
+        if self._trt is not None:
             outs = []
-            for i in range(0, len(batch_np), self._max_batch):
-                outs.append(self._trt_execute(batch_np[i:i + self._max_batch]))
+            for i in range(0, len(batch_np), self._trt.max_batch):
+                outs.append(self._trt.execute(batch_np[i:i + self._trt.max_batch]))
             return np.concatenate(outs, axis=0)
-        # ONNX 动态 batch 无上限：re-OCR 预热可能一次喂数千帧（test4 5942
-        # 帧）→ 中间激活内存爆炸（MaxPool bad allocation）。分片限制单批
-        # 帧数，输出形状不变。分片 16（原 64）：小片实测更快（64 片有线程
-        # 同步/带宽瓶颈）且 ORT arena 峰值更低（64: 920MB vs 16: 300MB，
-        # (3,48,320) small 模型 992 帧实测）。
-        onnx_max = 16
+        # ONNX 动态 batch 无上限：超大输入会让中间激活内存爆炸
+        # （MaxPool bad allocation）。分片限制单批帧数，输出形状不变。
+        # 16（原 64）为历史最优：小片更快且 ORT arena 峰值更低
+        # （64: 920MB vs 16: 300MB，(3,48,320) small 模型 992 帧实测）。
+        onnx_max = config.OCR_ONNX_CHUNK
         if len(batch_np) <= onnx_max:
             return np.asarray(self._session.run(None, {"x": batch_np})[0],
                               dtype=np.float32)
@@ -337,42 +211,6 @@ class OcrEngine:
                 self._session.run(None, {"x": batch_np[i:i + onnx_max]})[0],
                 dtype=np.float32))
         return np.concatenate(outs, axis=0)
-
-    def _trt_execute(self, x: np.ndarray) -> np.ndarray:
-        from cuda.bindings import runtime as cudart  # type: ignore[import-not-found]
-        # 主路径 shape 恒定（batch 6, 320 宽）：set_input_shape 实测每批
-        # 开销 ~0.5ms（TRT context 重配置），只在 shape 变化时调用
-        if self._last_in_shape != x.shape:
-            self._trt_ctx.set_input_shape(self._trt_in_name, x.shape)
-            self._last_in_shape = x.shape
-            self._out_shape = tuple(self._trt_ctx.get_tensor_shape(self._trt_out_name))
-        out_shape = self._out_shape
-        # 输入 buffer：max profile 形状预分配并复用
-        if self._buffers is None:
-            size_in = int(np.prod(self._max_in_shape)) * 4
-            _, dev_in = cudart.cudaMalloc(size_in)
-            host_in = np.zeros(self._max_in_shape, dtype=np.float32)
-            self._buffers = (dev_in, host_in)
-            self._dev_out: int | None = None
-            self._out_nbytes = 0
-        dev_in, host_in = self._buffers
-        # 平铺拷贝（max-shape buffer 的前 x.size 个连续元素 = x 的连续内存）
-        host_in.reshape(-1)[:x.size] = x.reshape(-1)
-        cudart.cudaMemcpy(dev_in, host_in.ctypes.data, x.nbytes,
-                          cudart.cudaMemcpyKind.cudaMemcpyHostToDevice)
-        # 输出 device buffer 按需增长复用（cudaMalloc 每次 ~ms，避免每片分配）
-        out_nbytes = int(np.prod(out_shape)) * 4
-        if self._dev_out is None or out_nbytes > self._out_nbytes:
-            if self._dev_out is not None:
-                cudart.cudaFree(self._dev_out)
-            _, self._dev_out = cudart.cudaMalloc(out_nbytes)
-            self._out_nbytes = out_nbytes
-        dev_out = self._dev_out
-        self._trt_ctx.execute_v2([dev_in, dev_out])
-        host_out = np.empty(out_shape, dtype=np.float32)
-        cudart.cudaMemcpy(host_out.ctypes.data, dev_out, out_nbytes,
-                          cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost)
-        return host_out
 
     # ═══════════════ 后处理（复刻 CTCLabelDecode）═══════════════
 
@@ -399,13 +237,13 @@ class OcrEngine:
     def _ctc_decode_batch(self, preds: np.ndarray) -> list:
         """批 CTC decode：(B, seq, C) → list[RecOut]。
 
-        分块归约（每块 64 帧）：整批 argmax 在 C=6906 时产生 (B, seq)
-        int64，~1000 帧一次归约峰值 ~2.2GB（Windows 堆不归还 → RSS 保持
-        高位）。分块后峰值 ~150MB。逐行归约与整批数值一致。
+        分块归约：整批 argmax 在 C=6906 时产生 (B, seq) int64，~1000 帧一次
+        归约峰值 ~2.2GB（Windows 堆不归还 → RSS 保持高位）。分块后峰值
+        ~150MB。逐行归约与整批数值一致。
         """
         out: list = []
-        for s0 in range(0, len(preds), 64):
-            chunk = preds[s0:s0 + 64]
+        for s0 in range(0, len(preds), config.OCR_CTC_CHUNK):
+            chunk = preds[s0:s0 + config.OCR_CTC_CHUNK]
             idx = chunk.argmax(axis=2)  # (B, seq) int64
             prob = chunk.max(axis=2)
             keep = np.ones_like(idx, dtype=bool)
@@ -433,21 +271,20 @@ class OcrEngine:
         h0 = heights[0]
         # 按宽度排序（rapidocr 的加速策略；结果映射回原顺序）
         order = np.argsort([im.shape[1] for im in img_list])
-        # pad 宽度 = max(批内最大宽高比, 本模型下限/48)。旧代码强制 320/48
-        # 下限：速度数字是窄图（48 高后 78-160 宽），pad 到 320 让 GPU 白算
-        # 2~4 倍宽度；但 v6 tiny 对输入宽度敏感（test5 force_aspect=1.5 在 72 宽
-        # 下精度 0.07%→0.54%），不能无下限。下限优先级：用户 fill_width >
-        # env RVTOL_PAD_TINY/SMALL > config.OCR_PAD_WIDTH_MIN_BY_MODEL。
+        # pad 宽度 = max(批内最大宽高比, 本模型下限/OCR_TARGET_H)。速度数字
+        # 是窄图（48 高后 78-160 宽），不设下限会让 GPU 白算过多宽度；
+        # v6_small 对输入宽度敏感（窄图误读升高），必须有下限。
+        # 优先级：用户 fill_width > env RVTOL_PAD_SMALL >
+        # config.OCR_PAD_WIDTH_MIN_BY_MODEL。
         if self._fill_width > 0:
             _floor = self._fill_width
         else:
             _floor = config.OCR_PAD_WIDTH_MIN_BY_MODEL.get(
                 self._variant, config.OCR_PAD_WIDTH_MIN)
-            _env = os.environ.get("RVTOL_PAD_TINY" if "tiny" in self._variant
-                                  else "RVTOL_PAD_SMALL")
+            _env = os.environ.get("RVTOL_PAD_SMALL")
             if _env and _env.isdigit():
                 _floor = int(_env)
-        max_wh = max(_floor / 48.0,
+        max_wh = max(_floor / config.OCR_TARGET_H,
                      *(float(im.shape[1]) / im.shape[0] for im in img_list))
         batch_np = np.stack([self._resize_norm(img_list[i], max_wh, h0)
                              for i in order])

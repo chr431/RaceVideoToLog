@@ -42,7 +42,8 @@ def resolve(video_name: str) -> tuple[str, str]:
 
 
 def run(video: str, truth: str, backend: str, out_csv: str,
-        decode_backend: str = "auto") -> dict:
+        decode_backend: str = "auto", buffer_size: int = config.DEFAULT_BUFFER_SIZE,
+        no_monitor: bool = False) -> dict:
     """Run headless pipeline, parse timing + actual backend from output CSV/stdout.
 
     OCR 模型固定 v6_small（v2.14 起移除模型选择）。
@@ -70,6 +71,10 @@ def run(video: str, truth: str, backend: str, out_csv: str,
         cli_args += ["--ocr-backend", backend]
     if decode_backend != "auto":
         cli_args += ["--decode-backend", decode_backend]
+    # 显式传 buffer：旧 truth CSV 头含 buffer=16，显式参数优先于 from-csv
+    cli_args += ["--buffer", str(buffer_size)]
+    if no_monitor:
+        cli_args += ["--no-monitor"]
     cli_args += ["-o", out_csv]
     child = subprocess.Popen(
         cli_args,
@@ -192,6 +197,10 @@ def main() -> None:
                     help="decord 解码后端 (auto/cpu/nvdec；实验性混合："
                          "设 RVTOL_HYBRID_DECODE=1 后 auto/nvdec 内部走"
                          " CPU+NVDEC 并行)")
+    ap.add_argument("--buffer", type=int, default=config.DEFAULT_BUFFER_SIZE,
+                    help="流水线队列缓冲（段数，显式传入防 from-csv 旧头 buffer=16 覆盖）")
+    ap.add_argument("--no-monitor", action="store_true",
+                    help="子进程关闭资源监控（RVTOL 采样开销对照实验）")
     ap.add_argument("--runs", type=int, default=2, help="runs (last one used for stats)")
     ap.add_argument("--json", type=str, default="", help="save record to JSON (default outputs/bench_<video>.json)")
     args = ap.parse_args()
@@ -206,13 +215,15 @@ def main() -> None:
 
     record: dict = {"video": args.video, "backend": args.backend,
                     "decode_backend": args.decode_backend,
+                    "buffer": args.buffer,
                     "runs": []}
     for run_i in range(args.runs):
         out_csv = str(OUT_DIR / f"bench_{args.video}_r{run_i + 1}.csv")
         label = f"run {run_i + 1}"
         print(f"  Running {label}...", end=" ", flush=True)
         t = run(video, truth, args.backend, out_csv,
-                decode_backend=args.decode_backend)
+                decode_backend=args.decode_backend, buffer_size=args.buffer,
+                no_monitor=args.no_monitor)
         acc = accuracy(out_csv, truth) if "frames" in t else None
         if run_i == args.runs - 1:  # warm run -> report + record
             print_row(label, t, acc)

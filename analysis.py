@@ -87,10 +87,11 @@ def smooth_data(xv: "np.ndarray | list[float]", yv: "np.ndarray | list[float]", 
     Returns:
         (xv_array, smoothed_yv) — xv 保持不变，yv 平滑后
     """
-    if strength <= 0 or len(xv) < 5:
+    import config
+    if strength <= 0 or len(xv) < config.SMOOTH_MIN_WIN:
         return np.array(xv, dtype=float), np.array(yv, dtype=float)
-    win = int(len(xv) * strength / 100.0 * 0.0175)
-    win = max(5, min(win, len(xv) - 2))
+    win = int(len(xv) * strength / 100.0 * config.SMOOTH_WIN_FACTOR)
+    win = max(config.SMOOTH_MIN_WIN, min(win, len(xv) - 2))
     if win % 2 == 0:
         win += 1
     polyorder = min(3, win - 1)

@@ -1,11 +1,11 @@
-"""信号处理：SG 滤波与邻帧一致性评分。"""
+"""信号处理：纯 numpy Savitzky-Golay 滤波。
+
+邻帧一致性评分（_neighbor_consistency_score*）在 v2.13 段级化后已无调用者，
+已随其 CONSISTENCY_* 参数一并移除。
+"""
 from __future__ import annotations
-import math
 
 import numpy as np
-
-from config import (CONSISTENCY_TIME_WINDOW, CONSISTENCY_DECAY_TAU,
-    CONSISTENCY_PINNED_WEIGHT, MPS_TO_KMH)
 
 # Savitzky-Golay 卷积系数缓存（按 (window, polyorder) 复用）
 _sg_coeff_cache: dict = {}
@@ -45,48 +45,3 @@ def _savgol_filter_np(y: "np.ndarray", window_length: int, polyorder: int) -> "n
         result[-half:] = result[-half - 1]
 
     return result
-def _neighbor_consistency_score_lr(i: int, v: float, rows: list, times: list[float],
-                    max_speed_kmh: float, max_accel_mps2: float,
-                    time_window: float = CONSISTENCY_TIME_WINDOW, tau: float = CONSISTENCY_DECAY_TAU,
-                    high_weight: set[int] | None = None) -> tuple[float, float]:
-    """邻域左右分侧一致性评分。权重 = exp(-dt/tau)。
-
-    Returns: (left_score, right_score)
-    - 单侧无邻居时默认 1.0（不惩罚边界帧）
-    - high_weight 中的帧额外 ×CONSISTENCY_PINNED_WEIGHT 权重
-    """
-    n = len(rows)
-    if v < 0 or v > max_speed_kmh:
-        return 0.0, 0.0
-    t_i = times[i]
-    hw = high_weight or set()
-
-    def _scan(start: int, stop: int, step: int) -> float:
-        votes = 0.0
-        total = 0.0
-        for j in range(start, stop, step):
-            dt = abs(times[j] - t_i)
-            if dt > time_window:
-                break
-            v_j = rows[j][2]
-            if v_j < 0 or v_j > max_speed_kmh:
-                continue
-            max_dv = max_accel_mps2 * dt * MPS_TO_KMH
-            exp_w = math.exp(-dt / tau)
-            pin_w = CONSISTENCY_PINNED_WEIGHT if j in hw else 1.0
-            total += exp_w * pin_w
-            if abs(v - v_j) <= max_dv:
-                votes += exp_w * pin_w
-        return votes / total if total > 0 else 1.0
-
-    left = _scan(i - 1, -1, -1)
-    right = _scan(i + 1, n, 1)
-    return left, right
-def _neighbor_consistency_score(i: int, v: float, rows: list, times: list[float],
-                            max_speed_kmh: float, max_accel_mps2: float,
-                            time_window: float = CONSISTENCY_TIME_WINDOW, tau: float = CONSISTENCY_DECAY_TAU,
-                            high_weight: set[int] | None = None) -> float:
-    """邻域一致性合并分数。左右侧权重合并后的单值分数。"""
-    left, right = _neighbor_consistency_score_lr(i, v, rows, times, max_speed_kmh, max_accel_mps2,
-                                    time_window, tau, high_weight)
-    return (left + right) / 2.0

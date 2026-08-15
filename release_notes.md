@@ -1,5 +1,28 @@
 # Release Notes
 
+## v2.15.1（2026-08-15）— 代码清理与 decord 0.7.9
+
+> 本节面向使用者：只讲你能直接感知到的变化。技术细节见下方各节。
+
+### 🔧 依赖与打包
+
+- 自建解码 fork 升级到 **decord v0.7.9**（CPU/GPU 解码结果与 v0.7.8
+  逐位一致；回归门禁 11 错误不变）
+- PyInstaller 产物进一步瘦身（实测 ~390MB → ~348MB）：移除未使用的
+  Pillow（~12.8MB）、重复的 OpenSSL x64 DLL 对（~5.6MB）、decord 的
+  avdevice/ffprobe（~4MB）、cuda-python 未用绑定（nvml/nvrtc/cudla 等
+  ~6MB）、非中英文 Qt 翻译（~6MB）及 numpy.random/fft、yaml 等；
+  同时修正了 qframelesswindow 需要的 pywin32 依赖被误删的问题
+
+### 🧹 代码与行为
+
+- 日志级别（CLI `--log-level` / GUI 下拉）现在真正生效：normal=INFO、
+  detailed=项目 DEBUG、debug=全部 DEBUG
+- 清理大量无调用者代码（邻帧一致性评分、候选生成、旧 GPU 后端选择、
+  StageTimer 等）并修正过时注释
+- 段级算法参数（批大小、48 高、120 帧窗口上限、置信度门槛、TRT profile
+  等）收敛到 `config.py`，行为不变（准确率门禁 final=11 与基线一致）
+
 ## v2.15.0（2026-08-14）— CPU+NVDEC 混合解码
 
 > 本节面向使用者：只讲你能直接感知到的变化。技术细节见下方各节。

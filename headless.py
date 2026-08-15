@@ -1,7 +1,6 @@
 """CLI / headless mode for RaceVideoToLog."""
 from __future__ import annotations
 import argparse
-import logging
 import os as _os
 import sys
 import time
@@ -39,7 +38,8 @@ def _monitor_settings(args: argparse.Namespace) -> tuple[bool, float]:
 
 def run_headless(args: argparse.Namespace) -> None:
     """命令行无头模式：不启动 GUI，直接分析并输出 CSV。"""
-    logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
+    from logging_setup import configure_logging
+    configure_logging(getattr(args, "log_level", "normal"))
     if not args.roi:
         print("错误: 命令行模式需要 --roi X1 Y1 X2 Y2")
         sys.exit(1)
@@ -83,7 +83,7 @@ def run_headless(args: argparse.Namespace) -> None:
         progress_cb=_progress,
         force_aspect=getattr(args, 'force_aspect', 0.0),
         fps=None,
-        # 灰度解码输出（decord ≥0.7.8 CPU/GPU 都支持）：直出 Y 平面，
+        # 灰度解码输出（decord ≥0.7.9 CPU/GPU 都支持）：直出 Y 平面，
         # 分段灰度跨后端统一（GPU 路径省 RGB→灰转换与 matmul）
         gray_output=True,
     )
@@ -105,6 +105,10 @@ def run_headless(args: argparse.Namespace) -> None:
     # 输出详细的阶段计时（标量键）
     for stage, elapsed in pipeline.timing_flat().items():
         print(f"  {stage}: {elapsed:.1f}s")
+    if getattr(pipeline, "profile", None):
+        for group in sorted(pipeline.profile):
+            for key, secs in sorted(pipeline.profile[group].items()):
+                print(f"  profile: {group}.{key}={secs:.4f}s")
     if _stats:
         _monitor.log_run(video_path.name, _stats, pipeline.timing_flat())
         print("资源: " + _monitor.format_stats(_stats))

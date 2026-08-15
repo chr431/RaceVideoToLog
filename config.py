@@ -5,11 +5,10 @@ v2.13 起：分段流水线（segment_flow.py）为唯一管线，原逐帧纠�
 """
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
-__version__ = "2.15.0"
+__version__ = "2.15.1"
 
 # ═══════════════════ 数据目录 ═══════════════════
 
@@ -195,19 +194,50 @@ SOURCE_TO_KMH: dict[str, float] = {
     "mile/h": 1.609344,
 }
 
-# ═══════════════════ GPU 后端公共 API ═══════════════════
-_gpu_backend: str = "CPU"
-
-def get_gpu_backend() -> str:
-    """返回当前实际使用的 GPU 后端名称（CUDA 或 CPU）。"""
-    return _gpu_backend
-
-def set_gpu_backend(backend: str) -> None:
-    """由 gpu_setup 调用，设置实际使用的 GPU 后端。"""
-    global _gpu_backend
-    _gpu_backend = backend
-
-# ═══════════════════ 邻帧一致性评分（signals 使用，GUI 已改段级）═══════════════════
-CONSISTENCY_TIME_WINDOW: float = 0.5    # 时间窗 (秒)
-CONSISTENCY_DECAY_TAU: float = 0.06     # 指数衰减常数 exp(-dt/tau)
-CONSISTENCY_PINNED_WEIGHT: float = 3.0  # 已固定帧权重倍率
+# ═══════════════════ 运行参数（v2.15.1 起从代码中收敛） ═══════════════════
+# OCR 模型固定输入高度（rapidocr resize_norm_img 语义，训练尺寸）
+OCR_TARGET_H: int = 48
+# 高度已接近目标时跳过 resize 的相对容差（2%）
+OCR_RESIZE_TOL: float = 0.02
+# 灰度权重（Rec.601；分段与 OCR 预处理共用，逐位一致性依赖此权重）
+GRAY_RGB_WEIGHTS: tuple[float, float, float] = (0.299, 0.587, 0.114)
+# 段管线批大小：OCR 批（段数）与解码批（帧数）
+OCR_BATCH_SIZE: int = 16
+DECODE_BATCH_SIZE: int = 16
+# 流水线队列：混合解码各后端队列上限；OCR 预处理→推理队列上限
+HYBRID_QUEUE_SIZE: int = 8
+OCR_INFER_QUEUE_SIZE: int = 4
+# 分段 Otsu 阈值校准帧数（前 N 帧；seek 校准代价高，前段与全片抽样一致）
+SEG_CALIB_FRAMES: int = 50
+# Otsu 无法计算时的兜底阈值（0-255）
+OTSU_FALLBACK_THRESH: int = 127
+# 解码器无法给出 fps 时的兜底帧率
+DEFAULT_FPS_FALLBACK: float = 30.0
+# _local_bandwidth 的帧窗口上限（config.SEG_WIN 注释中 "上限 120 帧" 的实体）
+SEG_WIN_MAX_FRAMES: float = 120.0
+# 段级置信度的结构性门槛（历史调参结论，勿单独改动）
+SEG_CONF_MIN_NEIGHBORS: int = 3
+SEG_CONF_SHORT_NEIGHBOR: float = 30.0
+SEG_CONF_EDGE: float = 100.0
+SEG_CONF_MED_GATE: float = 50.0
+# A4 孤立尖峰豁免的 conf 上界（下界=SEG_DP_ANCHOR_CONF）
+SEG_DP_DEANCHOR_CONF_MAX: float = 50.0
+# OCR 引擎内部：ONNX 单批上限与 CTC 归约分块（内存峰值控制）
+OCR_ONNX_CHUNK: int = 16
+OCR_CTC_CHUNK: int = 64
+# TensorRT 引擎构建：默认 batch profile、输入宽 profile 与 workspace
+TRT_PROFILE_BATCH: int = 6
+TRT_PROFILE_MIN_W: int = 32
+TRT_PROFILE_OPT_W: int = 320
+TRT_PROFILE_MAX_W: int = 2048
+TRT_WORKSPACE_BYTES: int = 1 << 30
+# TRT 引擎缓存文件名的 SM 后缀（引擎与 GPU 架构绑定）
+TRT_ENGINE_SM: str = "sm89"
+# GUI 段 review 的加速度容差倍率（允许输入值超出物理约束的倍数）
+REVIEW_ACCEL_TOLERANCE: float = 3.0
+# GUI 参数范围（gui_settings 使用；默认值仍取 DEFAULT_* 常量）
+BUFFER_SIZE_RANGE: tuple[int, int] = (4, 256)
+FILL_WIDTH_RANGE: tuple[int, int] = (160, 320)
+# 分析 Tab 的 SG 平滑窗口换算系数（strength 0-100 → 窗口比例）
+SMOOTH_WIN_FACTOR: float = 0.0175
+SMOOTH_MIN_WIN: int = 5

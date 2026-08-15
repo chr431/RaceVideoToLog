@@ -23,8 +23,7 @@ def test_physical_cores_positive():
 
 def test_auto_budget_is_all_physical_cores():
     # 两种解码后端统一：全物理核（实测满负荷正收益；超物理核不提升）
-    assert auto_ocr_thread_count(gpu_decode=True) == cpu_physical_cores()
-    assert auto_ocr_thread_count(gpu_decode=False) == cpu_physical_cores()
+    assert auto_ocr_thread_count() == cpu_physical_cores()
 
 
 def test_env_hook_priority(monkeypatch):

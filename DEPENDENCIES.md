@@ -1,4 +1,4 @@
-# 上游依赖跟踪（v2.15.0）
+# 上游依赖跟踪（v2.15.1）
 
 ## 核心依赖
 
@@ -12,14 +12,14 @@
 | cuda-python | — | PyPI | CUDA Python 绑定（TRT 执行 + decord GPU DLL 注册） |
 | tensorrt_cu13_bindings | 11 | PyPI | TensorRT Python 绑定（~1MB） |
 | psutil | 6 | PyPI | 资源监测 RSS / CPU%（可选：缺失时降级为 None，GPU 采样不受影响） |
-| decord | 自建 | 自建仓库 chr431/decord（feat/perf-deep） | NVDEC 硬解 + CPU 软件解码；FFmpeg 8.x DLL。**PyPI 版不支持 next_roi / CPU ROI 优化**，见 setup_venv.bat |
+| decord | 0.7.9 | 自建仓库 chr431/decord | NVDEC 硬解 + CPU 软件解码；FFmpeg 8.x DLL。**PyPI 版不支持 next_roi / CPU ROI 优化**，见 setup_venv.bat |
 
 ## GPU 加速（运行时，不打包）
 
 | 组件 | 来源 | 备注 |
 | --- | --- | --- |
 | CUDA Toolkit 13.x | NVIDIA 官网 | cudart/cublas 等 DLL，需在 PATH；与 tensorrt_cu13_bindings / decord（全栈统一 CUDA 13）一致 |
-| TensorRT | NVIDIA 官网 | nvinfer DLL，需在 PATH；首次运行自动构建引擎缓存到 `%LOCALAPPDATA%/RaceVideoToLog/ocr_engines/` |
+| TensorRT | NVIDIA 官网 | nvinfer DLL，需在 PATH；首次运行自动构建引擎缓存到 `<程序目录>/ocr_engines/`（旧 `%LOCALAPPDATA%/RaceVideoToLog/ocr_engines/` 只读回退） |
 
 `tensorrt` 元包与 `tensorrt_cu13_libs`（~2.2GB DLL）被有意排除 —— 运行时 DLL 从系统 PATH 加载。
 
@@ -39,10 +39,10 @@
 - TRT/CUDA provider DLL 已从 EXE 排除（TRT 由 OcrEngine 直接调用，不走 ORT provider）
 
 ### tensorrt 11.x
-- `find_lib()` 只搜 `os.environ["PATH"]`，不认 `os.add_dll_directory()` —— `gpu_setup` 已同时更新 PATH
-- 首次构建引擎 FP32 ~1min，缓存于用户目录；FP16 构建 2.2x 慢且推理无提升，不推荐
+- `find_lib()` 只搜 `os.environ["PATH"]`，不认 `os.add_dll_directory()` —— `TrtEngine` 初始化前会调用 `gpu_setup.ensure_gpu_initialized()` 更新 PATH
+- 首次构建引擎 FP32 ~1min，缓存于 `<程序目录>/ocr_engines/`；FP16 构建 2.2x 慢且推理无提升，不推荐
 - TRT 引擎与**构建版本不兼容**（10 产物无法被 11 加载）—— 升级后旧缓存自动重建
-  （`_init_trt` 反序列化失败即删除重建，不会静默回退 ONNX）
+  （`TrtEngine` 反序列化失败即删除重建，不会静默回退 ONNX）
 - **GPTuner（Global Performance Tuner）Windows 不可用**：`--tuneBuildRoutes` /
   `--setBuildRoute` 报 "not supported on Windows (no fork())"，Python
   `config.all_build_routes` 返回空 —— 调优路线只能走 Linux 或默认路线
@@ -108,7 +108,7 @@ git checkout master && git merge dev && git push
 
 1. 校验版本引用一致性（`tools/version.py`，不一致即中止）
 2. 读取 `config.__version__`，确认 tag `v<版本>` 不存在
-3. 下载 decord fork 发布产物 `decord-<ver>-win64-gpu.zip`（`decord-version` 输入，默认 `0.7.4`）到 `_decord_build\`
+3. 下载 decord fork 发布产物 `decord-<ver>-win64-gpu.zip`（`decord-version` 输入，默认 `0.7.9`）到 `_decord_build\`
 4. `setup_venv.bat --ci` + `build_exe.bat --ci` 构建 EXE（跳过 pause）
 5. 打包 `RaceVideoToLog.<版本>.zip`（dist 布局与现有 release 一致）
 6. 打 tag `v<版本>` + push，创建 GitHub Release（notes 取自 `release_notes.md` 对应节）

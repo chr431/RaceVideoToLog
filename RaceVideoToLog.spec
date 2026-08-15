@@ -27,10 +27,12 @@ hiddenimports = [
     'decord',
     # Project modules (force inclusion; auto-discovered but explicit is safer)
     'gui', 'headless', 'segment_flow', 'config', 'constants', 'gpu_setup', 'ocr_engine',
-    'analysis', 'gui_analysis', 'gui_review',
-    'gui_export', 'gui_settings', 'gui_preview',
+    'analysis', 'analysis_plot', 'gui_analysis', 'gui_review',
+    'gui_export', 'gui_settings', 'gui_preview', 'gui_video',
+    'export_controller', 'review_chart',
     'widget_utils', 'theme_manager', 'csv_io', 'ocr_text', 'signals',
-    'video_utils', 'tensorrt', 'ocr_native', 'monitor',
+    'video_utils', 'tensorrt', 'ocr_native', 'ocr_trt', 'monitor',
+    'segmentation', 'seg_correction', 'hybrid_decode', 'logging_setup',
 ]
 
 # onnxruntime（CPU provider；TensorRT 由 tensorrt_bindings 直接调用）
@@ -41,16 +43,33 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('qfluentwidgets')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
-# cuda-python: collect all .py/.pyd submodules (NOT collect_all which bundles
-# ~500MB of native .dll — those come from system PATH at runtime).
+# cuda-python: 项目只用 cuda.bindings.runtime（TRT 执行 + monitor 显存查询）。
+# 显式列出 runtime 的 Cython 传递依赖（PyInstaller 无法从 .pyx 模块分析
+# import），不再 collect_submodules('cuda') 全量收集（nvml/nvrtc/cudla 等
+# ~6MB 无用）。
+hiddenimports += [
+    'cuda.bindings',
+    'cuda.bindings.runtime',
+    'cuda.bindings.driver',
+    'cuda.bindings._bindings',
+    'cuda.bindings._bindings.cydriver',
+    'cuda.bindings._bindings.cyruntime',
+    'cuda.bindings._bindings.cyruntime_ptds',
+    'cuda.bindings._internal',
+    'cuda.bindings._internal._fast_enum',
+    'cuda.bindings._version',
+    'cuda.bindings.cydriver',
+    'cuda.bindings.cyruntime',
+    'cuda.bindings.utils',
+    'cuda.bindings.utils._nvvm_utils',
+    'cuda.bindings.utils._ptx_utils',
+    'cuda.bindings.utils._version_check',
+]
+# cuda.pathfinder 是纯 Python 子包（driver 运行时经它找系统 DLL），
+# cuda 是 namespace package，PyInstaller 不会自动展开 → 显式收集子模块。
 try:
     from PyInstaller.utils.hooks import collect_submodules
-    _cuda_hidden = collect_submodules('cuda')
-    hiddenimports += _cuda_hidden
-    # collect_submodules may miss Cython pyd files inside subpackages;
-    # run a deeper scan on cuda.bindings specifically
-    _cuda_bindings = collect_submodules('cuda.bindings')
-    hiddenimports += [m for m in _cuda_bindings if m not in _cuda_hidden]
+    hiddenimports += collect_submodules('cuda.pathfinder')
 except Exception:
     pass  # cuda-python not installed
 
@@ -98,7 +117,7 @@ datas = [(s, d) for s, d in datas
 
 # ── OCR 模型资产（onnx + 字符表）──
 # TRT .engine 不随 EXE 分发（GPU 架构绑定）：首次运行时本地自动构建，
-# 缓存到 %LOCALAPPDATA%/RaceVideoToLog/ocr_engines/
+# 缓存到 <程序目录>/ocr_engines/（免安装设计；旧 %LOCALAPPDATA% 缓存只读回退）
 # 只打包 v6_small（v2.13 起唯一模型，GUI/CLI 无模型选择）—— tiny onnx
 # 已无用，排除省 ~4.3MB（源码 assets/ 保留，tools 实验脚本仍可用）。
 for _root, _dirs, _files in os.walk('assets/ocr_models'):
@@ -147,18 +166,20 @@ a = Analysis(
         'onnxruntime.quantization', 'onnxruntime.quantization.*',
         'onnxruntime.datasets', 'onnxruntime.datasets.*',
         'onnxruntime.backend',
-        # pywin32：PyInstaller 在 Windows 的构建依赖（版本资源/图标处理），
-        # 其全局 win32com hook 会把整个 pywin32 + pythoncom.dll + mfc140u.dll
-        # (~9MB) 带进 dist。运行时不 import win32com（项目零引用），排除可
-        # 安全瘦身。构建阶段（spec 执行）不受 excludes 影响。
-        'win32com', 'win32com.*', 'pythonwin', 'pywin32',
-        'pywin32_system32', 'pythoncom', 'pywintypes',
         # scipy: 已用纯 numpy 替代 savgol_filter，完全排除
         'scipy', 'tkinter', '_tkinter',
         # PaddlePaddle (rapidocr 时代遗留；~1.1GB)
         'paddle', 'paddlepaddle', 'paddlepaddle_gpu',
         # Unused paddle deps
         'safetensors', 'opt_einsum', 'networkx',
+        # Pillow：仅 qfluentwidgets 的可选 acrylic 模糊 import（运行时缺
+        # colorthief/scipy 已走 fallback），项目自身零引用 → ~12.8MB 冗余
+        'PIL', 'PIL.*', 'Pillow',
+        # yaml 仅 numpy.__config__ 的可选 import，运行时无引用
+        'yaml',
+        # numpy.random / numpy.fft：项目零引用（PyInstaller 经 numpy 惰性
+        # __getattr__ 误收）
+        'numpy.random', 'numpy.fft',
     ],
     noarchive=False,
     optimize=2,   # 最高字节码优化：移除 docstring 和 assert
@@ -224,14 +245,6 @@ _EXCLUDE_BINARIES = {
     'DirectML.dll', 'onnxruntime_providers_tensorrt.dll',
     'onnxruntime_providers_cuda.dll',
     'tcl86t.dll', 'tk86t.dll', '_tkinter.pyd',
-    # pywin32 二进制（PyInstaller 构建依赖，运行时无引用；excludes 不拦
-    # binaries，按文件名过滤覆盖 3.11/3.12/3.13）—— 省 ~9MB（win32 pyd +
-    # pythoncom.dll + mfc140u.dll）
-    'pywintypes311.dll', 'pywintypes312.dll', 'pywintypes313.dll',
-    'pythoncom311.dll', 'pythoncom312.dll', 'pythoncom313.dll',
-    'win32api.pyd', 'win32gui.pyd', 'win32pdh.pyd', 'win32print.pyd',
-    'win32event.pyd', 'win32trace.pyd', '_win32sysloader.pyd',
-    'win32ui.pyd', 'mfc140u.dll',
     # Qt6 未使用模块（仅用 Widgets/Core/Gui）
     # Qt6OpenGL* 必须保留：pyqtgraph 0.14 OpenGLHelpers import PySide6.QtOpenGL
     'opengl32sw.dll', 'avcodec-61.dll',
@@ -242,7 +255,7 @@ _EXCLUDE_BINARIES = {
     'Qt6PrintSupport.dll', 'Qt6WebChannel.dll',
     'Qt6WebEngine.dll', 'Qt6WebEngineCore.dll', 'Qt6WebEngineQuick.dll',
     'Qt6Designer.dll', 'Qt6Help.dll', 'Qt6UiTools.dll',
-    # PySide6-bundled FFmpeg 6.x/7.x (decord provides FFmpeg 5.x)
+    # PySide6-bundled FFmpeg 6.x/7.x (decord provides FFmpeg 8.x)
     'swresample-5.dll', 'swscale-8.dll', 'avformat-61.dll',
     'avutil-59.dll', 'avcodec-61.dll', 'avdevice-61.dll', 'avfilter-10.dll',
     'postproc-58.dll',
@@ -255,12 +268,34 @@ _EXCLUDE_BINARIES = {
     'avcodec-59.dll', 'avformat-59.dll', 'avutil-57.dll',
     'avfilter-8.dll', 'avdevice-59.dll', 'swresample-4.dll',
     'swscale-6.dll', 'postproc-56.dll',
+    # decord 发布产物中运行时不需要的二进制：decord.dll 不导入 avdevice，
+    # 项目也不调用 ffprobe；qdirect2d 平台插件不用；libcrypto/libssl 的
+    # -x64 重复对无任何导入者（_hashlib/_ssl 用无后缀版本）
+    'avdevice-62.dll', 'ffprobe.exe', 'qdirect2d.dll',
+    'libcrypto-3-x64.dll', 'libssl-3-x64.dll',
 }
+_PIL_BINARY_PREFIXES = ('_avif', '_imaging', '_webp', '_imagingft',
+                        '_imagingmath', '_imagingcms', '_imagingtk')
 a.binaries = [(n, p, t) for n, p, t in a.binaries
-              if os.path.basename(p) not in _EXCLUDE_BINARIES]
-# 移除 tk/tcl 数据文件
+              if os.path.basename(p) not in _EXCLUDE_BINARIES
+              and not os.path.basename(p).startswith(_PIL_BINARY_PREFIXES)]
+
+
+def _keep_translation(p: str) -> bool:
+    """只保留 Qt 的英文与中文翻译，其余 ~6MB 与目标用户无关。"""
+    name = os.path.basename(p).lower()
+    if 'translations' not in p.replace('\\', '/').lower():
+        return True
+    return (name.startswith(('qt_en', 'qt_zh_cn', 'qt_zh_tw'))
+            or name.startswith(('qtbase_en', 'qtbase_zh_cn', 'qtbase_zh_tw'))
+            or name.startswith(('qt_help_en', 'qt_help_zh_cn', 'qt_help_zh_tw')))
+
+
+# 移除 tk/tcl 数据文件 + 非中英文 Qt 翻译 + PIL 数据
 a.datas = [(n, p, t) for n, p, t in a.datas
-           if '_tcl_data' not in p and '_tk_data' not in p and 'tcl8' not in p]
+           if '_tcl_data' not in p and '_tk_data' not in p and 'tcl8' not in p
+           and _keep_translation(p)
+           and 'PIL' not in p.replace('/', '\\')]
 
 coll = COLLECT(
     exe,

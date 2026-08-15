@@ -4,7 +4,7 @@
 #   1. 校验版本引用一致性（tools/version.py，退出码 1 = 不一致即中止）
 #   2. 读取 config.__version__（单一事实源），确认 tag v<版本> 不存在
 #   3. 下载 decord fork 发布产物 decord-<ver>-win64-gpu.zip（chr431/decord，
-#      decord-version 输入，默认 0.7.1）解压到 _decord_build\
+#      decord-version 输入，默认 0.7.9）解压到 _decord_build\
 #   4. setup_venv.bat --ci + build_exe.bat --ci 构建 EXE（--ci 跳过 pause）
 #   5. 打包 RaceVideoToLog.<版本>.7z（7-Zip LZMA2 mx=9 最大压缩，win-latest
 #      runner 预装 7z）—— 布局与现有 release 一致（RaceVideoToLog.exe 在
@@ -31,7 +31,7 @@ on:
       decord-version:
         description: 'decord fork release version to consume (chr431/decord)'
         required: false
-        default: '0.7.4'
+        default: '0.7.9'
         type: string
 
 permissions:
