@@ -47,6 +47,9 @@ class AnalysisTab:
 
         self._stack = stack
 
+        # 由 _build_tab 创建的顶层 QWidget（切 tab 用）
+        self._tab: QWidget | None = None
+
         # 状态
         self._csvs: list[str | None] = [None, None, None]
         self._labels: list = []
@@ -64,6 +67,7 @@ class AnalysisTab:
 
     def _build_tab(self) -> None:
         tab = QWidget()
+        self._tab = tab
         self._stack.addWidget(tab)
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(12, 10, 12, 6)
@@ -154,6 +158,10 @@ class AnalysisTab:
         self._plot = plot
         layout.addWidget(plot, 1)
         self._ready = True
+
+    def widget(self) -> QWidget | None:
+        """返回嵌入 QStackedWidget 的顶层 QWidget。"""
+        return self._tab
 
     # ═══════════════════ 事件 ═══════════════════
 

@@ -140,7 +140,8 @@ class RaceVideoToLogApp(VideoLoadMixin, ExportControllerMixin, QMainWindow):
         self._tab_pivot.addItem(
             'analysis', '数据分析',
             lambda: (self._ensure_analysis_tab(),
-                     self._tab_stack.setCurrentWidget(self._analysis_tab)))
+                     self._tab_stack.setCurrentWidget(
+                         self._analysis_tab.widget())))
         self._tab_pivot.setCurrentItem('ocr')
         self._tab_pivot.currentItemChanged.connect(self._on_pivot)
 
