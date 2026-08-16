@@ -169,6 +169,7 @@ class SegmentPipeline:
         # 代表帧保留 YUV 供 final_check 前转 RGB 预览
         self._yuv_output = yuv_output
         self._color_range = 0  # run 时从 decoder get_color_range 读取
+        self._codec = ""       # run 时从 decoder get_codec 探测（AV1 线程分配用）
         self._progress = progress_cb or (lambda m, p: None)
         self._cancel = cancel_check or (lambda: None)
         self.rows: list = []
@@ -234,10 +235,28 @@ class SegmentPipeline:
                 if backend == "nvdec":
                     logger.warning("NVDEC 解码不可用，回退 CPU")
         if vr is None:
-            vr = self._open_decord_reader(_cpu(0), roi_kw,
-                                          num_threads=self._decode_num_threads())
+            vr = self._open_decord_reader(
+                _cpu(0), roi_kw, num_threads=self._decode_num_threads())
             label = "CPU"
         self._backend = f"decord/{label}"
+        # AV1 特判（纯 CPU 软解）：解码吞吐极低（~270fps）是绝对瓶颈，
+        # 探测 codec 后按 AV1 规则重新打开 reader（解码多分核）。仅 CPU
+        # 软解路径；GPU/NVDEC 不受影响（_codec 由 GPU reader 探测）。
+        if label == "CPU":
+            try:
+                self._codec = str(vr.get_codec() or "").lower()
+            except Exception:
+                self._codec = ""
+            if self._codec == "av1":
+                nt = self._decode_num_threads(codec="av1")
+                if nt != (self._decode_num_threads()):
+                    vr = self._open_decord_reader(_cpu(0), roi_kw,
+                                                  num_threads=nt)
+        else:
+            try:
+                self._codec = str(vr.get_codec() or "").lower()
+            except Exception:
+                self._codec = ""
         self._remember_color_range(vr)
         return vr
 
@@ -288,18 +307,25 @@ class SegmentPipeline:
             return "yuv420"
         return "gray" if self._gray_output else "rgb"
 
-    def _decode_num_threads(self) -> int | None:
-        """CPU 软解的 decord FFmpeg 帧线程数（少核分核）。
+    def _decode_num_threads(self, codec: str | None = None) -> int | None:
+        """CPU 软解的 decord FFmpeg 帧线程数（少核/AV1 分核）。
 
         物理核 ≤ CPU_CORES_SPLIT_THRESHOLD（8）时返回 cores//2：FFmpeg
         fork 默认 2 帧线程只用 2 核，少核下解码成瓶颈，且 OCR 全核会与
         解码过订阅；实测（test5，affinity 模拟）4 核 28.0 vs 33.1s、
         8 核 17.8 vs 20.7s。核数多时（16）分核反而更差（12.0 vs 9.5s）
         → 返回 None（decord 默认，FFmpeg 帧线程落在 SMT 份额上）。
+        codec='av1'：AV1 软解吞吐极低（~270fps vs h264 ~1247fps），解码
+        是绝对瓶颈 → 解码分 max(2, min(cores*3//4, cores-2)) 核、OCR 保
+        至少 2 线程。实测（test6）：16 核 dcd=12/ocrT=4 → 78.8s vs 现状
+        87.4s（-10%）、8 核 dcd=6/ocrT=2 → 81.7s vs 101.2s（-19%）、
+        4 核 dcd=2/ocrT=2 持平（ocrT=1 是灾难，ONNX 单线程追不上段率）。
         GPU(NVDEC) 不调用本方法。
         """
         from ocr_native import auto_ocr_thread_count
         cores = auto_ocr_thread_count()
+        if codec == "av1":
+            return max(2, min(cores * 3 // 4, cores - 2))
         if cores <= config.CPU_CORES_SPLIT_THRESHOLD:
             return max(2, cores // 2)
         return None
@@ -426,6 +452,14 @@ class SegmentPipeline:
         if _env:
             return max(1, int(_env))
         cores = auto_ocr_thread_count()
+        # AV1 软解：解码是绝对瓶颈（~270fps），OCR 让核给解码——实测
+        # 16 核 ocrT=4、8 核 ocrT=2 最优，ocrT=1 是灾难（ONNX 单线程
+        # 追不上段率 → 反而更慢）；4 核 ocrT=1 同样灾难 → cores>4 才让核
+        if getattr(self, "_codec", "") == "av1" \
+                and getattr(self, "_backend", "").startswith("decord/CPU") \
+                and cores > 4:
+            dcd = max(2, min(cores * 3 // 4, cores - 2))
+            return max(2, cores - dcd)
         if getattr(self, "_backend", "").startswith("decord/CPU") \
                 and cores <= config.CPU_CORES_SPLIT_THRESHOLD:
             return max(2, cores // 2)

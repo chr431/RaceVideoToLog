@@ -22,7 +22,7 @@ PY = sys.executable
 
 def run_bench(video: str, ocr: str, dec: str, n_cores: int | None = None,
               ocr_threads: int | None = None, tag: str = "",
-              extra_env: dict | None = None) -> dict:
+              extra_env: dict | None = None, runs: int = 2) -> dict:
     env = dict(os.environ)
     env["PYTHONIOENCODING"] = "utf-8"
     if n_cores:
@@ -39,7 +39,7 @@ def run_bench(video: str, ocr: str, dec: str, n_cores: int | None = None,
     name = f"bench_{video}_{ocr}_{dec}_{n_cores or 'full'}{tag}"
     json_path = PROJECT / "outputs" / f"{name}.json"
     cmd = [PY, "tools/bench_decoder.py", "--video", video, "--backend", ocr,
-           "--decode-backend", dec, "--runs", "2", "--no-monitor",
+           "--decode-backend", dec, "--runs", str(runs), "--no-monitor",
            "--json", str(json_path)]
     r = subprocess.run(cmd, cwd=str(PROJECT), env=env,
                        capture_output=True, text=True)

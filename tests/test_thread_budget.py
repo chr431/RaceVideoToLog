@@ -70,3 +70,26 @@ def test_split_cores_on_low_core_cpu_decode(monkeypatch):
     # GPU 分支在调用方不传 num_threads）
     p._backend = "decord/GPU"
     assert p._ocr_num_threads() == cores
+
+
+def test_av1_cpu_decode_allocates_more_to_decode(monkeypatch):
+    """AV1 + CPU 软解：解码多分核、OCR 让核（cores>4 时）。
+
+    实测（test6）：16 核 dcd=12/ocrT=4 → 78.8s vs 现状 87.4s（-10%）、
+    8 核 dcd=6/ocrT=2 → 81.7s vs 101.2s（-19%）；ocrT=1 是灾难
+    （ONNX 单线程追不上段率）→ cores<=4 不分（dcd=ocrT=2 持平）。
+    """
+    monkeypatch.delenv("RVTOL_OCR_THREADS", raising=False)
+    p = _pipe()
+    p._backend = "decord/CPU"
+    p._codec = "av1"
+    cores = cpu_physical_cores()
+    dcd = max(2, min(cores * 3 // 4, cores - 2))
+    assert p._decode_num_threads(codec="av1") == dcd
+    if cores > 4:
+        assert p._ocr_num_threads() == max(2, cores - dcd)
+    else:
+        assert p._ocr_num_threads() == max(2, cores // 2)
+    # GPU 解码 AV1：OCR 全核（不触发 AV1 让核）
+    p._backend = "decord/GPU"
+    assert p._ocr_num_threads() == cores

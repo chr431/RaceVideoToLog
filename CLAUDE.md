@@ -178,6 +178,28 @@ GPU 干活，与核心数无关 → auto 决策无需按核心数调整。
   规则不触发 → 漏斗 0 无回归已确认；少核用户读数可能与本机不同，属既有
   RVTOL_OCR_THREADS 同类差异）
 
+### 串行 vs 并行（CPU+ONNX，勿再投入）
+- 串行（解码全帧 dcd=cores → 分段 → OCR 全核 ocrT=cores，脚本
+  tools/archive/_bench_serial.py）与并行分核**持平**：test5 4 核 28.2 vs
+  28.0s、8 核 17.2 vs 17.8s、16 核 10.3 vs 9.6s（±7% 波动内）。
+- 原因：**CPU 工作量守恒**——解码+OCR 的 CPU 总时间固定，并行分核（每
+  阶段半核同时跑）与串行全核（每阶段快一倍依次跑）只是同一份工作的
+  空分/时分，负载相近时数学等价。串行还有全帧驻留内存（test6 ~100MB+）、
+  引擎加载无法隐藏、进度条退化等代价 → 不落地，分核并行已是最优近似。
+
+### AV1 解码多分核（落地：codec 感知分配）
+- CPU 软解 AV1 吞吐极低（~270fps vs h264 ~1247fps），解码是绝对瓶颈，
+  平分（cores//2）被解码拖死。规则：**AV1 + CPU 解码且 cores>4 →
+  dcd = max(2, min(cores*3//4, cores-2))、ocrT = max(2, cores-dcd)**；
+  4 核不分（ocrT=1 是灾难：ONNX 单线程追不上段率反而更慢）。
+  实现：_open_vr CPU 分支打开后 get_codec() 探测，AV1 时按规则重开
+  reader（重开 ~0.3s vs 总时长 ~80s 可忽略）；_ocr_num_threads 内联
+  AV1 分支（先于通用分核，8 核 AV1 走 AV1 规则 ocrT=2 而非 4）。
+  实测（test6 CPU+ONNX）：16 核 78.8s vs 现状 87.4s（-10%）、8 核
+  81.7s vs 101.2s（-19%）、4 核持平；端到端自动分配 83.2s（±5% 波动）
+  且准确率 0 错误（ocrT=4 读数与 TRT 基准一致）。GPU 解码/非 AV1
+  不受影响（漏斗 0 无回归确认）。
+
 ## 已锁定的参数（勿随意改动）
 
 - OCR 预处理：resize 48 高 + **灰度 gamma 2.0**（config.OCR_GAMMA，正式预处理；

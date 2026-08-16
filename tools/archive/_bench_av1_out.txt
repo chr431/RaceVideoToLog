@@ -1,0 +1,11 @@
+══ test6 AV1 CPU+ONNX 解码/OCR 分配扫描（runs=1 粗扫） ══
+（16核基线 dcd=2/ocrT=16 → 87.4s）
+  test6 16核 dcd=8 ocrT=8       decode= 78.49s ocr= 78.56s corr= 0.36s total= 79.40s rss=   731MB  backend=CPU
+  test6 16核 dcd=12 ocrT=4      decode= 77.90s ocr= 77.99s corr= 0.36s total= 78.80s rss=   778MB  backend=CPU
+  test6 16核 dcd=14 ocrT=2      decode= 79.13s ocr= 79.35s corr= 0.37s total= 80.20s rss=   775MB  backend=CPU
+  test6 16核 dcd=15 ocrT=1      decode=119.29s ocr=121.53s corr= 0.35s total=122.40s rss=   771MB  backend=CPU
+  test6 8核 dcd=4 ocrT=4        decode=100.07s ocr=100.17s corr= 0.38s total=101.20s rss=   728MB  backend=CPU
+  test6 8核 dcd=6 ocrT=2        decode= 80.39s ocr= 80.85s corr= 0.36s total= 81.70s rss=   756MB  backend=CPU
+  test6 8核 dcd=7 ocrT=1        decode=119.48s ocr=121.78s corr= 0.36s total=122.70s rss=   760MB  backend=CPU
+  test6 4核 dcd=2 ocrT=2        decode=119.39s ocr=119.56s corr= 0.36s total=120.60s rss=   706MB  backend=CPU
+  test6 4核 dcd=3 ocrT=1        decode=131.59s ocr=132.82s corr= 0.38s total=133.90s rss=   727MB  backend=CPU
