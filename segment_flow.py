@@ -324,8 +324,13 @@ class SegmentPipeline:
         """
         from ocr_native import auto_ocr_thread_count
         cores = auto_ocr_thread_count()
+        # AV1（dav1d）：新 decord DLL（max_frame_delay≥16 恢复帧并行）下
+        # 解码吞吐翻倍，平衡点回到对半分（dcd=ocrT=cores//2）——实测
+        # （test6 CPU+ONNX）：16 核 dcd=8 → 45.7s（vs 12/4 的 58.5s）、
+        # 8 核 dcd=4 → 72.1s（vs 6/2 的 91.9s）。任何核数都分（与 h264
+        # 少核规则相同，仅核数多时 AV1 也分）。
         if codec == "av1":
-            return max(2, min(cores * 3 // 4, cores - 2))
+            return max(2, cores // 2)
         if cores <= config.CPU_CORES_SPLIT_THRESHOLD:
             return max(2, cores // 2)
         return None
@@ -452,14 +457,14 @@ class SegmentPipeline:
         if _env:
             return max(1, int(_env))
         cores = auto_ocr_thread_count()
-        # AV1 软解：解码是绝对瓶颈（~270fps），OCR 让核给解码——实测
-        # 16 核 ocrT=4、8 核 ocrT=2 最优，ocrT=1 是灾难（ONNX 单线程
-        # 追不上段率 → 反而更慢）；4 核 ocrT=1 同样灾难 → cores>4 才让核
+        # AV1（dav1d）：新 decord DLL（max_frame_delay≥16 恢复帧并行）下
+        # 解码吞吐翻倍，平衡点回到对半分 —— 实测（test6 CPU+ONNX）：
+        # 16 核 dcd=8/ocrT=8 → 45.7s（vs dcd=12/ocrT=4 58.5s）、8 核
+        # dcd=4/ocrT=4 → 72.1s（vs dcd=6/ocrT=2 91.9s，OCR 2 线程追不上
+        # 提速后的段率）。ocrT=cores//2≥2 恒成立（4 核=2，无 ocrT=1 灾难）。
         if getattr(self, "_codec", "") == "av1" \
-                and getattr(self, "_backend", "").startswith("decord/CPU") \
-                and cores > 4:
-            dcd = max(2, min(cores * 3 // 4, cores - 2))
-            return max(2, cores - dcd)
+                and getattr(self, "_backend", "").startswith("decord/CPU"):
+            return max(2, cores // 2)
         if getattr(self, "_backend", "").startswith("decord/CPU") \
                 and cores <= config.CPU_CORES_SPLIT_THRESHOLD:
             return max(2, cores // 2)

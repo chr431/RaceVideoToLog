@@ -39,7 +39,7 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
   `test_hybrid_decoder.py`（cpu+nvdec 识别/切分/解码 worker）、
   `test_decoder_integration.py`（缺 decord 显式跳过）。
 - CI（.github/workflows/ci.yml）：test job 跑全量 pytest；decoder-smoke job
-  从 chr431/decord release v0.7.10 下载 fork 真实跑解码集成测试（下载失败
+  从 chr431/decord release v0.7.11 下载 fork 真实跑解码集成测试（下载失败
   显式跳过不红）；version-check 跑 tools/version.py。
 - 2-off 漏纠的剩余类型是信息论极限（truth 瞬时跳变/值在邻域重复/贴合
   一侧的平滑偏移，与真实曲线不可区分）——孤立 2-off 尖峰（值不重复）
@@ -187,18 +187,25 @@ GPU 干活，与核心数无关 → auto 决策无需按核心数调整。
   空分/时分，负载相近时数学等价。串行还有全帧驻留内存（test6 ~100MB+）、
   引擎加载无法隐藏、进度条退化等代价 → 不落地，分核并行已是最优近似。
 
-### AV1 解码多分核（落地：codec 感知分配）
-- CPU 软解 AV1 吞吐极低（~270fps vs h264 ~1247fps），解码是绝对瓶颈，
-  平分（cores//2）被解码拖死。规则：**AV1 + CPU 解码且 cores>4 →
-  dcd = max(2, min(cores*3//4, cores-2))、ocrT = max(2, cores-dcd)**；
-  4 核不分（ocrT=1 是灾难：ONNX 单线程追不上段率反而更慢）。
-  实现：_open_vr CPU 分支打开后 get_codec() 探测，AV1 时按规则重开
-  reader（重开 ~0.3s vs 总时长 ~80s 可忽略）；_ocr_num_threads 内联
-  AV1 分支（先于通用分核，8 核 AV1 走 AV1 规则 ocrT=2 而非 4）。
-  实测（test6 CPU+ONNX）：16 核 78.8s vs 现状 87.4s（-10%）、8 核
-  81.7s vs 101.2s（-19%）、4 核持平；端到端自动分配 83.2s（±5% 波动）
-  且准确率 0 错误（ocrT=4 读数与 TRT 基准一致）。GPU 解码/非 AV1
-  不受影响（漏斗 0 无回归确认）。
+### AV1 解码多分核（v2.16 → v0.7.11 修正：对半分 + max_frame_delay）
+- **根因（v0.7.11 查明）**：dav1d 的 frame_delay 自动值 ≈1-2 → 帧并行被
+  扼杀，16 核 AV1 软解只有 ~3 核在跑（cpu/wall=3.0，~360fps），
+  thread_count 增大无扩展（用户任务管理器观察 20% CPU 占用吻合）。
+  ffmpeg CLI 对照证实（-threads 12 也只有 3 核扩展）。
+- **decord v0.7.11 修复**：① video_reader.cc 对 AV1+CPU 经 avcodec_open2
+  AVDictionary 传 max_frame_delay=max(thread_count,16)（open2 内部
+  av_opt_set_defaults 重置 avctx 选项，open 前 av_opt_set_int 无效）；
+  ② threaded_decoder.cc AV1 批量 send（连续 send 到 EAGAIN/16 帧再批量
+  receive，dav1d 无 B 帧依赖安全；h264 保持 drain-then-send）。
+  3000 帧解码新旧 DLL 逐位一致（sha256）。decord 内 dcd=12 326→648fps、
+  cpu/wall 3.0→6.4。
+- **分配规则修正（对半分）**：decode 提速后段率翻倍，OCR 让核反而成
+  瓶颈 → AV1+CPU 解码任何核数 dcd=ocrT=cores//2（16 核 45.7s vs
+  12/4 的 58.5s；8 核 72.1s vs 6/2 的 91.9s）。全量 test6 CPU+ONNX
+  45.7-62s（vs 旧 DLL 87.4s，-30~48%，测量波动大），准确率 0 错误。
+  脚本 tools/archive/_av1_thread_probe.py（3000 帧探针，wall/CPU 时间
+  与线程扩展）、_dll_consistency.py（新旧 DLL sha256）、
+  _bench_matrix.py（分配扫描）。
 
 ## 已锁定的参数（勿随意改动）
 
@@ -359,6 +366,11 @@ GPU 干活，与核心数无关 → auto 决策无需按核心数调整。
     按 gray 同语义展开 Y）。RaceVideoToLog 生产管线解码 YUV、分段/OCR
     只取 Y（与 gray 输出逐位一致，门禁 11 错不变），代表帧保留 YUV，
     最终检查前 `prepare_review_rgb()` 一次转成 RGB 显示。
+  - ✅ v0.7.11：AV1 软解恢复 dav1d 帧并行（max_frame_delay≥16 经
+    avcodec_open2 AVDictionary + AV1 批量 send）——AV1 CPU 解码
+    326→648fps（3000 帧探针），全量 test6 CPU+ONNX 87.4→45.7-62s；
+    新旧 DLL 解码逐位一致（sha256）。RaceVideoToLog 侧 AV1 分配规则
+    同步改为对半分（dcd=ocrT=cores//2，见性能轮次 2026-08-16）。
   - **GPU 真批量异步解码 = 已验证死路（2026-08-15 实测）**：display 回调
     去 sync + 延迟解映射 + 32 surface + 批级 SyncStream 的完整实现放在
     fork 分支 `experiment/async-batch-decode`（980 帧 A/B 与同步版逐位
