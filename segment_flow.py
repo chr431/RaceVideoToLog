@@ -41,7 +41,7 @@ from hybrid_decode import (  # noqa: F401 — 兼容 tests 的历史导入路径
 )
 from seg_correction import (
     confidence_scores, correct_segments, dense_correct, detect_segments,
-    dp_run, fill_values, local_bandwidth,
+    dp_run, fill_values, local_bandwidth, spike_second_pass,
 )
 
 logger = logging.getLogger("RaceVideoToLog.segment_flow")
@@ -617,6 +617,11 @@ class SegmentPipeline:
             dp_anchor_cost=self._dp_anchor_cost,
             anchor_max=self._anchor_max)
 
+    def _spike_second_pass(self, seg_vals, seg_times, corr1, seg_lens=None):
+        """第二遍尖峰检测（v2.16 实验）：第一遍去污染后补抓孤立 2-off
+        单帧误读（参数 config.SEG_SPIKE_*，实测 final 11→5、harm=0）。"""
+        return spike_second_pass(seg_vals, seg_times, corr1, seg_lens)
+
     def _dp_run(self, lo, hi, seg_vals, seg_times, is_anchor, fill=None):
         return dp_run(lo, hi, seg_vals, seg_times, is_anchor,
                       self._max_speed, self._max_accel, self._fps or 30.0,
@@ -644,7 +649,12 @@ class SegmentPipeline:
             conf = self._confidence(seg_vals, seg_times,
                                     [len(s) for s in segs])
             self._conf_vals = list(conf)       # 供 finalize/flag 判定复用
-            corr, self._n_corr = self._dense_correct(seg_vals, seg_times, conf)
+            corr, n1 = self._dense_correct(seg_vals, seg_times, conf)
+            # 第二遍尖峰检测：第一遍去污染后补抓孤立 2-off 单帧误读
+            # （v2.16 实验，实测 final 11→5、harm=0；参数见 config.SEG_SPIKE_*）
+            corr, n2, _flagged = self._spike_second_pass(
+                seg_vals, seg_times, corr, [len(s) for s in segs])
+            self._n_corr = n1 + n2
             self.timing["correction"] = time.perf_counter() - t_corr
             self.rows = self._build_rows(frames, segs, corr, raw=seg_vals,
                                          conf=conf)

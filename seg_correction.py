@@ -421,3 +421,68 @@ def dense_correct(seg_vals: list, seg_times: list, conf: list, *,
                     n_corr += 1
         i = j + 1
     return out, n_corr
+
+
+def spike_second_pass(seg_vals: list, seg_times: list, corr1: list,
+                      seg_lens=None, *,
+                      k: int = config.SEG_SPIKE_K,
+                      thresh: float = config.SEG_SPIKE_THRESH,
+                      min_fix: float = config.SEG_SPIKE_MIN_FIX,
+                      min_nbr: int = config.SEG_SPIKE_MIN_NBR) -> tuple[list, int, list]:
+    """第二遍尖峰检测（在已修正序列上的孤立 2-off 单帧误读）。
+
+    生产第一遍（detect+conf+DP）修掉大误读后，序列已被"去污染"；此时
+    残留的小误读（2-off 单帧段，如 103 平台上读成 101）在修正后序列上
+    呈"孤立尖峰"形态。判别（全部满足才改）：
+      - 生产未改（corr1[i] == seg_vals[i]）且 len==1 的单帧段
+      - 左右 ±k 段窗口中值（修正后序列）同时高于或同时低于 raw
+        （两侧一致偏离，排除爬坡/下降段内贴合一侧的正确段）
+      - 至少一侧偏离 ≥ thresh
+      - raw 值在 ±k 邻域内不重复（孤立值：真实曲线段的值通常与邻居
+        重复出现；孤立值 = 更可能是 OCR 误读——这是与"真实 1 帧 dip"
+        区分的核心，实测排除全部 4 个同形态正确段）
+    修正目标 = 两侧中值中离 raw 更远的一侧（尖峰拉回远离方向）。
+    实测（夹具全量）：final 11→5（test 3→0 / test2 8→5），harm=0。
+    返回 (out, n_corr, flagged_idx)。
+    """
+    n = len(seg_vals)
+    base = [corr1[i] if corr1[i] is not None else seg_vals[i]
+            for i in range(n)]
+    out = list(base)
+    n_corr = 0
+    flagged = []
+    for i in range(n):
+        if corr1[i] != seg_vals[i]:
+            continue  # 生产已改/已填充 → 跳过
+        if seg_vals[i] is None:
+            continue
+        if seg_lens is not None and i < len(seg_lens) \
+                and int(seg_lens[i]) != 1:
+            continue  # 只处理单帧段（80% 误读在单帧段）
+        left = [base[j] for j in range(max(0, i - k), i)
+                if base[j] is not None]
+        right = [base[j] for j in range(i + 1, min(n, i + k + 1))
+                 if base[j] is not None]
+        if len(left) < min_nbr or len(right) < min_nbr:
+            continue
+        lm = float(np.median(left))
+        rm = float(np.median(right))
+        d_left = seg_vals[i] - lm
+        d_right = seg_vals[i] - rm
+        if d_left * d_right <= 0:
+            continue  # 贴合一侧（爬坡/下降段内）
+        if max(abs(d_left), abs(d_right)) < thresh:
+            continue
+        # 孤立值判别：±k 邻域内不重复
+        if any(base[j] == seg_vals[i]
+               for j in range(max(0, i - k), i)) or \
+           any(base[j] == seg_vals[i]
+               for j in range(i + 1, min(n, i + k + 1))):
+            continue
+        target = int(round(lm)) if abs(d_left) >= abs(d_right) \
+            else int(round(rm))
+        if target != seg_vals[i] and abs(seg_vals[i] - target) >= min_fix:
+            out[i] = target
+            n_corr += 1
+            flagged.append(i)
+    return out, n_corr, flagged

@@ -7,16 +7,17 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
 
 - **准确率漏斗是真正的测试门禁**：`tools/accuracy_breakdown.py` 跑
   test/test2/test3/test5/test6 + ground_truth_csv，与 `tools/baseline.json`
-  对比，当前基线 **11 错误**（test 3 / test2 8 / test3/5/6 0，TOL±1，
-  A4 豁免后；v2.15 灰度统一后 test 4→3）。任一视频或总量的最终错误数
-  增加 → 退出码 1（失败即红）。有意改进后：确认无意外回归 →
+  对比，当前基线 **0 错误**（全部视频 0，TOL±1；v2.16 第二遍尖峰检测
+  11→5，test2 truth 晋升人工复核 log 后 5→0）。任一视频或总量的最终
+  错误数增加 → 退出码 1（失败即红）。有意改进后：确认无意外回归 →
   `--update-baseline` 更新基线，并同步重新生成回归夹具
   （`tools/make_regression_fixtures.py`）与更新本节基线描述。
 - **CI 回归夹具（无视频/无 decord 可跑）**：`tests/fixtures/` ——
   - `seg_series/*.json`：生产 run() 的全量段级序列（test/test2/test3/5/6），
-    `tests/test_seg_series.py` 重构 _confidence+_dense_correct 并逐段断言
-    与基线一致 + 最终错误集一致（11 案例口径）。
-  - `ocr_frames/`：错误案例代表帧的原始 ROI 裁剪（.npy）+ manifest，
+    `tests/test_seg_series.py` 重构 _confidence+_dense_correct+
+    _spike_second_pass 并逐段断言与基线一致 + 最终错误集一致（0 案例口径）。
+  - `ocr_frames/`：错误案例代表帧的 ROI 裁剪（.npy，YUV420 生产模式存
+    Y 平面 H,W,1 即 OCR 实际输入）+ manifest（当前 0 案例），
     `tests/test_ocr_fixtures.py` 用 onnxruntime CPU 锁定 OCR 行为基线。
   夹具版本必须与 config.__version__ 一致（测试强制）。任何算法/预处理/
   模型改动使夹具读数变化 → 测试失败，属有意改动时先跑完整漏斗确认无
@@ -25,9 +26,12 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
   ground_truth_csv/，test5/test6 用 *_ref.csv）。
 - **test4 truth 不可用**（巨大误差，用户确认）——不作准确率依据，仅用于
   "不把物理正确的帧改坏"。
-- 剩余 11 错误构成：9 个 2-off（平滑偏移/DP 部分纠正/truth 瞬时跳变，
-  信息论极限）+ test2 2 个"纠错"（改错，change_threshold=3 的 tradeoff 面）。
-  11 案例全部是 len=1 单帧段误读（明细可跑 tools/final_err_dump.py）。
+- **test2 truth 晋升（v2.16）**：ground_truth_csv/test2_truth.csv 已替换为
+  人工复核的 test2_log.csv（用户逐帧复核，含 22 个手动 PINNED 帧）。
+  旧 truth 在 1841/2466/2871/3095 四帧系统性偏 2（证实 4 个"最终错误"
+  是假错误，生产输出正确）；参数随晋升更新：roi=881,940,958,982（用户
+  复核时微调）、max_accel=50、frame 670-4176。对比脚本
+  tools/archive/_truth_vs_log.py（14 差异帧明细）。
 - pytest：`tests/test_segment_flow.py`（_detect/_correct）、
   `test_correction_chain.py`（conf/DP/build_rows/预处理）、`test_csv_io.py`、
   `test_from_csv.py`（from-csv 显式参数优先语义）、`test_packaging.py`
@@ -37,11 +41,31 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
 - CI（.github/workflows/ci.yml）：test job 跑全量 pytest；decoder-smoke job
   从 chr431/decord release v0.7.10 下载 fork 真实跑解码集成测试（下载失败
   显式跳过不红）；version-check 跑 tools/version.py。
-- 1-2 km/h 平滑偏移漏纠是信息论极限（与真实平滑不可区分）——局部物理约束
-  无解，勿重复探索。
+- 2-off 漏纠的剩余类型是信息论极限（truth 瞬时跳变/值在邻域重复/贴合
+  一侧的平滑偏移，与真实曲线不可区分）——孤立 2-off 尖峰（值不重复）
+  已由第二遍尖峰检测修复（v2.16），勿重复探索其余类型。
 
 ## 已验证的死路（不要重新投入）
 
+- **加速度分节重建纠错（用户提案，2026-08 实验）**：分节（相邻节首尾重合
+  一段、节内相邻对加速度 max-min ≤ diff）→ 可信节（帧数 ≥ min_length 且
+  |mean_accel| ≤ max_accel）锚定 → 按自身 mean_accel 延长线相交重建轮廓 →
+  未锚定段 |raw−rec| > gap 才填充。离线扫参 2400 组（diff 0.5-200 / minL
+  5-80 / gap 2-12 / max_accel_factor 0.1-1.0 / min_pairs 1-2）最优 **33 vs
+  基线 11**（test 9 / test2 21 / test6 3）；节锚定+生产 DP 混合最优 23；
+  作为生产 dense_correct 后第二阶段 12（净负，残留 11 修 0 破 1）。根因：
+  ① 段间 dt≈0.017s（57fps）使 ±1 km/h OCR 抖动 = ±57 km/h/s 加速度，节被
+  噪声碎成 2-3 段（diff≤30 时 60%+ 是 2 段节，mean_accel 退化为单对均值）；
+  ② 2 段节含单个极端加速度对时（|pair| < max_accel 上限即过信）误读被锚定
+  不可改（test#330 raw=160 节对 -91.6 可信）；min_pairs=2 能拒这类但刹车区
+  失去全部锚点 → test2 爆炸；③ gap 松则小误读（2-8-off）漏纠（test#74
+  rec=102 很准但 |107−102|≤8 保留），紧则正确段被轮廓偏差误改（刹车/转折
+  区 rec 偏 2-6：test6 #4964 rec=79 vs truth=81、test2 #1017-1018 rec=112
+  vs 119-120）；④ "等价于可变窗口中值滤波"不成立——重建是外推不是中值。
+  结论：锚点来源不是当前系统瓶颈（conf+局部锚点插值+DP 已更强），勿再投入。
+  实验脚本 tools/archive/proto_accel_section.py（--sweep/--detail/--hybrid/
+  --ctx）+ _proto_stage2.py，数据用 tests/fixtures/seg_series（corr 复现
+  基线 11），不重跑解码+OCR。
 - medium 模型（用户否决）；fp16/INT8（tiny/small 非算力受限，无效）
 - Otsu/二值化/对比度拉伸/锐化喂 OCR（PP-OCRv6 训练于自然 RGB）
 - 多预处理自动选择（固定 gray+gamma2.0 是全量最优，1.15% 误读）
@@ -224,11 +248,23 @@ HEVC/AV1 CPU 明显更慢，hybrid10 在 HEVC 还拖慢 0.7s。**维持 auto=GPU
   真刹车 jerk≈0、丢位污染 jerk≥80、孤立尖峰 jerk 中等（test#74 jerk=9）。
   **jerk_score 无判别力**（正确段被丢位邻居污染后与尖峰同形）——必须用
   原始 jerk 值；带通下界 0 是灾难（78 误改），上界 ≥80 引入污染段
+- **第二遍尖峰检测（v2.16，11→5→0）**：SEG_SPIKE_K=2 / THRESH=2.0 /
+  MIN_FIX=2.0 / MIN_NBR=2 —— dense_correct 之后对"生产未改 + len=1"
+  的段做孤立尖峰判别：修正后序列 ±2 段两侧中值**一致偏离**（同号）且
+  至少一侧 ≥2，且 raw 值在邻域内**不重复**（孤立值判别——真实曲线段的
+  值通常与邻居重复，这是与"真实 1 帧 dip"区分的核心，排除全部 4 个
+  同形态正确段）。修正目标 = 离 raw 更远的一侧中值。实测修对 6 个
+  2-off 单帧误读（test#73/#324/#1253、test2#228/#339/#403），harm=0。
+  **"2-off 平滑偏移是信息论极限"表述修正**：孤立 2-off 尖峰（值不重复）
+  可修；重复值/贴合一侧的 2-off 才不可区分。test2 truth 晋升人工复核
+  log 后（v2.16）剩余错误归零（原"不可修"的 #483/#750/#923/#957 证实
+  为旧 truth 系统性偏 2 的假错误，#387/#388 在新 ROI/复核值下也已修对）。
 
 ## 架构要点
 
 - 生产路径：`run()` → `_run_pipelined()`（解码∥分段∥段值 OCR 流水线，
-  有界队列背压）→ `_confidence` → `_dense_correct`（稠密格点 DP）→ `_build_rows`
+  有界队列背压）→ `_confidence` → `_dense_correct`（稠密格点 DP）→
+  `_spike_second_pass`（第二遍尖峰检测，v2.16）→ `_build_rows`
 - 职责拆分（v2.15.1）：segmentation.py（灰度/Otsu/聚类）、hybrid_decode.py
   （混合解码 worker/队列）、seg_correction.py（检测/置信度/DP 纯函数）、
   ocr_trt.py（TrtEngine）、analysis_plot.py / review_chart.py / gui_video.py /

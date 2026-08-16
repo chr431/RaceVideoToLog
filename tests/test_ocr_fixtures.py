@@ -1,12 +1,13 @@
-"""12 错误案例代表帧的 OCR 行为锁定（CI 可跑：无需 decord / GPU）。
+"""最终错误案例代表帧的 OCR 行为锁定（CI 可跑：无需 decord / GPU）。
 
 夹具由 tools/make_regression_fixtures.py 生成：
-- tests/fixtures/ocr_frames/*.npy —— 最终错误段代表帧的原始 ROI 裁剪
+- tests/fixtures/ocr_frames/*.npy —— 最终错误段代表帧的 ROI 裁剪
+  （YUV420 生产模式下存 Y 平面 H,W,1，即 OCR 实际输入）
 - tests/fixtures/ocr_frames/manifest.json —— 每帧期望的 OCR raw 值
 
 本测试锁定 OCR 预处理 + 模型 + 文本解析的基线行为：若任一案例读数改变
 （无论更好或更坏），测试失败。此时该改动属于有意改动：先在本机跑完整
-漏斗（tools/accuracy_breakdown.py）确认 12 错误基线无回归，再用
+漏斗（tools/accuracy_breakdown.py）确认 5 错误基线无回归，再用
 make_regression_fixtures.py 重新生成本夹具与 seg_series 夹具。
 
 确定性：onnxruntime CPU + RVTOL_OCR_THREADS=1（单线程推理，跨机器
@@ -60,13 +61,13 @@ def test_ocr_frame_matches_baseline(engine, case):
 
 
 def test_manifest_has_error_cases():
-    """夹具完整性：11 错误案例口径（test 3 / test2 8，test3/5/6 0）。"""
+    """夹具完整性：0 错误案例口径（全部视频 final=0，v2.16 truth 晋升后）。"""
     cases = _cases()
-    assert len(cases) == 11
+    assert len(cases) == 0
     by_video = {}
     for c in cases:
         by_video[c["video"]] = by_video.get(c["video"], 0) + 1
-    assert by_video == {"test": 3, "test2": 8}
+    assert by_video == {}
 
 
 def test_all_frames_exist():

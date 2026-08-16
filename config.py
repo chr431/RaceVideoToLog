@@ -236,6 +236,17 @@ SEG_CONF_ISLAND_TOL: float = 2.0
 SEG_CONF_ISLAND_DEV_MULT: float = 3.0
 # A4 孤立尖峰豁免的 conf 上界（下界=SEG_DP_ANCHOR_CONF）
 SEG_DP_DEANCHOR_CONF_MAX: float = 50.0
+
+# ═══════════════════ 第二遍尖峰检测（孤立 2-off 单帧误读，v2.16 实验） ═══════════════════
+# 生产第一遍（detect+conf+DP）去污染后，对未改动的 len=1 段做"孤立尖峰"
+# 判别：±k 段窗口两侧中值一致偏离 ≥ thresh 且 raw 值在邻域内不重复。
+# 修正目标 = 离 raw 更远的一侧中值；|raw-target| ≥ min_fix 才提交。
+# 实测（5 视频夹具全量）：final 11→5（test 3→0 / test2 8→5），harm=0，
+# 零误改；剩余 5 个为真信息论极限（truth 瞬时跳变/1-off 锚点误差传播）。
+SEG_SPIKE_K: int = 2            # 侧窗口中值半宽（段索引）
+SEG_SPIKE_THRESH: float = 2.0   # 至少一侧偏离阈值 (km/h)
+SEG_SPIKE_MIN_FIX: float = 2.0  # 提交改动最小偏差 (km/h)
+SEG_SPIKE_MIN_NBR: int = 2      # 每侧最少邻居数
 # OCR 引擎内部：ONNX 单批上限与 CTC 归约分块（内存峰值控制）
 OCR_ONNX_CHUNK: int = 16
 OCR_CTC_CHUNK: int = 64

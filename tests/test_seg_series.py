@@ -2,13 +2,14 @@
 
 夹具 = 生产 run() 的全量段级序列（tests/fixtures/seg_series/<video>.json，
 由 tools/make_regression_fixtures.py 生成）。测试用 SegmentPipeline 重构
-_confidence + _dense_correct，断言：
+_confidence + _dense_correct + spike_second_pass，断言：
 
-1. 逐段纠正输出与基线完全一致 —— 任何 _confidence/_dense_correct/DP
-   参数改动导致输出变化都会在此失败。属于有意改动时：本机先跑完整漏斗
-   （tools/accuracy_breakdown.py）确认 12 错误基线无回归，再重新生成夹具。
-2. 最终错误（|corr-truth|>tol）的集合与基线一致（当前口径：test 4 /
-   test2 8 / test3/5/6 0，合计 12 —— 与 CLAUDE.md 基线同步）。
+1. 逐段纠正输出与基线完全一致 —— 任何 _confidence/_dense_correct/DP/
+   spike_second_pass 参数改动导致输出变化都会在此失败。属于有意改动时：
+   本机先跑完整漏斗（tools/accuracy_breakdown.py）确认无回归，再重新
+   生成夹具。
+2. 最终错误（|corr-truth|>tol）的集合与基线一致（当前口径：全部视频
+   0 错误 —— 与 CLAUDE.md 基线同步）。
 """
 from __future__ import annotations
 
@@ -23,7 +24,7 @@ SERIES = Path(__file__).parent / "fixtures" / "seg_series"
 VIDEOS = ["test", "test2", "test3", "test5", "test6"]
 # 每视频基线最终错误数（漏斗口径：跳过 raw 为 None 的段；与
 # tools/baseline.json 保持一致）
-BASELINE_FINAL = {"test": 3, "test2": 8, "test3": 0, "test5": 0, "test6": 0}
+BASELINE_FINAL = {"test": 0, "test2": 0, "test3": 0, "test5": 0, "test6": 0}
 
 
 def _load(v: str) -> dict:
@@ -56,6 +57,7 @@ def test_correction_chain_matches_baseline(video):
 
     conf = p._confidence(raw, times, lens)
     corr, _n = p._dense_correct(raw, times, conf)
+    corr, _n2, _fl = p._spike_second_pass(raw, times, corr, lens)
 
     baseline_corr = [s["corr"] for s in segs]
     assert corr == baseline_corr, (
@@ -81,6 +83,7 @@ def test_final_error_set_matches_baseline(video):
     lens = [s["len"] for s in segs]
     conf = p._confidence(raw, times, lens)
     corr, _n = p._dense_correct(raw, times, conf)
+    corr, _n2, _fl = p._spike_second_pass(raw, times, corr, lens)
 
     err = _error_indices(segs, corr, fx["tol"])
     err_base = _error_indices(segs, [s["corr"] for s in segs], fx["tol"])
@@ -88,7 +91,7 @@ def test_final_error_set_matches_baseline(video):
         f"{video}: 最终错误集变化（基线 {len(err_base)} → 本次 {len(err)}）")
     assert len(err) == BASELINE_FINAL[video], (
         f"{video}: 最终错误数 {len(err)} ≠ 基线 {BASELINE_FINAL[video]}。"
-        "与 CLAUDE.md/tools/baseline.json 的 11 错误口径不一致——"
+        "与 CLAUDE.md/tools/baseline.json 的 0 错误口径不一致——"
         "先跑完整漏斗（tools/accuracy_breakdown.py）定位。")
 
 
