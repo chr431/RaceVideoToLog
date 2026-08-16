@@ -11,10 +11,13 @@ import numpy as np
 import config
 
 
-def local_bandwidth(seg_vals: list, seg_times: list, win: int) -> list:
+def local_bandwidth(seg_vals: list, seg_times: list, win: int,
+                    win_max_frames: float | None = None) -> list:
     """每段局部带宽：帧窗口内相邻差绝对值的中位数（未加 floor）。
 
     供 detect_segments 与 confidence_scores 共用（两者原为逐行相同的重复循环）。
+    win_max_frames：带宽帧窗口上限（None = config.SEG_WIN_MAX_FRAMES；
+    fps 自适应实验传 原值×fps/基准fps）。
     """
     n = len(seg_vals)
     if n >= 2:
@@ -22,7 +25,9 @@ def local_bandwidth(seg_vals: list, seg_times: list, win: int) -> list:
         med_gap = float(np.median(gaps)) if len(gaps) else 1.0
     else:
         med_gap = 1.0
-    win_frames = min(win * max(med_gap, 1.0), config.SEG_WIN_MAX_FRAMES)
+    win_max = config.SEG_WIN_MAX_FRAMES if win_max_frames is None \
+        else win_max_frames
+    win_frames = min(win * max(med_gap, 1.0), win_max)
     st = np.asarray(seg_times, dtype=np.float64)
     bw_raw = [0.0] * n
     for i in range(n):
@@ -41,7 +46,8 @@ def detect_segments(seg_vals: list, seg_times: list, seg_lens=None, *,
                     mult: float = config.SEG_MULT,
                     detect_floor: float = config.SEG_DETECT_FLOOR,
                     single_floor: float = config.SEG_SINGLE_FLOOR,
-                    win: int = config.SEG_WIN) -> list:
+                    win: int = config.SEG_WIN,
+                    win_max_frames: float | None = None) -> list:
     """中值滤波检测：平滑值曲线（跟随弯曲），误读=尖峰被中值剔除。
 
     对每段 i，smoothed = 局部非 None 值的中位数（段索引窗口 ±med_k）。
@@ -55,7 +61,8 @@ def detect_segments(seg_vals: list, seg_times: list, seg_lens=None, *,
     平缓区门限降到 4 抓小偏差误读，弯曲区仍按实际带宽放宽。
     """
     n = len(seg_vals)
-    bw_raw = local_bandwidth(seg_vals, seg_times, win)
+    bw_raw = local_bandwidth(seg_vals, seg_times, win,
+                             win_max_frames=win_max_frames)
     suspect = [False] * n
     for i in range(n):
         if seg_vals[i] is None:
@@ -183,7 +190,10 @@ def confidence_scores(seg_vals: list, seg_times: list, seg_lens=None, *,
                       conf_w_med: float = config.SEG_CONF_W_MED,
                       conf_w_jerk: float = config.SEG_CONF_W_JERK,
                       win: int = config.SEG_WIN,
-                      island_tol: float = config.SEG_CONF_ISLAND_TOL) -> list:
+                      island_tol: float = config.SEG_CONF_ISLAND_TOL,
+                      win_max_frames: float | None = None,
+                      island_min_frames: int | None = None,
+                      island_min_frames_exact: int | None = None) -> list:
     """中值偏差 + 急动度加权置信度 [0,100]（门控急动度）。
 
     med_score = 100·exp(-dev/bw)：贴合曲线程度。**门控**：贴合曲线
@@ -193,7 +203,8 @@ def confidence_scores(seg_vals: list, seg_times: list, seg_lens=None, *,
     真正缺少左右上下文的边缘段保守 100；None 段 0（必纠正）。
     """
     n = len(seg_vals)
-    bw_raw = local_bandwidth(seg_vals, seg_times, win)
+    bw_raw = local_bandwidth(seg_vals, seg_times, win,
+                             win_max_frames=win_max_frames)
     conf = [0.0] * n
     # 结构性分支（邻居不足/边缘）不参与“一致性孤岛”封顶：它们已有
     # 各自的保守/信任语义，且视频起止的短段不应被误伤。
@@ -245,9 +256,14 @@ def confidence_scores(seg_vals: list, seg_times: list, seg_lens=None, *,
             seg_vals, seg_lens, i, island_tol)
         run_is_exact = all(seg_vals[j] == seg_vals[i]
                            for j in range(l, r + 1))
-        min_frames = (config.SEG_CONF_MIN_CONSISTENT_FRAMES_EXACT
-                      if run_is_exact
-                      else config.SEG_CONF_MIN_CONSISTENT_FRAMES)
+        if run_is_exact:
+            min_frames = (config.SEG_CONF_MIN_CONSISTENT_FRAMES_EXACT
+                          if island_min_frames_exact is None
+                          else island_min_frames_exact)
+        else:
+            min_frames = (config.SEG_CONF_MIN_CONSISTENT_FRAMES
+                          if island_min_frames is None
+                          else island_min_frames)
         if run_frames >= min_frames:
             continue
         lo = max(0, i - med_k)

@@ -247,6 +247,10 @@ SEG_SPIKE_K: int = 2            # 侧窗口中值半宽（段索引）
 SEG_SPIKE_THRESH: float = 2.0   # 至少一侧偏离阈值 (km/h)
 SEG_SPIKE_MIN_FIX: float = 2.0  # 提交改动最小偏差 (km/h)
 SEG_SPIKE_MIN_NBR: int = 2      # 每侧最少邻居数
+# 第二遍尖峰检测的最低帧率：低于该帧率跳过（30fps 模拟实测：低帧率下
+# 相邻段真实速度变化 1-2 km/h（赛车急加速 30-60 km/h/s），正确段的孤立
+# 凸起与 2-off 误读不可区分 → 误改 9/修对 2 净负；57fps 下修 6 零误改）。
+SEG_SPIKE_MIN_FPS: float = 40.0
 # OCR 引擎内部：ONNX 单批上限与 CTC 归约分块（内存峰值控制）
 OCR_ONNX_CHUNK: int = 16
 OCR_CTC_CHUNK: int = 64

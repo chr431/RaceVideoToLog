@@ -652,8 +652,14 @@ class SegmentPipeline:
             corr, n1 = self._dense_correct(seg_vals, seg_times, conf)
             # 第二遍尖峰检测：第一遍去污染后补抓孤立 2-off 单帧误读
             # （v2.16 实验，实测 final 11→5、harm=0；参数见 config.SEG_SPIKE_*）
-            corr, n2, _flagged = self._spike_second_pass(
-                seg_vals, seg_times, corr, [len(s) for s in segs])
+            # 帧率自适应：低帧率（<SEG_SPIKE_MIN_FPS，如 30fps）下相邻段
+            # 真实速度变化达 1-2 km/h，正确段孤立凸起与误读不可区分，
+            # 误改>修对（净负）→ 跳过（30fps 模拟实测 10→2 错误）。
+            if (self._fps or 0) >= config.SEG_SPIKE_MIN_FPS:
+                corr, n2, _flagged = self._spike_second_pass(
+                    seg_vals, seg_times, corr, [len(s) for s in segs])
+            else:
+                n2 = 0
             self._n_corr = n1 + n2
             self.timing["correction"] = time.perf_counter() - t_corr
             self.rows = self._build_rows(frames, segs, corr, raw=seg_vals,
