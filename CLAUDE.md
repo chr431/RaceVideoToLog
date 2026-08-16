@@ -207,6 +207,39 @@ GPU 干活，与核心数无关 → auto 决策无需按核心数调整。
   与线程扩展）、_dll_consistency.py（新旧 DLL sha256）、
   _bench_matrix.py（分配扫描）。
 
+### 核心数扩展曲线（2026-08-16，3000 帧，v0.7.11/ff8）
+| dcd | test HEVC | test5 h264 | test6 AV1 |
+|---|---|---|---|
+| 1 | 156fps (1.0) | 286 (1.0) | 198 (1.0) |
+| 4 | 390 (3.4) | 719 (3.8) | 332 (2.6) |
+| 8 | 590 (5.6) | 904 (5.6) | 456 (4.1) |
+| 12 | 626 (5.9) | 1751 (10.1) | 641 (6.3) |
+| 16 | 929 (9.7) | 2021 (13.2) | 641 (6.6) |
+- h264 扩展最好（13.2 核利用率）；HEVC 中等（9.7）；**AV1 到顶 ~6.6 核**
+  （dav1d 帧并行上限，delay=16→32 无提升实测确认）。ONNX OCR 亚线性：
+  1/2/4/8/12/16 线程 = 76/93/148/231/276/316 段/s（16 线程仅 4.2×）。
+
+### FFmpeg 9（master 9.0-dev）升级实验：无收益，不升级
+- BtbN ffmpeg-master-latest（20260816，avcodec-63）构建 decord 成功
+  （API 兼容零修改），3000 帧对比 ff8：dcd=8 h264 +21%/HEVC +16%、
+  dcd=12/16 持平或略降、AV1 持平（628 vs 641fps）——总体在波动内，
+  master 是滚动开发版不稳定 → 保持 ff8.1（n8.1.2-20260814）。
+  decord build-ff9 目录保留作参考。
+
+### 双 ONNX 实例 OCR（v2.16 落地，RVTOL_DUAL_ONNX=0 关闭）
+- onnxruntime 单实例 intra-op 线程池扩展亚线性（16 线程仅 4.2×，内部
+  同步开销）；两个独立实例（各 ocrT//2 线程）并发取批：纯吞吐 313→355
+  段/s（+15-18%）。端到端：8 核 test5 CPU+ONNX 8.90→7.30s（-18%，
+  OCR 瓶颈场景）；16 核 test6 AV1 decode 瓶颈场景持平。RSS +~200MB
+  （模型 ×2）。显式 OCR=cpu 且核数≥8 时默认启用。准确率 0 错误
+  （test5/test6 全量逐帧验证）。脚本 tools/archive/_onnx_dual.py。
+
+### 快速迭代测量（bench_decoder --frames N）
+- tools/bench_decoder.py 新增 `--frames N`（相对 frame_start 截取，
+  从 truth 头解析 frame_start 算 --frame-end）：反复测试只用 3000 帧，
+  **提交前才跑全量**（CLAUDE.md 门禁用例）。_bench_matrix.run_bench
+  已透传 frames 参数。
+
 ## 已锁定的参数（勿随意改动）
 
 - OCR 预处理：resize 48 高 + **灰度 gamma 2.0**（config.OCR_GAMMA，正式预处理；

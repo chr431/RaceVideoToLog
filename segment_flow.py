@@ -842,13 +842,33 @@ class SegmentPipeline:
                                   progress_cb=_engine_progress),
                     ]
                 else:
-                    engines = [OcrEngine(
-                        self._ocr_model, self._ocr_engine_type(),
-                        fill_width=self._fill_width,
-                        num_threads=self._ocr_num_threads(),
-                        progress_cb=_engine_progress)]
+                    ot = self._ocr_num_threads()
+                    # 双 ONNX 实例（v2.16 实验）：onnxruntime 单实例的
+                    # intra-op 线程池扩展亚线性（16 线程仅 4.2×，内部
+                    # 同步开销）；两个独立实例（各 ocrT//2 线程）并发取
+                    # 批实测吞吐 +15-18%（313→355 段/s）。仅显式 OCR=cpu
+                    # 且核数≥8 时启用；RVTOL_DUAL_ONNX=0 关闭。
+                    dual_onnx = (self._ocr_engine_type() == "onnxruntime"
+                                 and ot >= 8
+                                 and _os.environ.get("RVTOL_DUAL_ONNX",
+                                                     "1") != "0")
+                    if dual_onnx:
+                        half = max(2, ot // 2)
+                        engines = [
+                            OcrEngine(self._ocr_model, "onnxruntime",
+                                      fill_width=self._fill_width,
+                                      num_threads=half,
+                                      progress_cb=_engine_progress)
+                            for _ in range(2)]
+                    else:
+                        engines = [OcrEngine(
+                            self._ocr_model, self._ocr_engine_type(),
+                            fill_width=self._fill_width,
+                            num_threads=ot,
+                            progress_cb=_engine_progress)]
                 self._ocr_backend_used = (
                     "tensorrt+onnxruntime" if len(engines) == 2
+                    and engines[0].backend_name != engines[1].backend_name
                     else engines[0].backend_name)
                 self._prof_end("ocr", "engine_init", _t_eng)
                 B = _ocr_batch_size()

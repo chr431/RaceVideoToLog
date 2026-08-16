@@ -43,10 +43,11 @@ def resolve(video_name: str) -> tuple[str, str]:
 
 def run(video: str, truth: str, backend: str, out_csv: str,
         decode_backend: str = "auto", buffer_size: int = config.DEFAULT_BUFFER_SIZE,
-        no_monitor: bool = False) -> dict:
+        no_monitor: bool = False, frames: int | None = None) -> dict:
     """Run headless pipeline, parse timing + actual backend from output CSV/stdout.
 
     OCR 模型固定 v6_small（v2.14 起移除模型选择）。
+    frames: 截取帧数（相对 frame_start，用于快速迭代测量；None = 全量）。
     """
     Path(out_csv).unlink(missing_ok=True)  # stale CSV from a prior run must not be parsed
     t0 = time.perf_counter()
@@ -73,6 +74,12 @@ def run(video: str, truth: str, backend: str, out_csv: str,
         cli_args += ["--decode-backend", decode_backend]
     # 显式传 buffer：旧 truth CSV 头含 buffer=16，显式参数优先于 from-csv
     cli_args += ["--buffer", str(buffer_size)]
+    if frames:
+        # 截取：--frame-end = frame_start + frames（从 truth 头解析 frame_start）
+        m = re.search(r"frame_start=(\d+)",
+                      Path(truth).read_text(encoding="utf-8-sig", errors="replace"))
+        f_start = int(m.group(1)) if m else 0
+        cli_args += ["--frame-end", str(f_start + frames)]
     if no_monitor:
         cli_args += ["--no-monitor"]
     cli_args += ["-o", out_csv]
@@ -202,6 +209,9 @@ def main() -> None:
     ap.add_argument("--no-monitor", action="store_true",
                     help="子进程关闭资源监控（RVTOL 采样开销对照实验）")
     ap.add_argument("--runs", type=int, default=2, help="runs (last one used for stats)")
+    ap.add_argument("--frames", type=int, default=0,
+                    help="截取帧数（相对 frame_start；0 = 全量）——快速迭代测量用，"
+                         "提交前跑全量")
     ap.add_argument("--json", type=str, default="", help="save record to JSON (default outputs/bench_<video>.json)")
     args = ap.parse_args()
 
@@ -215,7 +225,7 @@ def main() -> None:
 
     record: dict = {"video": args.video, "backend": args.backend,
                     "decode_backend": args.decode_backend,
-                    "buffer": args.buffer,
+                    "buffer": args.buffer, "frames_cap": args.frames or None,
                     "runs": []}
     for run_i in range(args.runs):
         out_csv = str(OUT_DIR / f"bench_{args.video}_r{run_i + 1}.csv")
@@ -223,7 +233,7 @@ def main() -> None:
         print(f"  Running {label}...", end=" ", flush=True)
         t = run(video, truth, args.backend, out_csv,
                 decode_backend=args.decode_backend, buffer_size=args.buffer,
-                no_monitor=args.no_monitor)
+                no_monitor=args.no_monitor, frames=args.frames or None)
         acc = accuracy(out_csv, truth) if "frames" in t else None
         if run_i == args.runs - 1:  # warm run -> report + record
             print_row(label, t, acc)
