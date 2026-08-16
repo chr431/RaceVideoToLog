@@ -2,9 +2,12 @@
 
 锁定"根本性解决抢核"的预算规则：OCR 吃满全部物理核，解码走 NVDEC
 卸载或 fork 默认线程（不抢核）；RVTOL_OCR_THREADS env 钩子优先。
+v2.15.2 新增少核 CPU 软解分核：物理核 ≤8 且 CPU 解码时 OCR 与 FFmpeg
+各分 cores//2（实测 4 核 -15%、8 核 -14%）；核数多/GPU 解码保持全核。
 """
 from __future__ import annotations
 
+import config
 from segment_flow import SegmentPipeline
 from ocr_native import auto_ocr_thread_count, cpu_physical_cores
 
@@ -41,3 +44,19 @@ def test_auto_budget_without_env(monkeypatch):
     assert p._ocr_num_threads() == cpu_physical_cores()
     p._backend = "decord/CPU"
     assert p._ocr_num_threads() == cpu_physical_cores()
+
+
+def test_split_cores_on_low_core_cpu_decode(monkeypatch):
+    """少核 + CPU 软解：OCR 与解码显式分核（cores//2）。"""
+    monkeypatch.delenv("RVTOL_OCR_THREADS", raising=False)
+    p = _pipe()
+    p._backend = "decord/CPU"
+    if cpu_physical_cores() <= config.CPU_CORES_SPLIT_THRESHOLD:
+        assert p._ocr_num_threads() == max(2, cpu_physical_cores() // 2)
+        assert p._decode_num_threads() == max(2, cpu_physical_cores() // 2)
+    else:  # 本机核数多：保持全核，解码用 decord 默认（None）
+        assert p._ocr_num_threads() == cpu_physical_cores()
+        assert p._decode_num_threads() is None
+    p._backend = "decord/GPU"
+    assert p._ocr_num_threads() == cpu_physical_cores()
+    assert p._decode_num_threads() is None

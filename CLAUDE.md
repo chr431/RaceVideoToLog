@@ -145,6 +145,39 @@ HEVC/AV1 CPU 明显更慢，hybrid10 在 HEVC 还拖慢 0.7s。**维持 auto=GPU
 - pytest 118 passed；准确率漏斗 final=11（test 3 / test2 8 / 其余 0），
   与基线完全一致，无回归。
 
+## 性能实验轮次：2026-08-16（dev，v2.15.2，后端矩阵 × 核心数模拟）
+
+### 测量方法
+- tools/archive/_bench_matrix.py：bench_decoder.py（生产 headless 管线）
+  驱动；**少核模拟 = psutil cpu_affinity 限制前 N 逻辑核 + RVTOL_OCR_THREADS
+  =N**（子进程继承亲和性）。注意模拟伪影：cpu_physical_cores() 检测系统
+  物理核（16）不受 affinity 影响，全自动模式在模拟下不会触发分核——验证
+  分核逻辑须显式设线程 env 或跑真实少核机器。
+
+### 后端矩阵（test5 h264 / test6 AV1，本机 16 核）
+| 组合 | test5 | test6 |
+|---|---|---|
+| GPU+TRT（auto，生产默认） | 7.8s | 18.0s |
+| GPU+ONNX | 8.5s | 27.4s |
+| CPU+TRT | 6.9s | 75.5s（AV1 CPU 灾难） |
+| CPU+ONNX | 9.6s | 87.4s |
+**auto（GPU+TRT）在任何核心数（4/8/16 模拟）下都是最优或接近最优**——
+GPU 干活，与核心数无关 → auto 决策无需按核心数调整。
+
+### 少核分核（落地：CPU_CORES_SPLIT_THRESHOLD=8）
+- CPU 软解 + 物理核 ≤8：OCR 线程与 decord FFmpeg 线程（num_threads 参数，
+  不污染全局 env）各分 cores//2。实测（test5，affinity 模拟）：
+  - 4 核 CPU+ONNX：ocrT=2/dcd=2 → 28.0s vs 现状（ocrT=4/dcd=2）33.1s（-15%）
+  - 8 核 CPU+ONNX：ocrT=4/dcd=4 → 17.8s vs 20.7s（-14%）
+  - 16 核：分核反而差（12.0 vs 9.5s）→ 保持现状（OCR=全核、FFmpeg 默认
+    2 帧线程落 SMT 份额）；GPU(NVDEC) 解码不抢 CPU → 保持现状
+  - GPU+ONNX 少核：ocrT=全核最优（4 核 ocrT=4 → 19.8s）→ 不分
+  - 4 核 CPU+TRT：dcd=4 → 13.2s（TRT 不吃 CPU，解码可分更多核），但收益
+    在波动内且 TRT 少核机器罕见 → 统一 cores//2 分核
+- 线程数变化可能改变 ONNX 浮点归约顺序 → OCR 读数 ±1 变化（本机 16 核
+  规则不触发 → 漏斗 0 无回归已确认；少核用户读数可能与本机不同，属既有
+  RVTOL_OCR_THREADS 同类差异）
+
 ## 已锁定的参数（勿随意改动）
 
 - OCR 预处理：resize 48 高 + **灰度 gamma 2.0**（config.OCR_GAMMA，正式预处理；

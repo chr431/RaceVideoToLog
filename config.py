@@ -262,6 +262,17 @@ TRT_PROFILE_MAX_W: int = 2048
 TRT_WORKSPACE_BYTES: int = 1 << 30
 # TRT 引擎缓存文件名的 SM 后缀（引擎与 GPU 架构绑定）
 TRT_ENGINE_SM: str = "sm89"
+# ═══════════════════ 少核 CPU 解码线程分核预算（v2.15.2 实验） ═══════════════════
+# CPU 软解 + 物理核 ≤ CPU_CORES_SPLIT_THRESHOLD 时，OCR 线程与 decord
+# FFmpeg 线程各分 cores//2（显式分核），避免 FFmpeg 2 帧线程（fork 默认，
+# 只用 2 核）+ OCR 全核的过订阅。实测（test5，affinity 模拟，venv）：
+#   4 核 CPU+ONNX：ocrT=2/dcd=2 → 28.0s vs 现状 33.1s（-15%）
+#   8 核 CPU+ONNX：ocrT=4/dcd=4 → 17.8s vs 现状 20.7s（-14%）
+#   16 核：分核反而更差（12.0 vs 9.5s）→ 保持现状（OCR=全核，FFmpeg
+#   默认 2 帧线程落在 SMT 份额上）；GPU(NVDEC) 解码不抢 CPU → 保持现状。
+# 4 核 CPU+TRT 时解码可分更多核（dcd=4 → 13.2s），但 TRT 组合少核机器
+# 罕见且收益在测量波动内，统一用 cores//2 分核。
+CPU_CORES_SPLIT_THRESHOLD: int = 8
 # GUI 段 review 的加速度容差倍率（允许输入值超出物理约束的倍数）
 REVIEW_ACCEL_TOLERANCE: float = 3.0
 # GUI 参数范围（gui_settings 使用；默认值仍取 DEFAULT_* 常量）

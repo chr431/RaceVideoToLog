@@ -234,7 +234,8 @@ class SegmentPipeline:
                 if backend == "nvdec":
                     logger.warning("NVDEC 解码不可用，回退 CPU")
         if vr is None:
-            vr = self._open_decord_reader(_cpu(0), roi_kw)
+            vr = self._open_decord_reader(_cpu(0), roi_kw,
+                                          num_threads=self._decode_num_threads())
             label = "CPU"
         self._backend = f"decord/{label}"
         self._remember_color_range(vr)
@@ -287,17 +288,36 @@ class SegmentPipeline:
             return "yuv420"
         return "gray" if self._gray_output else "rgb"
 
-    def _open_decord_reader(self, ctx, roi_kw: dict):
+    def _decode_num_threads(self) -> int | None:
+        """CPU 软解的 decord FFmpeg 帧线程数（少核分核）。
+
+        物理核 ≤ CPU_CORES_SPLIT_THRESHOLD（8）时返回 cores//2：FFmpeg
+        fork 默认 2 帧线程只用 2 核，少核下解码成瓶颈，且 OCR 全核会与
+        解码过订阅；实测（test5，affinity 模拟）4 核 28.0 vs 33.1s、
+        8 核 17.8 vs 20.7s。核数多时（16）分核反而更差（12.0 vs 9.5s）
+        → 返回 None（decord 默认，FFmpeg 帧线程落在 SMT 份额上）。
+        GPU(NVDEC) 不调用本方法。
+        """
+        from ocr_native import auto_ocr_thread_count
+        cores = auto_ocr_thread_count()
+        if cores <= config.CPU_CORES_SPLIT_THRESHOLD:
+            return max(2, cores // 2)
+        return None
+
+    def _open_decord_reader(self, ctx, roi_kw: dict, num_threads=None):
         """按当前输出格式打开 decord reader。
 
         yuv420 仅在 fork ≥0.7.10 可用：旧 DLL 会抛 ValueError，此时
         回退 gray（分段/OCR 不变，仅代表帧预览退化灰度）并重置标志。
+        num_threads：CPU 软解的 FFmpeg 帧线程数（少核分核，None=decord
+        默认；GPU/NVDEC 不传）。
         """
         from decord import VideoReader
         fmt = self._decord_format()
+        nt_kw = {"num_threads": num_threads} if num_threads else {}
         try:
             return VideoReader(str(self._video_path), ctx=ctx,
-                               output_format=fmt, **roi_kw)
+                               output_format=fmt, **nt_kw, **roi_kw)
         except ValueError:
             if not self._yuv_output:
                 raise
@@ -306,7 +326,7 @@ class SegmentPipeline:
             self._yuv_output = False
             self._color_range = 0
             return VideoReader(str(self._video_path), ctx=ctx,
-                               output_format="gray", **roi_kw)
+                               output_format="gray", **nt_kw, **roi_kw)
 
     def _remember_color_range(self, vr) -> None:
         """YUV 模式下从 decoder 读取流 color_range（0=limited/tv）。"""
@@ -368,7 +388,8 @@ class SegmentPipeline:
         except Exception:
             logger.warning("NVDEC 解码不可用，CPU+NVDEC 回退纯 CPU")
             self._backend = "decord/CPU"
-            vr = self._open_decord_reader(_cpu(0), roi_kw)
+            vr = self._open_decord_reader(
+                _cpu(0), roi_kw, num_threads=self._decode_num_threads())
             self._remember_color_range(vr)
             return vr, None
         try:
@@ -380,7 +401,8 @@ class SegmentPipeline:
                            "CPU+NVDEC 按纯 GPU 解码（不打开 CPU reader）")
             self._backend = "decord/GPU"
             return vr_gpu, vr_gpu
-        vr = self._open_decord_reader(_cpu(0), roi_kw)
+        vr = self._open_decord_reader(_cpu(0), roi_kw,
+                                      num_threads=self._decode_num_threads())
         self._remember_color_range(vr)
         return vr, vr_gpu
 
@@ -390,17 +412,24 @@ class SegmentPipeline:
             else "tensorrt"
 
     def _ocr_num_threads(self) -> int:
-        """OCR 推理线程预算：RVTOL_OCR_THREADS env 钩子优先，否则全物理核。
+        """OCR 推理线程预算：RVTOL_OCR_THREADS env 钩子优先，否则全物理核；
+        CPU 软解且物理核 ≤ 8 时与解码显式分核（cores//2，防过订阅）。
 
         解码（NVDEC 全卸载 / CPU 下 FFmpeg 帧线程 2 + filter auto 只占
-        SMT 份额）不抢物理核，OCR 吃满全部物理核；CPU/GPU 解码后端统一。
-        显式参数传入引擎，不污染全局 env。
+        SMT 份额）不抢物理核，OCR 吃满全部物理核；CPU 软解在少核机上
+        FFmpeg 帧线程与 OCR 争抢（实测 4 核 ocrT=2 28.0s vs 全核 33.1s、
+        8 核 ocrT=4 17.8s vs 20.7s），分核更优；核数多时（16）分核反而
+        差 → 保持全核。显式参数传入引擎，不污染全局 env。
         """
         from ocr_native import auto_ocr_thread_count
         _env = _os.environ.get("RVTOL_OCR_THREADS")
         if _env:
             return max(1, int(_env))
-        return auto_ocr_thread_count()
+        cores = auto_ocr_thread_count()
+        if getattr(self, "_backend", "").startswith("decord/CPU") \
+                and cores <= config.CPU_CORES_SPLIT_THRESHOLD:
+            return max(2, cores // 2)
+        return cores
 
     # ── 阶段 1：解码 + 特征（diff/清晰度）──
     def _decode_all(self):
