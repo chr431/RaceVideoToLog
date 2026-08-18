@@ -261,6 +261,17 @@ GPU 干活，与核心数无关 → auto 决策无需按核心数调整。
   1.29 无单独批次/宽度收益。脚本 tools/archive/_ort129_probe.py +
   _ort129_e2e.py（3000 帧端到端 A/B 复用 run_bench）。
 
+### 单跑校准基线（tools/bench_baseline.py，2026-08 起标准入口）
+- **背景**：并行跑多个 profile/bench 会互抢 CPU/GPU 制造 ±2s 级假象
+  （auto 曾测得 5.4s，单跑实为 2.8s）。所有 A/B 必须单跑、串行。
+- 用法：
+  - `python tools/bench_baseline.py --quick`   # 改动前快检（test5 CPU+CPU，~2 分钟）
+  - `python tools/bench_baseline.py`           # 完整基线（test5/test6 × auto + CPU+CPU）
+  - `python tools/bench_baseline.py --check`   # 对比存档：timing 漂移 + 读数指纹差异
+  - `python tools/bench_baseline.py --full`    # 全量帧（提交前门禁）
+- 输出 `outputs/baseline_latest.json`：timing + speed 列 sha256 指纹（改动后
+  指纹不同 = 读数变了，可能改变漏斗结果，需跑全量漏斗确认）。
+
 ### 流程额外损耗审计（2026-08，3000 帧单跑校准后：流水线损耗已最小化）
 - **测量方法论坑（重要）**：此前多轮 profile 数字（如 auto 5.4s vs CPU 4.7s）
   是**两个 profile job 并行运行互抢 CPU/GPU 造成的人为差异**。单跑校准后

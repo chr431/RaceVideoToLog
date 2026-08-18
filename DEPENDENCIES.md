@@ -53,6 +53,42 @@
 pip list --outdated
 ```
 
+### 依赖维护状态（2026-08 检查，全部活跃，无停止支持项）
+
+| 包 | 安装版 | PyPI 最新 | 上游活跃度 | 备注 |
+|---|---|---|---|---|
+| onnxruntime | 1.29.0 | 1.29.0 | ✅ 活跃 | 1.29.0 升级实测见 CLAUDE.md 2026-08-18 节 |
+| numpy | 2.5.1 | 2.5.2 | ✅ 活跃 | 差补丁版，无风险 |
+| PySide6-Essentials | 6.11.1 | 6.11.2 | ✅ Qt 官方 | 差补丁版 |
+| PySide6-Fluent-Widgets | 1.11.3 | 1.11.3 | ✅ 活跃（最后 push 2026-08-01） | qfluentwidgets.com；PyPI 版本与仓库同步 |
+| pyqtgraph | 0.14.0 | 0.14.0 | ✅ 活跃（最后 push 2026-08-17） | |
+| psutil | 7.2.2 | 7.2.2 | ✅ 活跃（最后 push 2026-08-17） | |
+| cuda-python | 13.3.1 | 13.3.1 | ✅ NVIDIA 官方 | |
+| tensorrt_cu13_bindings | 11.2.1.2 | 11.2.1.2 | ✅ NVIDIA 官方 | |
+| pyinstaller | 6.21.0 | 6.22.2 | ✅ 活跃 | 打包工具，升级低优先 |
+| pytest | 9.1.1 | 9.1.1 | ✅ 活跃 | dev 依赖 |
+| decord（fork） | 0.7.10 (python 层) | fork v0.7.11 | ⚠️ 上游 dmlc 停更（最后 push 2024-07） | **自建 fork chr431/decord 承担维护**；venv 需从 v0.7.11 release 完整对齐（见下） |
+
+**停止支持风险点（已化解/已知）**：
+- **decord 上游 dmlc/decord 已停更 1 年+**（PyPI 0.6.0 仍 2021 行为）——本项目依赖自建 fork
+  chr431/decord（v0.7.11，含 AV1 帧并行修复 / ROI-first / GPU gray / YUV420），
+  fork 由本仓库维护，CI decoder-smoke 从 fork release 下载。**勿回退 PyPI 版**。
+- **Python 3.13.2** 运行（requires-python >=3.11 满足；3.13 安全支持至 2029-10）。
+- `pip check` 唯一红项 = PySide6-Fluent-Widgets 传递依赖 PySide6-Addons 未装——
+  **有意省略**（省 ~300MB，项目只用 Essentials），非停止支持问题。
+
+**venv 残留孤儿包（无 Required-by，历史实验遗留，可卸载省 ~710MB）**：
+torch(490MB) / wandb(74MB) / polars / sentry-sdk / lightning-utilities / onnx /
+shapely / pyclipper / omegaconf / ml_dtypes / hf-xet 等——源码不 import，
+`pip uninstall` 可安全清理（torch 连带 networkx/sympy/mpmath/Jinja2/ninja）。
+
+**decord 对齐注意**：site-packages 的 decord.dll（2016-08-17，0.30MB）与
+`_decord_build\decord.dll`（0.40MB）为不同构建但 **AV1 帧并行功能一致**
+（dcd=12 均 640+fps，语义等价）；venv python 层版本串仍报 0.7.10（release 已
+0.7.11），重跑 setup_venv.bat 会以 _decord_build 覆盖 site-packages（该 DLL
+同样含 AV1 修复，738fps 实测），无回归风险。建议下次按 v0.7.11 release zip
+整体对齐 python 层+DLL。
+
 ### 测试新版本
 
 1. 创建分支：`git checkout -b test-upgrade-<pkg>`
