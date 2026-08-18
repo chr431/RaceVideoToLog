@@ -1,18 +1,19 @@
 # 上游依赖跟踪（v2.15.2）
 
-## 核心依赖
+## 核心依赖（2026-08-18 已全部更新到 PyPI 最新 + 清理孤儿包）
 
-| 包 | 最低版本 | 来源 | 备注 |
+| 包 | 当前版本 | 来源 | 备注 |
 | --- | --- | --- | --- |
-| onnxruntime | ≥1.28 | PyPI | CPU 推理后端（OcrEngine 直连）；1.28 含 protobuf CVE 修复；**1.29.0（2026-08-12 PyPI 发布）实测升级安全、性能持平**：3000 帧端到端 test5 h264 -2%（4.20→4.10s）、test6 AV1 +1%（波动内）；逐帧读数与 1.28 完全一致（0 差异）；新增参数（ORT_INTRA/INTER_OP_NUM_THREADS env、parallel 执行、spin off）全部无收益，保持现状不落地 |
-| numpy | 2.0 | PyPI | 预处理/信号计算（纯 numpy，无 scipy） |
-| PySide6-Essentials | 6.11 | PyPI | Qt 6 GUI（只装核心，省 Addons ~300MB） |
-| PySide6-Fluent-Widgets | 1.11 | PyPI | Fluent Design 组件库 |
-| pyqtgraph | 0.14 | PyPI | 分析/检查图表（替代 matplotlib） |
-| cuda-python | — | PyPI | CUDA Python 绑定（TRT 执行 + decord GPU DLL 注册） |
-| tensorrt_cu13_bindings | 11 | PyPI | TensorRT Python 绑定（~1MB） |
-| psutil | 6 | PyPI | 资源监测 RSS / CPU%（可选：缺失时降级为 None，GPU 采样不受影响） |
-| decord | 0.7.10 | 自建仓库 chr431/decord | NVDEC 硬解 + CPU 软件解码；FFmpeg 8.x DLL。**PyPI 版不支持 next_roi / CPU ROI 优化 / YUV420 输出**，见 setup_venv.bat |
+| onnxruntime | 1.29.0 | PyPI | CPU 推理后端（OcrEngine 直连）；1.28 含 protobuf CVE 修复；**1.29.0（2026-08-12 PyPI 发布）实测升级安全、性能持平**：3000 帧端到端 test5 h264 -2%（4.20→4.10s）、test6 AV1 +1%（波动内）；逐帧读数与 1.28 完全一致（0 差异）；新增参数（ORT_INTRA/INTER_OP_NUM_THREADS env、parallel 执行、spin off）全部无收益，保持现状不落地 |
+| numpy | 2.5.2 | PyPI | 预处理/信号计算（纯 numpy，无 scipy）；2.5.1→2.5.2 升级后基线读数指纹逐位一致 |
+| PySide6-Essentials | 6.11.2 | PyPI | Qt 6 GUI（只装核心，省 Addons ~300MB） |
+| PySide6-Fluent-Widgets | 1.11.3 | PyPI | Fluent Design 组件库（活跃维护，最后 push 2026-08-01） |
+| pyqtgraph | 0.14.0 | PyPI | 分析/检查图表（替代 matplotlib） |
+| cuda-python | 13.3.1 | PyPI | CUDA Python 绑定（TRT 执行 + decord GPU DLL 注册） |
+| tensorrt_cu13_bindings | 11.2.1.2 | PyPI | TensorRT Python 绑定（~1MB） |
+| psutil | 7.2.2 | PyPI | 资源监测 RSS / CPU%（可选：缺失时降级为 None，GPU 采样不受影响） |
+| decord | **0.7.11** | 自建仓库 chr431/decord | NVDEC 硬解 + CPU 软件解码；FFmpeg 8.x DLL。**2026-08-18 统一为 GitHub release v0.7.11 构建**（site-packages 与 _decord_build 同 sha `89D82E5B`，python 层 libinfo 0.7.11）。**PyPI 版不支持 next_roi / CPU ROI 优化 / YUV420 输出**，见 setup_venv.bat |
+| pyinstaller | 6.22.2 | PyPI | 打包工具（6.21→6.22.2） |
 
 ## GPU 加速（运行时，不打包）
 
@@ -65,9 +66,9 @@ pip list --outdated
 | psutil | 7.2.2 | 7.2.2 | ✅ 活跃（最后 push 2026-08-17） | |
 | cuda-python | 13.3.1 | 13.3.1 | ✅ NVIDIA 官方 | |
 | tensorrt_cu13_bindings | 11.2.1.2 | 11.2.1.2 | ✅ NVIDIA 官方 | |
-| pyinstaller | 6.21.0 | 6.22.2 | ✅ 活跃 | 打包工具，升级低优先 |
+| pyinstaller | 6.22.2 | 6.22.2 | ✅ 活跃 | 已随本轮更新（6.21→6.22.2） |
 | pytest | 9.1.1 | 9.1.1 | ✅ 活跃 | dev 依赖 |
-| decord（fork） | 0.7.10 (python 层) | fork v0.7.11 | ⚠️ 上游 dmlc 停更（最后 push 2024-07） | **自建 fork chr431/decord 承担维护**；venv 需从 v0.7.11 release 完整对齐（见下） |
+| decord（fork） | **0.7.11** | fork v0.7.11 | ⚠️ 上游 dmlc 停更（最后 push 2024-07） | **自建 fork chr431/decord 承担维护**；**2026-08-18 已统一为 v0.7.11 release 构建**（_decord_build + site-packages 同 sha `89D82E5B`，python 层 libinfo 0.7.11，AV1 探针 dcd=12 655fps） |
 
 **停止支持风险点（已化解/已知）**：
 - **decord 上游 dmlc/decord 已停更 1 年+**（PyPI 0.6.0 仍 2021 行为）——本项目依赖自建 fork
@@ -77,17 +78,14 @@ pip list --outdated
 - `pip check` 唯一红项 = PySide6-Fluent-Widgets 传递依赖 PySide6-Addons 未装——
   **有意省略**（省 ~300MB，项目只用 Essentials），非停止支持问题。
 
-**venv 残留孤儿包（无 Required-by，历史实验遗留，可卸载省 ~710MB）**：
-torch(490MB) / wandb(74MB) / polars / sentry-sdk / lightning-utilities / onnx /
-shapely / pyclipper / omegaconf / ml_dtypes / hf-xet 等——源码不 import，
-`pip uninstall` 可安全清理（torch 连带 networkx/sympy/mpmath/Jinja2/ninja）。
-
-**decord 对齐注意**：site-packages 的 decord.dll（2016-08-17，0.30MB）与
-`_decord_build\decord.dll`（0.40MB）为不同构建但 **AV1 帧并行功能一致**
-（dcd=12 均 640+fps，语义等价）；venv python 层版本串仍报 0.7.10（release 已
-0.7.11），重跑 setup_venv.bat 会以 _decord_build 覆盖 site-packages（该 DLL
-同样含 AV1 修复，738fps 实测），无回归风险。建议下次按 v0.7.11 release zip
-整体对齐 python 层+DLL。
+**孤儿包清理（2026-08-18 已完成，省 ~710MB）**：torch(490MB) / wandb(74MB) /
+polars / sentry-sdk / lightning-utilities / onnx / shapely / pyclipper /
+omegaconf / hf-xet / ninja / lief / networkx / fsspec / PyYAML / regex /
+tqdm / anyio 链（httpcore/h11/yarl/propcache/multidict/frozenlist/aiosignal/
+aiohappyeyeballs）等——全部无 Required-by、源码不 import，`pip uninstall -y`
+已清除。复查脚本 tools/archive/_orphan_check.py（跨包逆向依赖计算）。
+**注意**：升级 numpy/onnxruntime 后 `ml_dtypes`（onnxruntime 声明的可选依赖）
+与 `sympy`（onnxruntime/fonttools 声明）保留未动，避免 pip check 新红。
 
 ### 测试新版本
 
