@@ -4,7 +4,7 @@
 
 | 包 | 最低版本 | 来源 | 备注 |
 | --- | --- | --- | --- |
-| onnxruntime | ≥1.28 | PyPI | CPU 推理后端（OcrEngine 直连）；1.28 含 protobuf CVE 修复；**1.29.0 实测 CPU 推理 -13%**（GitHub 已发布，PyPI 同步后自动获益） |
+| onnxruntime | ≥1.28 | PyPI | CPU 推理后端（OcrEngine 直连）；1.28 含 protobuf CVE 修复；**1.29.0（2026-08-12 PyPI 发布）实测升级安全、性能持平**：3000 帧端到端 test5 h264 -2%（4.20→4.10s）、test6 AV1 +1%（波动内）；逐帧读数与 1.28 完全一致（0 差异）；新增参数（ORT_INTRA/INTER_OP_NUM_THREADS env、parallel 执行、spin off）全部无收益，保持现状不落地 |
 | numpy | 2.0 | PyPI | 预处理/信号计算（纯 numpy，无 scipy） |
 | PySide6-Essentials | 6.11 | PyPI | Qt 6 GUI（只装核心，省 Addons ~300MB） |
 | PySide6-Fluent-Widgets | 1.11 | PyPI | Fluent Design 组件库 |

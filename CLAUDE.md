@@ -240,6 +240,27 @@ GPU 干活，与核心数无关 → auto 决策无需按核心数调整。
   **提交前才跑全量**（CLAUDE.md 门禁用例）。_bench_matrix.run_bench
   已透传 frames 参数。
 
+### onnxruntime 1.29.0 升级（PyPI 2026-08-12 发布，实测后保持）
+- **结论：升级安全、性能持平，不引入新参数**。此前 DEPENDENCIES.md 记的
+  "GitHub release -13% CPU 推理" 无法在 PyPI 版复现（可能为当时形状/噪声），
+  已修正记录。
+- 端到端 3000 帧 A/B（runs=3，dec=cpu）：
+  | 组合 | 1.28.0 | 1.29.0 | Δ |
+  |---|---|---|---|
+  | test5 dec=auto ocr=cpu | 4.20s | 4.10s | -2.4% |
+  | test5 dec=cpu ocr=cpu | 4.30s | 4.20s | -2.3% |
+  | test6 dec=auto ocr=cpu | 8.00s | 8.10s | +1.2%（波动） |
+- 纯吞吐（100 段批，30 轮）：单16 346→339~354、双8+8 401→388（±3% 波动）。
+- 读数一致性：3000 帧逐帧速度对比 **0 差异帧**（1.29 浮点归约未改读数）→
+  升级无准确率回归风险（提交前仍按门禁跑全量漏斗）。
+- 新增参数全无收益（_ort129_probe.py 扫描）：ORT_INTRA/INTER_OP_NUM_THREADS
+  env 默认（=显式设置，无差）、inter_op 8/16、ORT_PARALLEL 并行节点执行
+  （-1~4%）、spin off（-13% 吞吐，与解码共存时反而让出 CPU 太少/太多）——
+  现状（intra=预算、inter=2、默认自旋）维持。
+- 小 batch/窄宽扫描（w=48/96/224/320 × n=1/16/64）：宽度是吞吐主变量，
+  1.29 无单独批次/宽度收益。脚本 tools/archive/_ort129_probe.py +
+  _ort129_e2e.py（3000 帧端到端 A/B 复用 run_bench）。
+
 ## 已锁定的参数（勿随意改动）
 
 - OCR 预处理：resize 48 高 + **灰度 gamma 2.0**（config.OCR_GAMMA，正式预处理；
