@@ -261,6 +261,27 @@ GPU 干活，与核心数无关 → auto 决策无需按核心数调整。
   1.29 无单独批次/宽度收益。脚本 tools/archive/_ort129_probe.py +
   _ort129_e2e.py（3000 帧端到端 A/B 复用 run_bench）。
 
+### 流程额外损耗审计（2026-08，3000 帧单跑校准后：流水线损耗已最小化）
+- **测量方法论坑（重要）**：此前多轮 profile 数字（如 auto 5.4s vs CPU 4.7s）
+  是**两个 profile job 并行运行互抢 CPU/GPU 造成的人为差异**。单跑校准后
+  auto(GPU+TRT) 3000 帧实为 **2.8s**、CPU+ONNX 3.7s —— 并行实验结论需单跑
+  复测，勿直接采信并行 profile。
+- 三级流水线实验（OCR 专职 preprocess 线程 ×2，主循环只投快照）：严格单跑
+  A/B 无净收益（auto 2.9 vs 2.8s、CPU 3.6 vs 3.7s，波动内）→ 回滚，保持
+  两段式（主循环 flush 内 preprocess 与 infer 线程并行）已是最优近似。
+  实验中修复的哨兵竞态（并行 worker 转发 None 会让 infer 提前退出丢批，
+  KeyError: 1008）：仅在三段式场景出现，回滚后无关，记录防复犯。
+- OCR 批大小扫描（3000 帧 e2e，CPU+ONNX 双实例）：B=16 3.6s < B=32 3.7s <
+  B=64 3.8s —— 维持 config.OCR_BATCH_SIZE=16（收益来源批固定成本摊薄，
+  但更大批的等待/内存成本抵消）。
+- 尾部串行段微基准（tools/archive/_tail_bench.py：store + build_rows +
+  write_csv，60k 帧合计仅 0.085s）—— **不是损耗**，无需优化。
+- 生产者特征计算（gray 0.15 + sharp 0.05 + bin 0.003 + seg 0.14 ≈ 0.35s/
+  3000 帧）与解码（decode_batch 1.89s/3000 帧）仍是主时间；numpy 大数组
+  释放 GIL 已与 OCR 并行，剩余是解码/推理后端上限。
+- 结论：后端平台期后，流程编排额外损耗已最小化（单跑口径下 total 仅比
+  max(decode, ocr) 多 ~0.2-0.4s：引擎加载 0.4s 并行隐藏 + 尾部 0.1s）。
+
 ## 已锁定的参数（勿随意改动）
 
 - OCR 预处理：resize 48 高 + **灰度 gamma 2.0**（config.OCR_GAMMA，正式预处理；
