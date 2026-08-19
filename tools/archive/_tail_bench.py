@@ -38,8 +38,8 @@ def bench(n_seg: int):
     p._backend = "decord/CPU"
     p._ocr_model = "v6_small"
     p._ocr_backend_used = "onnxruntime"
-    p._n_segments = n_seg
-    p._n_corr = 17
+    p.n_segments = n_seg
+    p.n_corrected = 17
     p._max_speed = 400.0
     p._max_accel = 40.0
     p._force_aspect = 1.5
@@ -47,7 +47,7 @@ def bench(n_seg: int):
     p._roi = (843, 993, 948, 1025)
     p.timing = {"decode": 1.0, "ocr": 1.0}
     p._dp_anchor_conf = 0.9
-    p._conf_vals = None
+    p.confidence_values = None
 
     frames, segs, seg_vals, corr, rep_frames, crops = synth(n_seg)
 

@@ -38,8 +38,8 @@ def main() -> None:
         pipe = SegmentPipeline(f"D:/Videos/racelog_test/{v}.mp4", roi, ms, ma,
                                fps, f_start, f_end, force_aspect=mw)
         pipe.run(str(PROJECT / "outputs" / f"_sw_{v}.csv"))
-        gv = pipe._ocr_vals
-        seg_times = [s[len(s) // 2] for s in pipe._segs]
+        gv = pipe.ocr_values
+        seg_times = [s[len(s) // 2] for s in pipe.segment_frames]
         conf = pipe._confidence(gv, seg_times)
         n_seg = 0
         targets = []

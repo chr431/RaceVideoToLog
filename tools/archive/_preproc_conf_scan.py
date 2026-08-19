@@ -63,10 +63,10 @@ def main() -> None:
                                fps, f_start, f_end, force_aspect=mw)
         pipe.run(str(PROJECT / "outputs" / f"_pcs_{v}.csv"))
         mis = []
-        for i, seg in enumerate(pipe._segs):
+        for i, seg in enumerate(pipe.segment_frames):
             rep = pipe.segments[i]["rep_frame"]
             t = truth.get(rep)
-            ov = pipe._ocr_vals[i]
+            ov = pipe.ocr_values[i]
             if t is None or ov is None:
                 continue
             if abs(ov - t) > TOL:

@@ -3,6 +3,24 @@
 从赛车视频 OCR 提取速度，输出时间-速度-距离 CSV。Python 3.11+，PySide6 GUI +
 CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
 
+## 架构要点
+
+### 模块边界与公共 API（v2.15.2 起，为拆分管线仓库铺路）
+- **SegmentPipeline 公共只读 API**（tools/tests/GUI 一律走这里，不读 `_` 私有）：
+  `frames` / `segment_frames` / `ocr_values` / `corrected_values` /
+  `confidence_values` / `n_segments` / `n_corrected`（均带 setter 供测试夹具）；
+  私有 `_xxx` 仍是内部存储，仅 segment_flow.py 内部使用（2026-08 收口后外部
+  零私有访问）。历史 tools 已批量迁移到公共名。
+- **config 拆分**：管线引擎域常量（解码/OCR/分段/纠错/DP/尖峰）迁到
+  `engine_config.py`（单一事实源，含完整注释）；`config.py` 保留 GUI/应用域
+  （颜色/窗口/图表/monitor/日志）并 `from engine_config import *` 聚合导出，
+  故 `import config; config.SEG_*` 全兼容。`tools/version.py` 双校验两处
+  `__version__` 一致性。
+- **第三步拆仓路径**：8 个管线模块（segment_flow/ocr_native/ocr_trt/
+  ocr_engine/segmentation/seg_correction/video_utils/hybrid_decode +
+  engine_config + constants）目前仍 `import config`（聚合层），拆仓时改
+  `import engine_config` 即可验证依赖方向反转；`config.py`（GUI 域）留应用。
+
 ## 回归门禁（改动后必跑）
 
 - **准确率漏斗是真正的测试门禁**：`tools/accuracy_breakdown.py` 跑

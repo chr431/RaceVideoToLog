@@ -37,8 +37,8 @@ def main() -> None:
         pipe = SegmentPipeline(f"D:/Videos/racelog_test/{v}.mp4", roi, ms, ma,
                                fps, f_start, f_end, force_aspect=mw)
         pipe.run(str(PROJECT / "outputs" / f"_prep_{v}.csv"))
-        sv = pipe._ocr_vals
-        for i, seg in enumerate(pipe._segs):
+        sv = pipe.ocr_values
+        for i, seg in enumerate(pipe.segment_frames):
             rep = pipe.segments[i]["rep_frame"]
             t = truth.get(rep)
             if t is None or sv[i] is None:

@@ -21,7 +21,7 @@ TOL = 1.0
 
 def _components(pipe):
     """重算每段 med_score / jerk_score / 分支（与 _confidence 同逻辑）。"""
-    sv = pipe._ocr_vals
+    sv = pipe.ocr_values
     st = np.asarray([s["rep_frame"] for s in pipe.segments], dtype=np.float64)
     n = len(sv)
     med_k = pipe._med_k
@@ -64,9 +64,9 @@ def main() -> None:
         pipe = SegmentPipeline(f"D:/Videos/racelog_test/{v}.mp4", roi, ms, ma,
                                fps, f_start, f_end, force_aspect=mw)
         pipe.run(str(PROJECT / "outputs" / f"_probe_{v}.csv"))
-        sv = pipe._ocr_vals
-        cv = pipe._corr_vals
-        conf = pipe._conf_vals
+        sv = pipe.ocr_values
+        cv = pipe.corrected_values
+        conf = pipe.confidence_values
         times = [s["rep_frame"] for s in pipe.segments]
         comps = _components(pipe)
         # 旧最终错误

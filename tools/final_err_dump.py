@@ -24,9 +24,9 @@ def dump(v: str, TOL: float = 1.0) -> None:
     pipe = SegmentPipeline(f"D:/Videos/racelog_test/{v}.mp4", roi, ms, ma,
                            fps, f_start, f_end, force_aspect=mw)
     pipe.run(str(PROJECT / "outputs" / f"_dump_{v}.csv"))
-    sv = pipe._ocr_vals
-    cv = pipe._corr_vals
-    conf = pipe._conf_vals
+    sv = pipe.ocr_values
+    cv = pipe.corrected_values
+    conf = pipe.confidence_values
     segs = pipe.segments
     print(f"\n════════ {v}: 段数 {len(segs)} ════════")
     n = 0

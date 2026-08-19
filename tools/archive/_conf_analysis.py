@@ -110,8 +110,8 @@ def main() -> None:
         pipe = SegmentPipeline(f"D:/Videos/racelog_test/{v}.mp4", roi, ms, ma,
                                fps, f_start, f_end, force_aspect=mw)
         pipe.run(str(PROJECT / "outputs" / f"_cf_{v}.csv"))
-        gv = pipe._ocr_vals
-        seg_times = [s[len(s) // 2] for s in pipe._segs]
+        gv = pipe.ocr_values
+        seg_times = [s[len(s) // 2] for s in pipe.segment_frames]
         conf, branch = conf_with_branch(pipe, gv, seg_times)
 
         cls = []  # True=misread, False=correct

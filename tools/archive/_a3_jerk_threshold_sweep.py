@@ -30,9 +30,9 @@ def main() -> None:
         pipe = SegmentPipeline(f"D:/Videos/racelog_test/{v}.mp4", roi, ms, ma,
                                fps, f_start, f_end, force_aspect=mw)
         pipe.run(str(PROJECT / "outputs" / f"_a3_{v}.csv"))
-        sv = pipe._ocr_vals
-        cv = pipe._corr_vals
-        conf = pipe._conf_vals
+        sv = pipe.ocr_values
+        cv = pipe.corrected_values
+        conf = pipe.confidence_values
         times = [s["rep_frame"] for s in pipe.segments]
         comps = _components(pipe)
         old_final = sum(1 for i, s in enumerate(pipe.segments)

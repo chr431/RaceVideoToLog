@@ -137,8 +137,8 @@ def test_write_csv_header_parsable(tmp_path):
     p._fps = 30.0
     p._backend = "decord/GPU"
     p._ocr_backend_used = "tensorrt"
-    p._n_segments = 5
-    p._n_corr = 1
+    p.n_segments = 5
+    p.n_corrected = 1
     p.timing = {"decode": 1.0, "total": 2.0}
     out = tmp_path / "t.csv"
     p._write_csv([[0, 0.0, 100, 0], [1, 0.0, 100, 0]], out)

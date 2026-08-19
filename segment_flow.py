@@ -180,6 +180,7 @@ class SegmentPipeline:
         self._segs: list = []
         self._frames: list = []
         self._ocr_vals: list = []
+        self._corr_vals: list = []
         self._conf_vals: list = []        # 每段置信度（run 后填充，flag 判定用）
         self._pinned: set = set()          # 用户手动修正的段索引（finalize 时设）
         # 细粒度性能剖面（实验专用，RVTOL_PROFILE=1 才启用；默认零开销）
@@ -190,6 +191,71 @@ class SegmentPipeline:
         if self._profile_enabled:
             import threading as _threading
             self._prof_lock = _threading.Lock()
+
+    # ── 公共只读 API（run 后有效；tools/tests/GUI 一律走这里，
+    #    不直接读 _ 前缀私有状态）──────────────────────────────
+    @property
+    def frames(self) -> list:
+        """全部采样帧号（run 后有效）。"""
+        return self._frames
+
+    @frames.setter
+    def frames(self, v: list) -> None:
+        self._frames = v
+
+    @property
+    def segment_frames(self) -> list:
+        """每段的帧号序列（[[start..end], ...]）。"""
+        return self._segs
+
+    @segment_frames.setter
+    def segment_frames(self, v: list) -> None:
+        self._segs = v
+
+    @property
+    def ocr_values(self) -> list:
+        """每段 OCR 原始读数（None=该段未读出）。"""
+        return self._ocr_vals
+
+    @ocr_values.setter
+    def ocr_values(self, v: list) -> None:
+        self._ocr_vals = v
+
+    @property
+    def corrected_values(self) -> list:
+        """每段纠正后读数（DP/尖峰第二遍后；finalize 可重设）。"""
+        return self._corr_vals
+
+    @corrected_values.setter
+    def corrected_values(self, v: list) -> None:
+        self._corr_vals = v
+
+    @property
+    def confidence_values(self) -> list:
+        """每段置信度（_dense_correct 前）。"""
+        return self._conf_vals
+
+    @confidence_values.setter
+    def confidence_values(self, v: list) -> None:
+        self._conf_vals = v
+
+    @property
+    def n_segments(self) -> int:
+        """段总数（run 后有效；无段时 0）。"""
+        return getattr(self, "_n_segments", 0)
+
+    @n_segments.setter
+    def n_segments(self, v: int) -> None:
+        self._n_segments = v
+
+    @property
+    def n_corrected(self) -> int:
+        """纠正段数（DP + 第二遍尖峰）。"""
+        return getattr(self, "_n_corr", 0)
+
+    @n_corrected.setter
+    def n_corrected(self, v: int) -> None:
+        self._n_corr = v
 
     def _prof_end(self, group: str, key: str, t0: float) -> None:
         """累加一段耗时到 profile（线程安全；关闭时仅一次属性判断）。"""

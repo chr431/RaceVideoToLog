@@ -43,7 +43,7 @@ def main() -> None:
         pipe = SegmentPipeline(f"D:/Videos/racelog_test/{v}.mp4", roi, ms, ma,
                                fps, f_start, f_end, force_aspect=mw)
         pipe.run(str(PROJECT / "outputs" / f"_graw_{v}.csv"))
-        gv = pipe._ocr_vals                    # 正式 gray+gamma 2.0
+        gv = pipe.ocr_values                    # 正式 gray+gamma 2.0
         bv = run_on_reps(pipe, 0.0)            # 基线：纯 RGB
         assert len(gv) == len(bv) == len(pipe.segments)
         st = [0, 0, 0, 0, 0, 0]  # seg, b_err, g_err, improve, regress, both

@@ -37,11 +37,11 @@ def main() -> None:
         pipe = SegmentPipeline(f"D:/Videos/racelog_test/{v}.mp4", roi, ms, ma,
                                fps, f_start, f_end, force_aspect=mw)
         pipe.run(str(PROJECT / "outputs" / f"_diag_{v}.csv"))
-        gv = pipe._ocr_vals
-        cv = pipe._corr_vals
+        gv = pipe.ocr_values
+        cv = pipe.corrected_values
         bv = run_on_reps(pipe, 0.0)      # baseline raw 对照
-        seg_times = [s[len(s) // 2] for s in pipe._segs]
-        seg_lens = [len(s) for s in pipe._segs]
+        seg_times = [s[len(s) // 2] for s in pipe.segment_frames]
+        seg_lens = [len(s) for s in pipe.segment_frames]
         conf = pipe._confidence(gv, seg_times, seg_lens)
         is_anchor = [c >= config.SEG_DP_ANCHOR_CONF and x is not None
                      for c, x in zip(conf, gv)]

@@ -87,7 +87,7 @@ def main() -> None:
                 else:
                     err += 1
         tot = ok + err
-        print(f"{v}: {len(pipe.rows)}帧 → {pipe._n_segments}段 "
+        print(f"{v}: {len(pipe.rows)}帧 → {pipe.n_segments}段 "
               f"| 准确率 {ok}/{tot} ({ok/tot*100:.2f}%) err {err}")
         print(f"  timing: decode={pipe.timing.get('decode',0):.1f}s "
               f"ocr={pipe.timing.get('ocr',0):.1f}s total={wall:.1f}s "

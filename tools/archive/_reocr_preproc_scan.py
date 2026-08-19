@@ -148,10 +148,10 @@ def main() -> None:
         pipe.run(str(PROJECT / "outputs" / f"_rps_{v}.csv"))
         # 误读段（原始读数 |ocr-truth|>1）
         mis = []
-        for i, seg in enumerate(pipe._segs):
+        for i, seg in enumerate(pipe.segment_frames):
             rep = pipe.segments[i]["rep_frame"]
             t = truth.get(rep)
-            ov = pipe._ocr_vals[i]
+            ov = pipe.ocr_values[i]
             if t is None or ov is None:
                 continue
             if abs(ov - t) > TOL:

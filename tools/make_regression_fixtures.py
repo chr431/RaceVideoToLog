@@ -46,7 +46,7 @@ def export_error_frames(v: str, pipe: SegmentPipeline, truth: dict) -> list:
         t = truth.get(rep)
         if t is None:
             continue
-        cv = pipe._corr_vals[i]
+        cv = pipe.corrected_values[i]
         if cv is None or abs(cv - t) <= TOL:
             continue
         crop = pipe.crops.get(rep)
@@ -76,7 +76,7 @@ def export_error_frames(v: str, pipe: SegmentPipeline, truth: dict) -> list:
             "video": v,
             "seg_index": i,
             "rep_frame": rep,
-            "expected_raw": pipe._ocr_vals[i],
+            "expected_raw": pipe.ocr_values[i],
             "expected_corr": cv,
             "truth": int(t),
         })
@@ -116,8 +116,8 @@ def main() -> None:
                     "rep": s["rep_frame"],
                     "mid": s["frames"][len(s["frames"]) // 2],
                     "len": len(s["frames"]),
-                    "raw": pipe._ocr_vals[i],
-                    "corr": pipe._corr_vals[i],
+                    "raw": pipe.ocr_values[i],
+                    "corr": pipe.corrected_values[i],
                     "truth": _fmt_truth(truth.get(s["rep_frame"])),
                 }
                 for i, s in enumerate(pipe.segments)

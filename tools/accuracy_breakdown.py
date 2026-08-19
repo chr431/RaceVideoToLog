@@ -56,8 +56,8 @@ def run_funnel(videos, tol: float = 1.0, decode_backend: str = "auto") -> dict:
                                decode_backend=decode_backend,
                                yuv_output=True)
         pipe.run(str(PROJECT / "outputs" / f"_brk_{v}.csv"))
-        sv = pipe._ocr_vals
-        cv = pipe._corr_vals
+        sv = pipe.ocr_values
+        cv = pipe.corrected_values
         seg = {"seg": 0, "raw": 0, "fix": 0, "fix_wrong": 0, "missed": 0,
                "harm": 0, "final": 0}
         for i in range(len(sv)):

@@ -36,6 +36,7 @@ py-modules = [
     "config",
     "constants",
     "csv_io",
+    "engine_config",
     "export_controller",
     "gpu_setup",
     "gui",

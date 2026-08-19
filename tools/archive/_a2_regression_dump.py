@@ -21,8 +21,8 @@ roi, f_start, f_end, fps, ms, ma, mw, truth = load_meta(v)
 pipe = SegmentPipeline(f"D:/Videos/racelog_test/{v}.mp4", roi, ms, ma,
                        fps, f_start, f_end, force_aspect=mw)
 pipe.run(str(PROJECT / "outputs" / f"_a2_{v}.csv"))
-sv = pipe._ocr_vals
-conf = pipe._conf_vals
+sv = pipe.ocr_values
+conf = pipe.confidence_values
 times = [s["rep_frame"] for s in pipe.segments]
 comps = _components(pipe)
 conf2 = list(conf)
@@ -36,7 +36,7 @@ for i, s in enumerate(pipe.segments):
     t = truth.get(s["rep_frame"])
     if t is None:
         continue
-    old_ok = pipe._corr_vals[i] is not None and abs(pipe._corr_vals[i] - t) <= TOL
+    old_ok = pipe.corrected_values[i] is not None and abs(pipe.corrected_values[i] - t) <= TOL
     new_ok = corr2[i] is not None and abs(corr2[i] - t) <= TOL
     if old_ok and not new_ok:
         c = comps[i]
@@ -44,7 +44,7 @@ for i, s in enumerate(pipe.segments):
         hi = min(len(pipe.segments), i + 3)
         print(f"\n✗ 新增错误 #{i} rep={s['rep_frame']} len="
               f"{s['frames'][-1]-s['frames'][0]+1}"
-              f" raw={sv[i]} 旧corr={pipe._corr_vals[i]} 新corr={corr2[i]}"
+              f" raw={sv[i]} 旧corr={pipe.corrected_values[i]} 新corr={corr2[i]}"
               f" truth={int(t)} conf={conf[i]:.1f}→{conf2[i]:.1f}"
               f" 分支={c[0]} med_score={c[1]} jerk_score={c[2]}")
         for j in range(lo, hi):

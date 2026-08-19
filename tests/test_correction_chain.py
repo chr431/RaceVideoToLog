@@ -151,8 +151,8 @@ def test_csv_header_roundtrip(tmp_path):
     p = _pipe(frame_start=362, frame_end=7585)
     p._fps = 30.0
     p._backend = "decord/GPU"
-    p._n_segments = 5
-    p._n_corr = 1
+    p.n_segments = 5
+    p.n_corrected = 1
     p.timing = {"decode": 1.0, "correction": 0.1, "total": 2.0}
     out = tmp_path / "t.csv"
     p._write_csv([[0, 0.0, 100, 0]], out)

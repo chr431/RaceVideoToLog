@@ -115,7 +115,7 @@ def main() -> None:
         gv = run_on_reps(pipe, GAMMA)      # gamma：灰度+gamma
         assert len(gv) == len(bv) == len(pipe.segments)
         n = {"REGRESS": 0, "BOTH": 0, "IMPROVE": 0}
-        for i, seg in enumerate(pipe._segs):
+        for i, seg in enumerate(pipe.segment_frames):
             rep = pipe.segments[i]["rep_frame"]
             t = truth.get(rep)
             if t is None or gv[i] is None or bv[i] is None:
@@ -133,7 +133,7 @@ def main() -> None:
             n[cat] += 1
             rows.append((f"{v}#{rep}", gv[i], bv[i], int(t),
                          pipe.crops.get(rep), cat))
-        print(f"{v}: 段 {len(pipe._segs)} | gamma 错 {n['REGRESS'] + n['BOTH']}"
+        print(f"{v}: 段 {len(pipe.segment_frames)} | gamma 错 {n['REGRESS'] + n['BOTH']}"
               f" = 回归(基对) {n['REGRESS']} + 双错 {n['BOTH']} | "
               f"反转(基错) {n['IMPROVE']}")
 
