@@ -180,6 +180,8 @@ class SegmentPipeline:
         self._segs: list = []
         self._frames: list = []
         self._ocr_vals: list = []
+        self._ocr_texts: list = []       # 每段 OCR 原始文本（应用解析前的源）
+        self._ocr_confs: list = []       # 每段 OCR 置信度 0-1
         self._corr_vals: list = []
         self._conf_vals: list = []        # 每段置信度（run 后填充，flag 判定用）
         self._pinned: set = set()          # 用户手动修正的段索引（finalize 时设）
@@ -220,6 +222,24 @@ class SegmentPipeline:
     @ocr_values.setter
     def ocr_values(self, v: list) -> None:
         self._ocr_vals = v
+
+    @property
+    def ocr_texts(self) -> list:
+        """每段 OCR 原始文本（识别层原始输出；速度解析前的源，None=未读出）。"""
+        return self._ocr_texts
+
+    @ocr_texts.setter
+    def ocr_texts(self, v: list) -> None:
+        self._ocr_texts = v
+
+    @property
+    def ocr_confidences(self) -> list:
+        """每段 OCR 置信度（0-1，0.0=不可用）。"""
+        return self._ocr_confs
+
+    @ocr_confidences.setter
+    def ocr_confidences(self, v: list) -> None:
+        self._ocr_confs = v
 
     @property
     def corrected_values(self) -> list:
@@ -681,6 +701,8 @@ class SegmentPipeline:
         self._ocr_backend_used = eng.backend_name
         seg_vals = []
         rep_frames = []
+        texts = []
+        confs = []
         t0 = time.perf_counter()
         # 批量：每组 B 个代表帧一次 session.run（TRT 引擎 profile batch 上限
         # 由引擎元数据决定，内部自动分片；B 摊薄预处理/launch 开销）
@@ -700,11 +722,20 @@ class SegmentPipeline:
                 sv, _rt, _c = extract_speed_value(res)
                 seg_vals.append(int(sv) if sv is not None and sv >= 0 else None)
                 rep_frames.append(rep)
+                if hasattr(res, "txts"):
+                    texts.append(str(res.txts[0])
+                                 if res.txts and res.txts[0] else None)
+                    scores = getattr(res, "scores", [])
+                    confs.append(float(scores[0]) if scores else 0.0)
+                else:
+                    texts.append(None); confs.append(0.0)
             done = min(k + B, len(segs))
             self._progress(f"[OCR] 段: {done}/{len(segs)}",
                            73 + done / max(len(segs), 1) * 15)
         self.timing["ocr"] = time.perf_counter() - t0
         self._n_segments = len(segs)
+        self._ocr_texts = texts
+        self._ocr_confs = confs
         return seg_vals, rep_frames
 
     # ── 阶段 4：段级检测 + 纠正（薄封装，实现在 seg_correction.py）──
@@ -798,7 +829,8 @@ class SegmentPipeline:
             self.timing["correction"] = time.perf_counter() - t_corr
             self.rows = self._build_rows(frames, segs, corr, raw=seg_vals,
                                          conf=conf)
-            self._store_run_state(frames, self.crops, segs, seg_vals, rep_frames, corr)
+            self._store_run_state(frames, self.crops, segs, seg_vals,
+                                  rep_frames, corr)
             self._write_csv(self.rows, output_path)
             self.timing["total"] = time.perf_counter() - t_total
             self._progress("完成", 100.0)
@@ -966,10 +998,21 @@ class SegmentPipeline:
                         self._prof_end("ocr", "infer", _t_i)
                         _t_c = time.perf_counter()
                         for idx, rep, r, frac in zip(idxs, reps, res, fracs):
+                            # 识别层原始输出（RecOut: text + score）→ 保存
+                            # 文本与置信度，供应用层后续解析（速度解析 /
+                            # 通用文本字段）。results[idx] 四元组：
+                            #   (speed_value, raw_text, ocr_conf, rep_frame)
+                            if hasattr(r, "txts"):
+                                raw_text = (str(r.txts[0])
+                                            if r.txts and r.txts[0] else None)
+                                scores = getattr(r, "scores", [])
+                                ocr_conf = float(scores[0]) if scores else 0.0
+                            else:
+                                raw_text, ocr_conf = None, 0.0
                             sv, _rt, _c = extract_speed_value(r)
                             results[idx] = (
                                 int(sv) if sv is not None and sv >= 0
-                                else None, rep)
+                                else None, raw_text, ocr_conf, rep)
                             _report_ocr_progress(idx, frac)
                         self._prof_end("ocr", "ctc_decode", _t_c)
 
@@ -1178,8 +1221,10 @@ class SegmentPipeline:
         self._n_segments = len(segs)
         self.crops = rep_crops
         del vr, vr_gpu
+        self._ocr_texts = [results[i][1] for i in range(seg_idx)]
+        self._ocr_confs = [results[i][2] for i in range(seg_idx)]
         return frames, segs, [results[i][0] for i in range(seg_idx)], \
-            [results[i][1] for i in range(seg_idx)]
+            [results[i][3] for i in range(seg_idx)]
 
     def prepare_review_rgb(self) -> None:
         """最终检查前：把全部代表帧 packed YUV420 就地转成 RGB。
@@ -1197,17 +1242,25 @@ class SegmentPipeline:
         self.crops.clear()
 
     def _store_run_state(self, frames, crops, segs, seg_vals, rep_frames, corr):
-        """保存 run() 的中间状态，供 GUI 段级 review / finalize 使用。"""
+        """保存 run() 的中间状态，供 GUI 段级 review / finalize 使用。
+
+        segments[] 每项含 OCR 原始文本（"text"）与置信度（"ocr_conf"），
+        供 review 展示/通用字段提取消费；"value"/"ocr_value" 保持速度语义。
+        """
         self._frames = frames
         self.crops = crops
         self._segs = segs
         self._ocr_vals = list(seg_vals)
         self._corr_vals = list(corr)
+        texts = getattr(self, "_ocr_texts", [])
+        confs = getattr(self, "_ocr_confs", [])
         self.segments = [
             {"start": seg[0], "end": seg[-1],
              "frames": list(seg),  # 该段的采样帧列表（review 逐帧绘制用）
              "value": corr[i],
              "ocr_value": seg_vals[i],
+             "text": texts[i] if i < len(texts) else None,
+             "ocr_conf": confs[i] if i < len(confs) else 0.0,
              "rep_frame": rep_frames[i],
              "rep_crop": crops.get(rep_frames[i])}
             for i, seg in enumerate(segs)

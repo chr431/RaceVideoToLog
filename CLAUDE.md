@@ -11,6 +11,12 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
   `confidence_values` / `n_segments` / `n_corrected`（均带 setter 供测试夹具）；
   私有 `_xxx` 仍是内部存储，仅 segment_flow.py 内部使用（2026-08 收口后外部
   零私有访问）。历史 tools 已批量迁移到公共名。
+- **OCR 文本保全（v2.15.2 起，为通用引擎铺路）**：生产 run 后保留每段
+  **原始文本与置信度** —— `ocr_texts` / `ocr_confidences` 公共属性，
+  `segments[].text` / `segments[].ocr_conf` 字段。识别层不再丢弃文本
+  （旧实现只留速度数值 `_ocr_vals`）；应用层（extract_speed_value 等）在
+  解析后取用。数值路径零变化（基线指纹逐位一致）。验证工具
+  `tools/bench_text_preserve.py`。
 - **config 拆分**：管线引擎域常量（解码/OCR/分段/纠错/DP/尖峰）迁到
   `engine_config.py`（单一事实源，含完整注释）；`config.py` 保留 GUI/应用域
   （颜色/窗口/图表/monitor/日志）并 `from engine_config import *` 聚合导出，
