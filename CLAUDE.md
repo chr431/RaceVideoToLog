@@ -67,6 +67,15 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
   --ctx）+ _proto_stage2.py，数据用 tests/fixtures/seg_series（corr 复现
   基线 11），不重跑解码+OCR。
 - medium 模型（用户否决）；fp16/INT8（tiny/small 非算力受限，无效）
+- **Tesseract OCR（2026-08-19 实测，本机 v5.5.3，勿再投入）**：生产段级代表帧
+  （YUV420→RGB→2x 放大 BMP）喂 tesseract（psm 7/8/11 + 数字白名单 + 左缘裁剪），
+  3000 帧窗口 TOL±1 正确率：test 83.2%（psm8）/ test2 81.4% / test3 95.7% /
+  **test5 33.1% / test6 35.5%** vs PP-OCRv6 生产 94.7-100% —— 全面落后，
+  主测速视频（test5/test6）仅 1/3 正确（低对比度小字+底色大面漏读 empty 30%+）；
+  左缘裁剪无效（"首位补1"非统一模式）；吞吐 ~15 段/s（单进程子进程调用）
+  vs ONNX 双实例 ~400 段/s（慢 ~25 倍）。通用 OCR 引擎对定制训练的数字 ROI
+  无优势，封板。脚本 tools/archive/_tess_probe.py + _tess_variants.py +
+  _tess_dump.py（BMP 生成纯 numpy 免 PIL；tesseract 参数须 `--psm 7` 分两元素）。
 - Otsu/二值化/对比度拉伸/锐化喂 OCR（PP-OCRv6 训练于自然 RGB）
 - 多预处理自动选择（固定 gray+gamma2.0 是全量最优，1.15% 误读）
 - 窗口重 OCR 自动化（"至少一窗口读对"是幸存者偏差；仅人工辅助有价值）
