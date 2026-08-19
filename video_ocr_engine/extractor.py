@@ -11,7 +11,9 @@ import logging
 import os as _os
 import threading
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, Optional
 
 import numpy as np
 
@@ -37,6 +39,30 @@ def _ocr_batch_size() -> int:
     return config.OCR_BATCH_SIZE
 
 
+@dataclass
+class ExtractedSegment:
+    """引擎输出的单个文本字段段（原有字段区间 + 代表帧 + 原始文本）。"""
+
+    start: int                      # 段首帧号
+    end: int                        # 段末帧号
+    frames: tuple = ()              # 段内帧号序列
+    rep_frame: int = -1             # 代表帧号（段内最清晰帧）
+    text: Optional[str] = None      # OCR 原始文本（None=未读出）
+    confidence: float = 0.0         # OCR 置信度 0-1
+    rep_crop: Any = None            # 代表帧 ROI 图像（YUV420 或 RGB）
+
+
+@dataclass
+class ExtractionResult:
+    """引擎通用提取结果（无领域语义）。"""
+
+    segments: list = field(default_factory=list)  # list[ExtractedSegment]
+    frames: list = field(default_factory=list)     # 全部采样帧号
+    fps: float = 0.0                               # 自测帧率
+    timing: dict = field(default_factory=dict)     # 各阶段耗时
+    meta: dict = field(default_factory=dict)       # backend/codec/引擎版本等
+
+
 class FieldExtractor:
     """从视频固定区域提取文本的通用引擎（识别链：解码∥分段∥OCR）。
 
@@ -55,7 +81,10 @@ class FieldExtractor:
                  yuv_output: bool = False):
         self._video_path = Path(video_path)
         self._roi = tuple(roi)
-        self._fps = fps  # 外部给定时直接用（truth 头），否则识别链推导
+        # fps 强制自测：open decoder 后从 get_avg_fps/get_fps 读，忽略外部
+        # 传入（truth 头的 fps 可能与视频实际帧率偏离；自测无额外解码开销，
+        # 只在打开时读一次元数据）。fps 参数保留仅为 API 兼容（已废弃）。
+        self._fps = None
         self._frame_start = frame_start or 0
         self._frame_end = frame_end
         self._force_aspect = force_aspect
@@ -100,8 +129,31 @@ class FieldExtractor:
         # 后处理参数由子类（SegmentPipeline）在构造时设置；引擎识别链不读。
 
     def extract(self):
-        """通用文本提取入口（待精修：解码∥分段∥OCR → 每段 text/conf 结果）。"""
-        raise NotImplementedError
+        """通用文本提取：解码∥分段∥OCR → 结构化结果（每段原始文本+置信度）。
+
+        引擎的正式通用入口（无任何领域语义）。返回 ExtractionResult：
+          - segments: list[ExtractedSegment]（start/end/rep_frame/text/confidence/
+            rep_crop）
+          - frames / fps / timing / meta
+        识别层不解析文本含义（速度/数值由上层应用处理）。ffis 强制自测。
+        """
+        frames, segs, texts, confs, rep_frames = self._run_pipelined()
+        segments = [
+            ExtractedSegment(
+                start=seg[0], end=seg[-1], frames=tuple(seg),
+                rep_frame=rep_frames[i],
+                text=texts[i] if i < len(texts) else None,
+                confidence=confs[i] if i < len(confs) else 0.0,
+                rep_crop=self.crops.get(rep_frames[i]))
+            for i, seg in enumerate(segs)
+        ]
+        return ExtractionResult(
+            segments=segments, frames=frames, fps=self._fps or 0.0,
+            timing=dict(self.timing),
+            meta={"backend": self._backend,
+                  "ocr_backend": self._ocr_backend_used,
+                  "codec": self._codec,
+                  "n_segments": len(segments)})
 
     @property
     def frames(self) -> list:

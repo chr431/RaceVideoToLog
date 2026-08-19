@@ -11,7 +11,9 @@
     for seg in result.segments:
         print(seg.text, seg.confidence)
 """
-from video_ocr_engine.extractor import FieldExtractor  # noqa: F401
+from video_ocr_engine.extractor import (  # noqa: F401
+    FieldExtractor, ExtractedSegment, ExtractionResult,
+)
 from video_ocr_engine import _version  # noqa: F401
 
 __version__ = _version.__version__
