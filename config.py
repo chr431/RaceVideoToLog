@@ -1,18 +1,17 @@
 """RaceVideoToLog 应用配置 — 聚合引擎配置 + GUI 专属常量。
 
-v2.15.2 起：管线引擎常量（解码/OCR/分段/纠错）已迁至 engine_config.py，
+v2.16 起：引擎已拆分为独立仓库（chr431/video_ocr_engine，git submodule
+third_party/video_ocr_engine），其配置单一事实源在引擎的 engine_config.py，
 本文件 `from engine_config import *` 聚合再导出（兼容所有 `import config;
 config.SEG_*` 的既有引用），并保留 GUI/应用专属常量（颜色/窗口/图表/
-监控/日志）。monitor/gpu_setup 等非管线模块仍可从本文件取用。
-
-第三步拆分时：管线仓库只用 engine_config.py，本文件（GUI 域）留主仓库。
+监控/日志）。引擎模块经 engine_bootstrap 加入 sys.path。
 """
 from __future__ import annotations
 
-# 管线引擎域 + 共享常量（单一事实源在 engine_config.py）
+# 管线引擎域 + 共享常量（单一事实源在引擎仓库 engine_config.py）
 from engine_config import *  # noqa: F401,F403 — 聚合导出兼容
 
-# 版本：与 engine_config.__version__ 同值（tools/version.py 双重校验防漂移）；
+# 版本：应用侧单一事实源（引擎独立版本线 0.1.x 不随应用 bump）；
 # 运行时 CSV 头/控制台读 config.__version__（历史入口保持不变）
 __version__ = "2.15.2"
 

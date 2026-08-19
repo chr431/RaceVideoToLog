@@ -12,6 +12,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive  # 引擎子模块 third_party/video_ocr_engine
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -32,6 +34,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive  # 引擎子模块 third_party/video_ocr_engine
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'

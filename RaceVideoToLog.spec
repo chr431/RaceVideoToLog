@@ -26,13 +26,15 @@ hiddenimports = [
     # decord
     'decord',
     # Project modules (force inclusion; auto-discovered but explicit is safer)
-    'gui', 'headless', 'segment_flow', 'config', 'constants', 'gpu_setup', 'ocr_engine',
+    'gui', 'headless', 'segment_flow', 'config', 'constants', 'ocr_engine',
     'analysis', 'analysis_plot', 'gui_analysis', 'gui_review',
     'gui_export', 'gui_settings', 'gui_preview', 'gui_video',
     'export_controller', 'review_chart',
     'widget_utils', 'theme_manager', 'csv_io', 'ocr_text', 'signals',
-    'video_utils', 'tensorrt', 'ocr_native', 'ocr_trt', 'monitor',
-    'segmentation', 'seg_correction', 'hybrid_decode', 'logging_setup',
+    'monitor', 'logging_setup', 'engine_bootstrap',
+    # 引擎子模块（third_party/video_ocr_engine）：识别链模块经 pathex 提供
+    'engine_config', 'gpu_setup', 'hybrid_decode', 'ocr_native', 'ocr_trt',
+    'segmentation', 'video_utils', 'tensorrt', 'video_ocr_engine',
 ]
 
 # onnxruntime（CPU provider；TensorRT 由 tensorrt_bindings 直接调用）
@@ -119,13 +121,17 @@ datas = [(s, d) for s, d in datas
 # TRT .engine 不随 EXE 分发（GPU 架构绑定）：首次运行时本地自动构建，
 # 缓存到 <程序目录>/ocr_engines/（免安装设计；旧 %LOCALAPPDATA% 缓存只读回退）
 # 只打包 v6_small（v2.13 起唯一模型，GUI/CLI 无模型选择）—— tiny onnx
-# 已无用，排除省 ~4.3MB（源码 assets/ 保留，tools 实验脚本仍可用）。
-for _root, _dirs, _files in os.walk('assets/ocr_models'):
+# 已无用，排除省 ~4.3MB。
+# 模型资产随引擎子模块（third_party/video_ocr_engine/assets/ocr_models）提供：
+# 打包到 _internal/ocr_models（与 ocr_native._models_dir() 的 frozen 语义一致）。
+_ENGINE_ROOT = os.path.join(os.path.abspath('.'), 'third_party', 'video_ocr_engine')
+_OCR_MODELS_ROOT = os.path.join(_ENGINE_ROOT, 'assets', 'ocr_models')
+for _root, _dirs, _files in os.walk(_OCR_MODELS_ROOT):
     for _f in _files:
         if _f.endswith('.engine') or 'tiny' in _f:
             continue
         datas.append((os.path.join(_root, _f),
-                      os.path.join('ocr_models', os.path.relpath(_root, 'assets/ocr_models'))))
+                      os.path.join('ocr_models', os.path.relpath(_root, _OCR_MODELS_ROOT))))
 
 # ── 精简二进制：移除不需要的 DLL ──
 _NVIDIA_DLL_PREFIXES = {
@@ -149,9 +155,10 @@ binaries = [
 
 # NOTE: Run PyInstaller from repo root: pyinstaller RaceVideoToLog.spec
 _PROJECT_ROOT = os.path.abspath('.')
+_ENGINE_ROOT = os.path.abspath(_ENGINE_ROOT)  # 已在模型资产段定义（相对 repo root）
 a = Analysis(
     [os.path.join(_PROJECT_ROOT, 'RaceVideoToLog.py')],
-    pathex=[_PROJECT_ROOT],
+    pathex=[_PROJECT_ROOT, _ENGINE_ROOT],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,

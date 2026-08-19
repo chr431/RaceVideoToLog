@@ -4,7 +4,7 @@ Builds an FP16 engine to a separate cache path (never touches the FP32
 cache) and measures per-batch inference time for both engines on the
 same (6,3,48,320) inputs.
 
-Usage: python tools/bench_trt_fp16.py [--variant v6_tiny] [--batches 300]
+Usage: python tools/bench_trt_fp16.py [--variant v6_small] [--batches 300]
 """
 from __future__ import annotations
 import argparse
@@ -23,7 +23,11 @@ PROJECT = Path(__file__).parent.parent
 if str(PROJECT) not in sys.path:
     sys.path.insert(0, str(PROJECT))
 
-MODELS = PROJECT / "assets" / "ocr_models"
+# 模型资产随引擎子模块（third_party/video_ocr_engine/assets/ocr_models）
+ENGINE_ROOT = PROJECT / "third_party" / "video_ocr_engine"
+if str(ENGINE_ROOT) not in sys.path:
+    sys.path.insert(0, str(ENGINE_ROOT))
+MODELS = ENGINE_ROOT / "assets" / "ocr_models"
 
 
 def build_engine(variant: str, out_path: Path, fp16: bool) -> None:
@@ -93,7 +97,7 @@ def bench(engine_path: Path, batches: int) -> tuple[float, float]:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--variant", default="v6_tiny")
+    ap.add_argument("--variant", default="v6_small")
     ap.add_argument("--batches", type=int, default=300)
     args = ap.parse_args()
 

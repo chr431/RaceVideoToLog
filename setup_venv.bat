@@ -39,6 +39,14 @@ echo Upgrading pip ...
 .venv\Scripts\python -m pip install --upgrade pip -q
 
 echo.
+echo Writing engine submodule path into site-packages (.pth) ...
+rem 引擎子模块 third_party/video_ocr_engine 是 Python 源码根（顶层含
+rem engine_config/segmentation/ocr_native/... 与 video_ocr_engine 包）。
+rem 写 site-packages 的 .pth 让任何 venv 进程（CLI/GUI/tools/测试）都能
+rem import 引擎模块，无需逐个入口插 sys.path。
+> ".venv\Lib\site-packages\video_ocr_engine.pth" echo %~dp0third_party\video_ocr_engine
+
+echo.
 echo Installing project dependencies ...
 .venv\Scripts\python -m pip install -e .
 if errorlevel 1 (

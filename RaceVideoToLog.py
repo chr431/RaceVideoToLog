@@ -25,6 +25,11 @@ for _stream_name in ('stdout', 'stderr'):
 
 import argparse
 
+# ── 引擎子模块路径引导（必须在任何 import engine_config/引擎模块之前）──
+# 识别链由 git submodule third_party/video_ocr_engine 提供（自拆仓起）。
+from engine_bootstrap import ensure_engine_path  # noqa: E402
+ensure_engine_path()
+
 
 def apply_csv_settings(args, defaults: dict, argv=None) -> "object":
     """从 args.from_csv 的 CSV 头导入设置；命令行显式参数优先。

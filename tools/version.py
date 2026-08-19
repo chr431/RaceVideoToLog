@@ -127,7 +127,6 @@ def _refs() -> list[tuple[str, Path, object, object]]:
     """[(label, path, getter, setter)]，setter 为 None 表示只读（release_notes）。"""
     return [
         ("config.py __version__", ROOT / "config.py", _get_config, _set_config),
-        ("engine_config.py __version__", ROOT / "engine_config.py", _get_config, _set_config),
         ("pyproject.toml version", ROOT / "pyproject.toml", _get_pyproject, _set_pyproject),
         ("RaceVideoToLog.py docstring", ROOT / "RaceVideoToLog.py", _get_docstring, _set_docstring),
         ("README.md 标题", ROOT / "README.md", _get_readme_title, _set_readme),

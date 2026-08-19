@@ -51,6 +51,16 @@ jobs:
           ref: ${{ inputs.ref }}
           fetch-depth: 0  # 全历史：release notes / tag 检查需要
           token: ${{ github.token }}
+          submodules: recursive  # 引擎子模块 third_party/video_ocr_engine（spec 打包其模型资产）
+
+      - name: Export engine submodule path (PYTHONPATH)
+        shell: pwsh
+        run: |
+          # setup_venv 尚未运行（.pth 未写入）时，早期步骤（如 import config →
+          # from engine_config import *）需能把引擎子模块源码根放上 sys.path
+          $engine = Join-Path (Get-Location) 'third_party\video_ocr_engine'
+          Write-Host "engine path: $engine"
+          echo "PYTHONPATH=$engine" >> $env:GITHUB_ENV
 
       - name: Setup Python
         uses: actions/setup-python@v5

@@ -29,8 +29,10 @@ dev = ["pytest>=8"]
 racevideotolog = "RaceVideoToLog:main"
 
 [tool.setuptools]
-# video_ocr_engine/ 是引擎子包（识别链：解码/分段/OCR），独立分发目标
-packages = ["video_ocr_engine"]
+# 引擎子包 video_ocr_engine 与引擎顶层模块（engine_config/segmentation/
+# hybrid_decode/ocr_native/ocr_trt/video_utils/gpu_setup）已拆分为独立仓库，
+# 由 git submodule third_party/video_ocr_engine（sys.path bootstrap）提供，
+# 不再作为本项目的打包单元。
 py-modules = [
     "RaceVideoToLog",
     "analysis",
@@ -38,9 +40,8 @@ py-modules = [
     "config",
     "constants",
     "csv_io",
-    "engine_config",
+    "engine_bootstrap",
     "export_controller",
-    "gpu_setup",
     "gui",
     "gui_analysis",
     "gui_export",
@@ -49,20 +50,15 @@ py-modules = [
     "gui_settings",
     "gui_video",
     "headless",
-    "hybrid_decode",
     "logging_setup",
     "monitor",
     "ocr_engine",
-    "ocr_native",
     "ocr_text",
-    "ocr_trt",
     "review_chart",
     "seg_correction",
     "segment_flow",
-    "segmentation",
     "signals",
     "theme_manager",
-    "video_utils",
     "widget_utils",
 ]
 

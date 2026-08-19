@@ -2,6 +2,30 @@
 
 从赛车视频中提取速度数据，生成时间-速度-距离 CSV 文件。
 
+## 引擎子模块（third_party/video_ocr_engine）
+
+解码 + OCR 识别链已拆分为独立的通用引擎仓库
+[chr431/video_ocr_engine](https://github.com/chr431/video_ocr_engine)
+（`FieldExtractor`：解码 → 像素分段 → 代表帧 → OCR 文本+置信度，**零速度语义**，
+也可用于字幕提取等通用场景）。本仓库通过 **git submodule** 调用：
+
+```bash
+# 克隆时带子模块：
+git clone --recurse-submodules https://github.com/chr431/RaceVideoToLog.git
+# 或已克隆后初始化：
+git submodule update --init --recursive
+```
+
+引擎源码根目录 = `third_party/video_ocr_engine`（含 `video_ocr_engine/` Python 包、
+`engine_config/segmentation/ocr_native/ocr_trt/video_utils/hybrid_decode/gpu_setup`
+顶层模块与 OCR 模型资产）。调用方式为 **sys.path bootstrap**：`setup_venv.bat`
+向 venv 写入 `video_ocr_engine.pth`，`RaceVideoToLog.py` 与 pytest 根 `conftest.py`
+也内置引导（`engine_bootstrap.py`），任意入口都能 import 引擎模块。
+
+源码运行时引擎缓存/日志写在本子模块目录内（引擎仓库 `.gitignore` 已忽略，
+不会弄脏引擎提交）。引擎使用独立版本线（0.1.x）；应用版本（2.15.x）仍以
+`config.__version__` 为单一事实源，两者解耦。
+
 ## 前置要求
 
 - Python 3.11+
@@ -10,6 +34,9 @@
 - （可选）CUDA Toolkit 13.x + TensorRT 11.x（GPU OCR 推理；无则自动使用 CPU）
 
 ## 一键安装
+
+**前提**：已初始化引擎子模块（`git submodule update --init --recursive`，见上节）；
+`setup_venv.bat` 会向 venv 写入引擎 `.pth`（`video_ocr_engine.pth`）。
 
 ```bash
 setup_venv.bat
@@ -178,8 +205,11 @@ build_exe.bat
 
 | 路径 | 内容 |
 | --- | --- |
-| `%LOCALAPPDATA%\RaceVideoToLog\ocr_engines\`（Windows）；`~/.cache/racevideotolog/ocr_engines/`（Linux/macOS） | TensorRT 引擎缓存：首次运行时由 ONNX 模型自动构建（约 2 分钟），之后直接复用。**与 GPU 架构绑定**（如 sm89 = RTX 40 系）—— 换显卡后旧引擎会自动失效并回退/重建。删除后下次运行会重新构建。 |
-| `%LOCALAPPDATA%\RaceVideoToLog\gui_timing.log` | 调试计时日志（排查界面卡顿用），可随时删除。 |
+| 源码运行：`third_party/video_ocr_engine/ocr_engines\`（引擎子模块目录，引擎仓库 .gitignore 已忽略）；打包后：EXE 同目录 `ocr_engines\` | TensorRT 引擎缓存：首次运行时由 ONNX 模型自动构建（约 2 分钟），之后直接复用。**与 GPU 架构绑定**（如 sm89 = RTX 40 系）—— 换显卡后旧引擎会自动失效并回退/重建。删除后下次运行会重新构建。 |
+| 源码运行：`third_party/video_ocr_engine/logs\`；打包后：EXE 同目录 `logs\` | 运行日志。 |
+
+> 旧版（≤v2.13）`%LOCALAPPDATA%\RaceVideoToLog\ocr_engines\` 的引擎缓存会被
+> `ocr_trt.py` 只读回退复用（不写入），换目录后无需主动迁移。
 
 ## License
 

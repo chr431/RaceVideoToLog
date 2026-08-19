@@ -3,6 +3,45 @@
 从赛车视频 OCR 提取速度，输出时间-速度-距离 CSV。Python 3.11+，PySide6 GUI +
 CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
 
+## 引擎独立仓库（v2.16 拆仓完成）
+
+- **解码+OCR 识别链拆为独立仓库 [chr431/video_ocr_engine](https://github.com/chr431/video_ocr_engine)**
+  （本地 `D:\Repo\video_ocr_engine`），本仓库通过 **git submodule**
+  `third_party/video_ocr_engine` 调用（**sys.path bootstrap，非 pip 依赖**）。
+- 引擎仓库内容：`video_ocr_engine/` 包（FieldExtractor / ExtractedSegment /
+  ExtractionResult）+ 顶层 `engine_config.py / segmentation.py / hybrid_decode.py /
+  ocr_native.py / ocr_trt.py / video_utils.py / gpu_setup.py` + 模型资产
+  `assets/ocr_models/`（PP-OCRv6_small.onnx + ppocrv6_dict.txt）。**引擎 import
+  全部用顶层名字**（`import engine_config as config` / `from segmentation import ...`），
+  引擎仓库根目录即 Python 源码根。
+- **sys.path 引导（关键）**：引擎模块是顶层模块名，本仓库不再含这些文件 → 必须把
+  `third_party/video_ocr_engine` 放进 sys.path。三处覆盖：
+  ① `setup_venv.bat` 写 venv `<site-packages>/video_ocr_engine.pth`（任何 venv
+  进程，含 tools/）；
+  ② `RaceVideoToLog.py` 顶部 `engine_bootstrap.ensure_engine_path()`（CLI/GUI，
+  **必须先于任何引擎 import**）；
+  ③ pytest 根 `conftest.py`（本地/CI）。
+  frozen（PyInstaller）下引擎已由 spec 的 pathex + hiddenimports 打包进 EXE，
+  `ensure_engine_path()` 检测 `sys.frozen` 直接跳过。
+- **版本解耦**：引擎独立版本线（`engine_config.__version__ = "0.1.x"`）；应用版本
+  `config.__version__ = "2.15.x"` 仍是本仓库单一事实源 —— `tools/version.py` 已移除
+  engine_config 引用（不再跨仓双重校验）。
+- **模型资产只随引擎仓库**：本仓库 `assets/ocr_models` 已删除。打包时 `RaceVideoToLog.spec`
+  从 `third_party/video_ocr_engine/assets/ocr_models` 收集到 `_internal/ocr_models`
+  （`ocr_native._models_dir()` frozen 语义）；源码运行解析到引擎子模块内 assets。
+- **源码运行时引擎缓存/日志**（`ocr_engines/` 与 `logs/`）落在 `third_party/
+  video_ocr_engine/` 内 —— 引擎仓库 `.gitignore` 已忽略，不会把子模块标记 dirty。
+- **更新引擎**：`git -C third_party/video_ocr_engine pull`（或 `git submodule
+  update --remote`，引擎发版后）。改引擎代码直接在子模块仓库（`D:\Repo\video_ocr_engine`）
+  提交 push，本仓库 `third_party/` 只锁定其 commit 指针。
+- **历史工具（已归档）**：`tools/archive/_gen_engine_extractor.py` /
+  `_build_extractor.py` / `_assemble_extractor.py` / `_engine_repo_assess.py` /
+  `_engine_import_audit.py` 是拆仓前的代码生成/评估脚本（路径仍指向旧的
+  `PROJECT/video_ocr_engine`），仅作历史参考；引擎 extractor.py 现随引擎仓库维护，
+  勿再从本仓库重建。
+- **引擎仓自带 tests/CI**（import 纯净性 / 分段纯函数 / NV12 工具 / OCR 冒烟）；
+  本仓库回归门禁（pytest + 准确率漏斗）仍真实跑引擎路径（解码+分段+OCR+纠错）。
+
 ## 架构要点
 
 ### 模块边界与公共 API（v2.15.2 起，为拆分管线仓库铺路）

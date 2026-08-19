@@ -13,6 +13,7 @@
 | tensorrt_cu13_bindings | 11.2.1.2 | PyPI | TensorRT Python 绑定（~1MB） |
 | psutil | 7.2.2 | PyPI | 资源监测 RSS / CPU%（可选：缺失时降级为 None，GPU 采样不受影响） |
 | decord | **0.7.11** | 自建仓库 chr431/decord | NVDEC 硬解 + CPU 软件解码；FFmpeg 8.x DLL。**2026-08-18 统一为 GitHub release v0.7.11 构建**（site-packages 与 _decord_build 同 sha `89D82E5B`，python 层 libinfo 0.7.11）。**PyPI 版不支持 next_roi / CPU ROI 优化 / YUV420 输出**，见 setup_venv.bat |
+| video_ocr_engine | 0.1.x | git submodule chr431/video_ocr_engine | 解码+OCR 识别链引擎（FieldExtractor，零速度语义）；经 `third_party/video_ocr_engine`（sys.path bootstrap / .pth）提供引擎顶层模块与 `video_ocr_engine/` 包；OCR 模型资产随引擎仓库（PP-OCRv6_small + 字符表） |
 | pyinstaller | 6.22.2 | PyPI | 打包工具（6.21→6.22.2） |
 
 ## GPU 加速（运行时，不打包）
