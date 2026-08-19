@@ -17,15 +17,31 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
   （旧实现只留速度数值 `_ocr_vals`）；应用层（extract_speed_value 等）在
   解析后取用。数值路径零变化（基线指纹逐位一致）。验证工具
   `tools/bench_text_preserve.py`。
+- **video_ocr_engine 引擎子包（v2.15.2，识别链独立）**：
+  - `video_ocr_engine.FieldExtractor` = 通用视频文本提取引擎（解码/像素分段/
+    OCR 文本），**零速度后处理**——构造参数仅引擎域（video_path/roi/frame/
+    backend/buffer/fill/C/fps 等），不含 win/mult/conf_*/dp_*。
+  - `SegmentPipeline(FieldExtractor)` 继承引擎，只叠加速度后处理（14 方法：
+    _local_bandwidth/_detect/_correct/_confidence/_dense_correct/
+    _spike_second_pass/_dp_run + run/store/finalize/build_rows/_write_csv）。
+  - 识别链方法从 segment_flow.py 已删除（941 行），引擎为**唯一事实源**。
+  - 引擎方法体由 `tools/archive/_gen_engine_extractor.py` + `_build_extractor.py`
+    用 ast.unparse 从 segment_flow 抽取生成（`video_ocr_engine/_methods_body.py`），
+    勿手改方法体文件；引擎 `_run_pipelined` 暂保留 extract_speed_value 速度解析
+    （后续引擎化时改为纯文本输出，速度解析移到应用 run()）。
+  - 独立验证：`tools/bench_engine_smoke.py`（600 帧→253 段→OCR 文本，不依赖
+    SegmentPipeline）。冒烟通过、基线指纹 e43369f7… 一致、漏斗 0 错误。
 - **config 拆分**：管线引擎域常量（解码/OCR/分段/纠错/DP/尖峰）迁到
   `engine_config.py`（单一事实源，含完整注释）；`config.py` 保留 GUI/应用域
   （颜色/窗口/图表/monitor/日志）并 `from engine_config import *` 聚合导出，
   故 `import config; config.SEG_*` 全兼容。`tools/version.py` 双校验两处
   `__version__` 一致性。
-- **第三步拆仓路径**：8 个管线模块（segment_flow/ocr_native/ocr_trt/
-  ocr_engine/segmentation/seg_correction/video_utils/hybrid_decode +
-  engine_config + constants）目前仍 `import config`（聚合层），拆仓时改
-  `import engine_config` 即可验证依赖方向反转；`config.py`（GUI 域）留应用。
+- **第三步拆仓路径**：引擎仓库 = `video_ocr_engine/` + `engine_config.py` +
+  `segmentation.py` + `hybrid_decode.py` + `ocr_native.py` + `ocr_trt.py` +
+  `ocr_engine.py` + `video_utils.py`（引擎依赖侧）——但引擎仍 `import config`
+  （聚合层），拆仓时改 `import engine_config` 验证依赖反转；`_run_pipelined`
+  再去掉 extract_speed_value（速度解析完全移到应用）。本仓库剩余 = GUI +
+  速度后处理（seg_correction/ocr_text/segment_flow 的 14 方法）。
 
 ## 回归门禁（改动后必跑）
 

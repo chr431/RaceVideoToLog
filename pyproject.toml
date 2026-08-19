@@ -29,6 +29,8 @@ dev = ["pytest>=8"]
 racevideotolog = "RaceVideoToLog:main"
 
 [tool.setuptools]
+# video_ocr_engine/ 是引擎子包（识别链：解码/分段/OCR），独立分发目标
+packages = ["video_ocr_engine"]
 py-modules = [
     "RaceVideoToLog",
     "analysis",

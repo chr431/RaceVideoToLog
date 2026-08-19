@@ -51,11 +51,12 @@ class FieldExtractor:
                  frame_end=None, force_aspect: float = 0.0,
                  decode_backend: str = "auto", ocr_backend: str = "auto",
                  buffer_size: int | None = None, fill_width: int | None = None,
+                 C: float | None = None, fps: float | None = None,
                  progress_cb=None, cancel_check=None, gray_output: bool = False,
                  yuv_output: bool = False):
         self._video_path = Path(video_path)
         self._roi = tuple(roi)
-        self._fps = None  # run 时从 decoder 推导
+        self._fps = fps  # 外部给定时直接用（truth 头），否则识别链推导
         self._frame_start = frame_start or 0
         self._frame_end = frame_end
         self._force_aspect = force_aspect
@@ -67,7 +68,7 @@ class FieldExtractor:
                              else config.DEFAULT_BUFFER_SIZE)
         self._fill_width = (fill_width if fill_width is not None
                             else config.DEFAULT_FILL_WIDTH)
-        self._C = config.SEG_C           # 分段聚类阈值
+        self._C = (C if C is not None else config.SEG_C)  # 分段聚类阈值
         self._gray_output = gray_output
         self._yuv_output = yuv_output
         self._color_range = 0            # run 时从 decoder get_color_range 读取
