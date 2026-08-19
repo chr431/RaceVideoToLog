@@ -213,4 +213,7 @@ build_exe.bat
 
 ## License
 
-GPLv3（因依赖 PySide6-Fluent-Widgets GPLv3）。详见 LICENSE 文件。
+本应用 **GPLv3**（因依赖 PySide6-Fluent-Widgets GPLv3）。详见 LICENSE 文件。
+
+> 引擎子模块 [chr431/video_ocr_engine](https://github.com/chr431/video_ocr_engine)
+> 是独立通用库，**放宽为 Apache-2.0**（无 GUI 依赖限制），可以从子模块独立分发/复用。

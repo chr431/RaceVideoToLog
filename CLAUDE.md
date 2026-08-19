@@ -41,6 +41,9 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
   勿再从本仓库重建。
 - **引擎仓自带 tests/CI**（import 纯净性 / 分段纯函数 / NV12 工具 / OCR 冒烟）；
   本仓库回归门禁（pytest + 准确率漏斗）仍真实跑引擎路径（解码+分段+OCR+纠错）。
+- **引擎许可证：Apache-2.0**（独立通用库放宽——无 qfluentwidgets GUI 依赖，故无
+  GPL 传染限制；作者原创作品拆分时重新授权）；RaceVideoToLog 主应用仍因
+  PySide6-Fluent-Widgets 保持 GPLv3，可自由包含该引擎。
 
 ## 架构要点
 
