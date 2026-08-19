@@ -36,7 +36,7 @@ from segmentation import (  # noqa: F401 — 兼容 tools/tests 的历史导入�
     _apply_gamma, _cluster_win3, _gray, _gray_batch, _gray_seg,
     _gray_seg_batch, _gray_seg_yuv, _gray_seg_yuv_batch, _otsu, _seg_gamma,
 )
-from video_utils import _nv12_luma_full, nv12_to_rgb
+from video_utils import _nv12_luma_full, _preprocess_standard, nv12_to_rgb
 from hybrid_decode import (  # noqa: F401 — 兼容 tests 的历史导入路径
     HYBRID_BACKEND_ALIASES, _decode_range_worker, _drain_queue, _hybrid_ranges,
 )
@@ -226,6 +226,54 @@ class SegmentPipeline(FieldExtractor):
                       dp_anchor_cost=self._dp_anchor_cost,
                       fill=fill)
 
+    def _ocr_segments(self, segs, crops, sharp):
+        """串行参考路径：对每段代表帧 OCR，返回速度数值（应用层语义）。
+
+        引擎提供文本识别（_run_pipelined），本方法用于 tools/测试的串行
+        参考路径——为保持 `(seg_vals, rep_frames)` 返回结构不变，这里对
+        识别文本做速度解析（extract_speed_value）。生产走 _run_pipelined。
+        """
+        from ocr_native import OcrEngine
+        eng = OcrEngine(self._ocr_model, self._ocr_engine_type(),
+                        fill_width=self._fill_width,
+                        num_threads=self._ocr_num_threads(),
+                        progress_cb=lambda msg: self._progress(msg, 2.5))
+        self._ocr_backend_used = eng.backend_name
+        seg_vals = []
+        rep_frames = []
+        texts = []
+        confs = []
+        t0 = time.perf_counter()
+        B = _ocr_batch_size()
+        reps = [max(seg, key=lambda fi: sharp[fi]) for seg in segs]
+        for k in range(0, len(segs), B):
+            chunk = segs[k:k + B]
+            procs = [_preprocess_standard(
+                _nv12_luma_full(crops[rep], self._color_range)[..., None]
+                if self._yuv_output else crops[rep],
+                force_aspect=self._force_aspect)
+                for rep in reps[k:k + B]]
+            results = eng(procs)
+            for rep, res in zip(reps[k:k + B], results):
+                sv, _rt, _c = extract_speed_value(res)
+                seg_vals.append(int(sv) if sv is not None and sv >= 0 else None)
+                rep_frames.append(rep)
+                if hasattr(res, "txts"):
+                    texts.append(str(res.txts[0])
+                                 if res.txts and res.txts[0] else None)
+                    scores = getattr(res, "scores", [])
+                    confs.append(float(scores[0]) if scores else 0.0)
+                else:
+                    texts.append(None); confs.append(0.0)
+            done = min(k + B, len(segs))
+            self._progress(f"[OCR] 段: {done}/{len(segs)}",
+                           73 + done / max(len(segs), 1) * 15)
+        self.timing["ocr"] = time.perf_counter() - t0
+        self._n_segments = len(segs)
+        self._ocr_texts = texts
+        self._ocr_confs = confs
+        return seg_vals, rep_frames
+
     # ── 主入口（流水线：解码∥分段∥段OCR 重叠 → 检测纠正 → CSV）──
     def run(self, output_path):
         t_total = time.perf_counter()
@@ -236,7 +284,17 @@ class SegmentPipeline(FieldExtractor):
         self._progress = _ProgressGate(_orig_progress)
         try:
             self._progress("解码+分段+段值OCR...", 2.0)
-            frames, segs, seg_vals, rep_frames = self._run_pipelined()
+            frames, segs, ocr_texts, ocr_confs, rep_frames = \
+                self._run_pipelined()
+            # 应用层解析：引擎输出原始文本 → 速度数值（extract_speed_value
+            # 的文本直转版；识别层不感知速度语义）
+            from ocr_text import _extract_speed_from_text
+            seg_vals = []
+            for txt, c in zip(ocr_texts, ocr_confs):
+                sv, _rt, _c = _extract_speed_from_text(str(txt)
+                                                       if txt else "", c)
+                seg_vals.append(int(sv) if sv is not None and sv >= 0
+                                else None)
             self._cancel()
             self._progress("检测纠正...", 88.0)
             t_corr = time.perf_counter()

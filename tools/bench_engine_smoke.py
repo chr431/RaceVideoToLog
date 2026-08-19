@@ -1,7 +1,7 @@
 """引擎冒烟：video_ocr_engine.FieldExtractor 识别链独立跑通（test 视频）。
 
-用串行识别链（_decode_all + _segment + _ocr_segments）验证引擎类自带
-解码/分段/OCR 能力；不依赖 SegmentPipeline（速度后处理）与 extract()。
+用净化后的识别链 _run_pipelined（返回原始文本 texts/confs，无速度语义），
+验证引擎不依赖 SegmentPipeline（速度后处理）与 extract_speed_value。
 """
 import sys
 from pathlib import Path
@@ -23,14 +23,14 @@ ex = FieldExtractor(
     frame_start=f_start, frame_end=f_start + 600,
     decode_backend="auto", ocr_backend="cpu",
     yuv_output=True)
-frames, crops, grays, sharp = ex._decode_all()
-print(f"解码完成: {len(frames)} 帧, backend={ex._backend}")
-segs = ex._segment(frames, grays)
-print(f"分段: {len(segs)} 段")
-seg_vals, rep_frames = ex._ocr_segments(segs, crops, sharp)
-print(f"OCR: {len(seg_vals)} 段文本")
+frames, segs, texts, confs, rep_frames = ex._run_pipelined()
+print(f"解码+分段+OCR: {len(frames)} 帧 → {len(segs)} 段 → {len(texts)} 段文本")
 # 引擎文本保全验证（texts 已随段保存）
 print("ocr_texts 前 6:")
-for i, t in enumerate(ex.ocr_texts[:6]):
-    print(f"  seg{i}: text={t!r}")
-print("PASS: 引擎识别链独立跑通")
+for i, t in enumerate(texts[:6]):
+    print(f"  seg{i}: text={t!r} conf={confs[i]}")
+# 验证引擎无速度语义：不 import extract_speed_value
+import video_ocr_engine.extractor as ex_mod
+assert not hasattr(ex_mod, "extract_speed_value"), \
+    "引擎不应含速度解析符号！"
+print("PASS: 引擎识别链独立跑通，纯文本输出（无速度语义）")

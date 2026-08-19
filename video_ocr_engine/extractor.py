@@ -26,7 +26,6 @@ from hybrid_decode import (
 )
 from ocr_native import OcrEngine, auto_ocr_thread_count
 from video_utils import (_nv12_luma_full, _preprocess_standard)  # 识别链 YUV/preprocess
-from ocr_engine import extract_speed_value  # 待引擎 _run_pipelined 移除速度解析后删
 
 logger = logging.getLogger(__name__)
 
@@ -549,40 +548,6 @@ class FieldExtractor:
         self.timing['segment'] = time.perf_counter() - t0
         return segs
 
-    def _ocr_segments(self, segs, crops, sharp):
-        from ocr_native import OcrEngine
-        from video_utils import _preprocess_standard
-        eng = OcrEngine(self._ocr_model, self._ocr_engine_type(), fill_width=self._fill_width, num_threads=self._ocr_num_threads(), progress_cb=lambda msg: self._progress(msg, 2.5))
-        self._ocr_backend_used = eng.backend_name
-        seg_vals = []
-        rep_frames = []
-        texts = []
-        confs = []
-        t0 = time.perf_counter()
-        B = _ocr_batch_size()
-        reps = [max(seg, key=lambda fi: sharp[fi]) for seg in segs]
-        for k in range(0, len(segs), B):
-            chunk = segs[k:k + B]
-            procs = [_preprocess_standard(_nv12_luma_full(crops[rep], self._color_range)[..., None] if self._yuv_output else crops[rep], force_aspect=self._force_aspect) for rep in reps[k:k + B]]
-            results = eng(procs)
-            for rep, res in zip(reps[k:k + B], results):
-                sv, _rt, _c = extract_speed_value(res)
-                seg_vals.append(int(sv) if sv is not None and sv >= 0 else None)
-                rep_frames.append(rep)
-                if hasattr(res, 'txts'):
-                    texts.append(str(res.txts[0]) if res.txts and res.txts[0] else None)
-                    scores = getattr(res, 'scores', [])
-                    confs.append(float(scores[0]) if scores else 0.0)
-                else:
-                    texts.append(None)
-                    confs.append(0.0)
-            done = min(k + B, len(segs))
-            self._progress(f'[OCR] 段: {done}/{len(segs)}', 73 + done / max(len(segs), 1) * 15)
-        self.timing['ocr'] = time.perf_counter() - t0
-        self._n_segments = len(segs)
-        self._ocr_texts = texts
-        self._ocr_confs = confs
-        return (seg_vals, rep_frames)
 
     def _run_pipelined(self):
         """流水线：解码线程增量分段，OCR 线程批处理已闭合段的代表帧。
@@ -600,7 +565,6 @@ class FieldExtractor:
         import threading
         from ocr_native import OcrEngine
         from video_utils import _preprocess_standard
-        from ocr_engine import extract_speed_value
         _t_open = time.perf_counter()
         hybrid = self._is_hybrid()
         vr_gpu = None
@@ -695,8 +659,9 @@ class FieldExtractor:
                                 ocr_conf = float(scores[0]) if scores else 0.0
                             else:
                                 raw_text, ocr_conf = (None, 0.0)
-                            sv, _rt, _c = extract_speed_value(r)
-                            results[idx] = (int(sv) if sv is not None and sv >= 0 else None, raw_text, ocr_conf, rep)
+                            # 引擎只保存识别层原始文本+置信度（不解析速度）；
+                            # 领域解析由上层应用（SegmentPipeline）完成。
+                            results[idx] = (raw_text, ocr_conf, rep)
                             _report_ocr_progress(idx, frac)
                         self._prof_end('ocr', 'ctc_decode', _t_c)
                 infer_threads = [threading.Thread(target=infer_worker, args=(eng,), daemon=True) for eng in engines]
@@ -866,9 +831,10 @@ class FieldExtractor:
         self._n_segments = len(segs)
         self.crops = rep_crops
         del vr, vr_gpu
-        self._ocr_texts = [results[i][1] for i in range(seg_idx)]
-        self._ocr_confs = [results[i][2] for i in range(seg_idx)]
-        return (frames, segs, [results[i][0] for i in range(seg_idx)], [results[i][3] for i in range(seg_idx)])
+        self._ocr_texts = [results[i][0] for i in range(seg_idx)]
+        self._ocr_confs = [results[i][1] for i in range(seg_idx)]
+        return (frames, segs, self._ocr_texts, self._ocr_confs,
+                [results[i][2] for i in range(seg_idx)])
 
     def prepare_review_rgb(self) -> None:
         """最终检查前：把全部代表帧 packed YUV420 就地转成 RGB。

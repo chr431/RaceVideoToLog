@@ -17,20 +17,28 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
   （旧实现只留速度数值 `_ocr_vals`）；应用层（extract_speed_value 等）在
   解析后取用。数值路径零变化（基线指纹逐位一致）。验证工具
   `tools/bench_text_preserve.py`。
-- **video_ocr_engine 引擎子包（v2.15.2，识别链独立）**：
+- **video_ocr_engine 引擎子包（v2.15.2，识别链独立+纯文本输出）**：
   - `video_ocr_engine.FieldExtractor` = 通用视频文本提取引擎（解码/像素分段/
-    OCR 文本），**零速度后处理**——构造参数仅引擎域（video_path/roi/frame/
-    backend/buffer/fill/C/fps 等），不含 win/mult/conf_*/dp_*。
+    OCR 文本），**零速度语义**——构造参数仅引擎域（video_path/roi/frame/
+    backend/buffer/fill/C/fps 等），不含 win/mult/conf_*/dp_*；顶层 import
+    已审计**零应用层依赖**（不 import segment_flow/seg_correction/ocr_text/
+    ocr_engine/csv_io/GUI，只依赖 engine_config/segmentation/hybrid_decode/
+    ocr_native/video_utils/decord/numpy）。
+  - `_run_pipelined` 返回**原始文本** `(frames, segs, texts, confs, rep_frames)`，
+    不做速度解析（extract_speed_value 已从引擎彻底移除）；SegmentPipeline.run()
+    在应用层用 `ocr_text._extract_speed_from_text` 把文本转速度数值。
+  - `_ocr_segments`（串行速度参考路径）回到 SegmentPipeline（tools/测试用，
+    返回 `(seg_vals, rep_frames)` 保持兼容）；引擎内已删除。
   - `SegmentPipeline(FieldExtractor)` 继承引擎，只叠加速度后处理（14 方法：
     _local_bandwidth/_detect/_correct/_confidence/_dense_correct/
-    _spike_second_pass/_dp_run + run/store/finalize/build_rows/_write_csv）。
-  - 识别链方法从 segment_flow.py 已删除（941 行），引擎为**唯一事实源**。
-  - 引擎方法体由 `tools/archive/_gen_engine_extractor.py` + `_build_extractor.py`
+    _spike_second_pass/_dp_run + run/_ocr_segments/store/finalize/build_rows/
+    _write_csv）。
+  - 方法体由 `tools/archive/_gen_engine_extractor.py` + `_build_extractor.py`
     用 ast.unparse 从 segment_flow 抽取生成（`video_ocr_engine/_methods_body.py`），
-    勿手改方法体文件；引擎 `_run_pipelined` 暂保留 extract_speed_value 速度解析
-    （后续引擎化时改为纯文本输出，速度解析移到应用 run()）。
-  - 独立验证：`tools/bench_engine_smoke.py`（600 帧→253 段→OCR 文本，不依赖
-    SegmentPipeline）。冒烟通过、基线指纹 e43369f7… 一致、漏斗 0 错误。
+    勿手改方法体文件。
+  - 独立验证：`tools/bench_engine_smoke.py`（600 帧→254 段→纯文本输出；
+    断言引擎模块无 extract_speed_value）。冒烟通过、基线指纹 e43369f7… 一致、
+    漏斗 0 错误。
 - **config 拆分**：管线引擎域常量（解码/OCR/分段/纠错/DP/尖峰）迁到
   `engine_config.py`（单一事实源，含完整注释）；`config.py` 保留 GUI/应用域
   （颜色/窗口/图表/monitor/日志）并 `from engine_config import *` 聚合导出，
