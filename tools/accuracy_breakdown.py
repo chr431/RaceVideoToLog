@@ -38,12 +38,15 @@ BASELINE_PATH = PROJECT / "tools" / "baseline.json"
 _METRICS = ("seg", "raw", "fix", "fix_wrong", "missed", "harm", "final")
 
 
-def run_funnel(videos, tol: float = 1.0, decode_backend: str = "auto") -> dict:
+def run_funnel(videos, tol: float = 1.0, decode_backend: str = "auto",
+               merge_similar: bool = False,
+               merge_similar_threshold: float | None = None) -> dict:
     """对每个视频跑生产管线并统计漏斗指标。
 
     返回 {"videos": {name: {metric: value}}, "total": {metric: value}}。
     decode_backend: decord 解码后端（门禁默认 auto 不变；实验性混合
     解码对照用 env RVTOL_HYBRID_DECODE=1）。
+    merge_similar: 是否启用引擎相似段合并（实验对比用，默认关闭）。
     """
     per_video: dict = {}
     total = {k: 0 for k in _METRICS}
@@ -54,7 +57,9 @@ def run_funnel(videos, tol: float = 1.0, decode_backend: str = "auto") -> dict:
         pipe = SegmentPipeline(f"{VIDEO_DIR}/{v}.mp4", roi, ms, ma,
                                fps, f_start, f_end, force_aspect=mw,
                                decode_backend=decode_backend,
-                               yuv_output=True)
+                               yuv_output=True,
+                               merge_similar=merge_similar,
+                               merge_similar_threshold=merge_similar_threshold)
         pipe.run(str(PROJECT / "outputs" / f"_brk_{v}.csv"))
         sv = pipe.ocr_values
         cv = pipe.corrected_values
@@ -162,6 +167,10 @@ def main() -> None:
                     choices=config.DECODE_BACKEND_KEYS,
                     help="decord 解码后端（auto/cpu/nvdec；门禁默认 auto 不变；"
                          "实验性混合用 env RVTOL_HYBRID_DECODE=1）")
+    ap.add_argument("--merge-similar", action="store_true",
+                    help="启用引擎相似段合并（实验对比，默认关闭）")
+    ap.add_argument("--merge-similar-threshold", type=float, default=None,
+                    help="相似段合并阈值（默认 engine_config 3.0）")
     ap.add_argument("--update-baseline", action="store_true",
                     help="用本次结果覆盖 tools/baseline.json（有意改动后）")
     ap.add_argument("--baseline", type=str, default=str(BASELINE_PATH),
@@ -169,7 +178,9 @@ def main() -> None:
     args = ap.parse_args()
 
     results = run_funnel(args.videos, tol=args.tol,
-                         decode_backend=args.decode_backend)
+                         decode_backend=args.decode_backend,
+                         merge_similar=args.merge_similar,
+                         merge_similar_threshold=args.merge_similar_threshold)
 
     if args.update_baseline:
         save_baseline(Path(args.baseline), results, args.tol,

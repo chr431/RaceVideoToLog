@@ -127,7 +127,9 @@ class SegmentPipeline(FieldExtractor):
                  dp_deanchor_jerk_max: float = config.SEG_DP_DEANCHOR_JERK_MAX,
                  progress_cb=None, cancel_check=None,
                  gray_output: bool = False,
-                 yuv_output: bool = False):
+                 yuv_output: bool = False,
+                 merge_similar: bool = False,
+                 merge_similar_threshold: float | None = None):
         # 引擎字段（解码/分段/OCR 识别链）由 FieldExtractor.__init__ 设置
         super().__init__(
             video_path=video_path, roi=roi, frame_start=frame_start,
@@ -137,7 +139,9 @@ class SegmentPipeline(FieldExtractor):
             progress_cb=progress_cb, cancel_check=cancel_check,
             gray_output=gray_output, yuv_output=yuv_output,
             # GUI review 需要代表帧预览，显式保留（引擎默认 True，这里加固）
-            keep_crops=True, keep_frames=True)
+            keep_crops=True, keep_frames=True,
+            merge_similar=merge_similar,
+            merge_similar_threshold=merge_similar_threshold)
         # ── 速度后处理与速度专属字段（应用层，不在引擎）──
         self._max_speed = max_speed_kmh
         self._max_accel = max_accel_mps2
