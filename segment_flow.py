@@ -135,7 +135,9 @@ class SegmentPipeline(FieldExtractor):
             decode_backend=decode_backend, ocr_backend=ocr_backend,
             buffer_size=buffer_size, fill_width=fill_width, C=C, fps=fps,
             progress_cb=progress_cb, cancel_check=cancel_check,
-            gray_output=gray_output, yuv_output=yuv_output)
+            gray_output=gray_output, yuv_output=yuv_output,
+            # GUI review 需要代表帧预览，显式保留（引擎默认 True，这里加固）
+            keep_crops=True, keep_frames=True)
         # ── 速度后处理与速度专属字段（应用层，不在引擎）──
         self._max_speed = max_speed_kmh
         self._max_accel = max_accel_mps2

@@ -22,7 +22,9 @@ ex = FieldExtractor(
     video_path="D:/Videos/racelog_test/test.mp4", roi=roi,
     frame_start=f_start, frame_end=f_start + 600,
     decode_backend="auto", ocr_backend="cpu",
-    yuv_output=True)
+    yuv_output=True,
+    # 冒烟只验证识别链，不需要保留代表帧预览图
+    keep_crops=False)
 frames, segs, texts, confs, rep_frames = ex._run_pipelined()
 print(f"解码+分段+OCR: {len(frames)} 帧 → {len(segs)} 段 → {len(texts)} 段文本")
 # 引擎文本保全验证（texts 已随段保存）
