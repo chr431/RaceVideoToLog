@@ -49,6 +49,7 @@ class ExportControllerMixin:
         # ── 数值字段（统一使用共享解析器）──
         _num_fields = {
             "max_speed": s["max_speed_edit"], "max_accel": s["max_accel_edit"],
+            "force_aspect": s["force_aspect_edit"],
             "frame_start": s["frame_start_edit"], "frame_end": s["frame_end_edit"],
         }
         for key, widget in _num_fields.items():

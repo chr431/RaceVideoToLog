@@ -43,6 +43,14 @@ def test_csv_fills_defaults(tmp_path):
     assert args.format == "km/h", "CSV 未提的字段保持默认"
 
 
+def test_csv_fills_force_aspect(tmp_path):
+    """CLI 从 CSV 导入必须读取 force_aspect（默认 0.0 → CSV 1.5）。"""
+    csv = _csv(tmp_path, "# force_aspect=1.5")
+    args = _args(from_csv=csv)
+    apply_csv_settings(args, DEFAULTS, argv=["prog"])
+    assert args.force_aspect == 1.5
+
+
 # ═══════════════ 显式参数优先（核心回归） ═══════════════
 
 def test_explicit_arg_equal_to_default_wins(tmp_path):
