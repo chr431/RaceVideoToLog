@@ -129,7 +129,10 @@ class SegmentPipeline(FieldExtractor):
                  gray_output: bool = False,
                  yuv_output: bool = False,
                  merge_similar: bool = False,
-                 merge_similar_threshold: float | None = None):
+                 merge_similar_threshold: float | None = None,
+                 dual_pipeline: bool | None = None,
+                 dual_pipeline_chunks: int = 0,
+                 dual_backends: list | None = None):
         # 引擎字段（解码/分段/OCR 识别链）由 FieldExtractor.__init__ 设置
         super().__init__(
             video_path=video_path, roi=roi, frame_start=frame_start,
@@ -141,7 +144,10 @@ class SegmentPipeline(FieldExtractor):
             # GUI review 需要代表帧预览，显式保留（引擎默认 True，这里加固）
             keep_crops=True, keep_frames=True,
             merge_similar=merge_similar,
-            merge_similar_threshold=merge_similar_threshold)
+            merge_similar_threshold=merge_similar_threshold,
+            dual_pipeline=dual_pipeline,
+            dual_pipeline_chunks=dual_pipeline_chunks,
+            dual_backends=dual_backends)
         # ── 速度后处理与速度专属字段（应用层，不在引擎）──
         self._max_speed = max_speed_kmh
         self._max_accel = max_accel_mps2
@@ -445,7 +451,9 @@ class SegmentPipeline(FieldExtractor):
             # 不记录用户请求的 auto 等原始参数（避免 auto 被 CSV 回灌）
             fh.write(f"# ocr_backend={self._ocr_backend_used}\n")
             fh.write(f"# segments={self._n_segments}, corrected={self._n_corr}\n")
-            tstr = ", ".join(f"{k}={v:.2f}" for k, v in self.timing.items())
+            tstr = ", ".join(
+                f"{k}={v:.2f}" if isinstance(v, (int, float))
+                else f"{k}={v}" for k, v in self.timing.items())
             if tstr:
                 fh.write(f"# timing: {tstr}\n")
             # 数据行用 csv.writer（int 帧号/距离/速度/flag，对齐旧格式）

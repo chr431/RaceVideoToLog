@@ -86,6 +86,10 @@ def run_headless(args: argparse.Namespace) -> None:
         # YUV420 解码输出（fork ≥0.7.10 CPU/GPU 都支持）：分段/OCR 只取
         # Y 平面（跨后端统一），代表帧保留 YUV 供最终检查转 RGB 预览
         yuv_output=True,
+        # 单实例双完整流水线并行（实验，默认关闭；需 NVDEC+TRT 均可用）
+        dual_pipeline=getattr(args, 'dual_pipeline', False),
+        dual_pipeline_chunks=getattr(args, 'dual_pipeline_chunks', 0),
+        dual_backends=getattr(args, 'dual_backends', None),
     )
 
     t0 = time.perf_counter()

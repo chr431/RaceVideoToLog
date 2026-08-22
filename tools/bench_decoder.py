@@ -43,7 +43,9 @@ def resolve(video_name: str) -> tuple[str, str]:
 
 def run(video: str, truth: str, backend: str, out_csv: str,
         decode_backend: str = "auto", buffer_size: int = config.DEFAULT_BUFFER_SIZE,
-        no_monitor: bool = False, frames: int | None = None) -> dict:
+        no_monitor: bool = False, frames: int | None = None,
+        dual_pipeline: bool = False, dual_pipeline_chunks: int = 0,
+        dual_backends: list | None = None) -> dict:
     """Run headless pipeline, parse timing + actual backend from output CSV/stdout.
 
     OCR 模型固定 v6_small（v2.14 起移除模型选择）。
@@ -82,6 +84,12 @@ def run(video: str, truth: str, backend: str, out_csv: str,
         cli_args += ["--frame-end", str(f_start + frames)]
     if no_monitor:
         cli_args += ["--no-monitor"]
+    if dual_pipeline:
+        cli_args += ["--dual-pipeline"]
+        if dual_pipeline_chunks:
+            cli_args += ["--dual-pipeline-chunks", str(dual_pipeline_chunks)]
+        if dual_backends:
+            cli_args += ["--dual-backends", *[f"{d},{o}" for d, o in dual_backends]]
     cli_args += ["-o", out_csv]
     child = subprocess.Popen(
         cli_args,
@@ -212,8 +220,17 @@ def main() -> None:
     ap.add_argument("--frames", type=int, default=0,
                     help="截取帧数（相对 frame_start；0 = 全量）——快速迭代测量用，"
                          "提交前跑全量")
+    ap.add_argument("--dual-pipeline", action="store_true", default=False,
+                    help="开启单实例双完整流水线并行")
+    ap.add_argument("--dual-pipeline-chunks", type=int, default=0,
+                    help="双流水线切片数（默认引擎 4）")
+    ap.add_argument("--dual-backends", nargs="*", default=None,
+                    metavar=("DEC,OCR",), help="两条流水线后端，如 cpu,auto cpu,auto")
     ap.add_argument("--json", type=str, default="", help="save record to JSON (default outputs/bench_<video>.json)")
     args = ap.parse_args()
+    if args.dual_backends:
+        args.dual_backends = [
+            tuple(tok.split(",")) for tok in args.dual_backends]
 
     video, truth = resolve(args.video)
     OUT_DIR.mkdir(exist_ok=True)
@@ -226,6 +243,9 @@ def main() -> None:
     record: dict = {"video": args.video, "backend": args.backend,
                     "decode_backend": args.decode_backend,
                     "buffer": args.buffer, "frames_cap": args.frames or None,
+                    "dual_pipeline": args.dual_pipeline,
+                    "dual_pipeline_chunks": args.dual_pipeline_chunks,
+                    "dual_backends": args.dual_backends,
                     "runs": []}
     for run_i in range(args.runs):
         out_csv = str(OUT_DIR / f"bench_{args.video}_r{run_i + 1}.csv")
@@ -233,7 +253,10 @@ def main() -> None:
         print(f"  Running {label}...", end=" ", flush=True)
         t = run(video, truth, args.backend, out_csv,
                 decode_backend=args.decode_backend, buffer_size=args.buffer,
-                no_monitor=args.no_monitor, frames=args.frames or None)
+                no_monitor=args.no_monitor, frames=args.frames or None,
+                dual_pipeline=args.dual_pipeline,
+                dual_pipeline_chunks=args.dual_pipeline_chunks,
+                dual_backends=args.dual_backends)
         acc = accuracy(out_csv, truth) if "frames" in t else None
         if run_i == args.runs - 1:  # warm run -> report + record
             print_row(label, t, acc)

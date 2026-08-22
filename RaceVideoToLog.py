@@ -97,6 +97,14 @@ def main() -> None:
     parser.add_argument("--ocr-backend", choices=config.OCR_BACKEND_KEYS,
         default=config.DEFAULT_OCR_BACKEND,
         help="OCR 推理后端（auto/cpu/tensorrt，默认 auto 自动选 GPU）")
+    parser.add_argument("--dual-pipeline", action="store_true", default=False,
+        help="开启单实例双完整流水线并行（实验；需要 NVDEC 和 TensorRT 均可用，"
+             "否则自动回退单流水线）")
+    parser.add_argument("--dual-pipeline-chunks", type=int, default=0,
+        metavar="N", help="双流水线切片数（默认 4；2~4 实测较优）")
+    parser.add_argument("--dual-backends", nargs="*", default=None,
+        metavar=("DEC,OCR"), help="两条流水线后端组合，形如 "
+             "cpu,auto cpu,auto（不传则主后端+互补后端）")
     parser.add_argument("-o", "--output", type=str)
     parser.add_argument("--frame-start", type=int, metavar="N")
     parser.add_argument("--frame-end", type=int, metavar="N")
@@ -109,6 +117,18 @@ def main() -> None:
     parser.add_argument("--from-csv", type=str, metavar="PATH",
         help="从已有 CSV 文件头导入设置（可被显式参数覆盖）")
     args = parser.parse_args()
+
+    # --dual-backends 形如 "cpu,auto cpu,auto" → [(cpu,auto), (cpu,auto)]
+    if args.dual_backends:
+        _parsed_pairs = []
+        for _tok in args.dual_backends:
+            _parts = _tok.split(",")
+            if len(_parts) != 2:
+                parser.error(
+                    f"--dual-backends 每项必须为 decode,ocr：{_tok!r}")
+            _parsed_pairs.append(
+                (_parts[0].strip(), _parts[1].strip()))
+        args.dual_backends = _parsed_pairs
 
     # ── 从 CSV 导入设置 ──
     _defaults = {a.dest: a.default
