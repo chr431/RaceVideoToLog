@@ -639,6 +639,73 @@ Race 通过 submodule 同步新版引擎，`tools/bench_dual_pipeline.py` 实测
 - 结论：**安全，可作为候选默认合并策略**；不损失准确率，只减少少量重复分段/OCR 调用。
   Race 若启用，建议通过环境变量默认 `RVTOL_TEXT_SEP_MERGE=binary` 并保留用户可关。
 
+## 性能实验轮次：2026-08-24 双流水线"共存变慢"归因探针（test6 AV1）
+
+**背景**：dual_pipeline 在 h264 稳定收益、HEVC/AV1 反而慢于单 auto；内存争用
+假说存疑（GPU 路径 decode 在显存、跨视频双实例仅退 ~10%）。新增受控探针矩阵
+tools/archive/_dual_phase_probe.py（+ _probe_d1_throttle.py 干预实验，数据
+outputs/dual_phase_probe/）：A1 solo 基线 ×3 / B1c 真 dual-on-AV1
+（DUAL_NO_CODEC_FALLBACK=1）/ B2c 关闸关让位 / B3 双 GPU 流水线 / C1 同进程
+静态对半（无竞争机器）/ D1 双进程同视频 / D2 双进程不同视频 / PA 对端纯
+dav1d / 干预 OCR_THREADS=2。全部单跑串行 + psutil/nvidia-smi 随行采样。
+
+**测量口径修正**：① 引擎 dual 默认配对在 AV1 上会先走编码回退——测"真
+dual-on-AV1"必须设 DUAL_NO_CODEC_FALLBACK=1（首轮 B1 因此测的是单流水线）；
+② dual 每管剖面键是 producer:pipeN，直接读 producer 得全零。
+
+### 结论（2026-08-24 管线级 + 2026-08-25 微观探针合并定稿）
+
+中途出现又已被推翻的中间结论（勿再引用）：内存争用说先立后被管线级
+反转再被微观复立（最终形态见第 2 条）、"对端 CPU 饱和→调度延迟"说
+（被分区无效证伪）、GIL/共享 ctx 说（C1≈D1）、竞争机器说（B1c≈B2c）、
+timeBeginPeriod 定时器说（T0 无改善）。以下为定稿：
+
+1. **隔离性判别（0824）**：同进程静态对半 4.53s ≈ 跨进程 4.60s；
+   B1c vs B2c（INFLIGHT=0+SLOW_RATIO=0）无差；seek 合计仅 ~0.4s。
+2. **微观机制（0825 `_ocr_micro_scope.py` 定稿）**：TRT OCR 批调用是
+   访存重路径（批 16 ≈ 1.5MB H2D + 数 MB preds D2H + CTC 读出）。任何
+   有实质内存流量的对端（onnx8/dav1d/纯 memcpy 32~192MB）都使其单批
+   延迟 p50 ×1.4~1.67、p90 ×2.5+；**物理核分区无效**（SMT 映射实测
+   校准后构造真分区）、**BELOW_NORMAL 无效**——受害资源在 uncore
+   （LLC/内存控制器），不在核调度；**限对端线程数是唯一有效旋钮**
+   （8T→2T：×1.54→×1.30）。判别性证据：subject 进程内 L2 驻留 matmul
+   金丝雀在全部对端条件下不掉速（0.98~1.16×，常更快）→ 通用算力无损，
+   受损的只有访存重代码路径；NVDEC decode 同理免疫（ROI D2H 仅 KB 级）。
+   timeBeginPeriod(1) 对独跑双峰尾部（p50 17 / p90 60ms）无效，尾部
+   来源未继续深挖。
+3. **AV1 窗口硬天花板**：NVDEC 纯解码下限 1.85s（1622fps）vs 单流水线
+   2.10s，只剩 ~12%；TRT（~700 段/s）本已藏进解码窗，加 ONNX 助攻无肉
+   可分还带互扰税。**dual 在 AV1 输给单流水线是结构性的（复制了解码、
+   解码不可分：NVDEC 会话互退、dav1d 既慢又是干扰源），不是调度问题**。
+4. **并行加速的正确形态**：单解码器 + 双推理引擎（hybrid OCR），仅在
+   OCR-bound 内容（高段密度/大 ROI 字幕型视频）有收益，且对端必须限
+   线程数；h264 上 chunk-dual 维持 -27~-42%（r≈1 时 α+β>1 成立）。
+
+工具与数据：tools/archive/_dual_phase_probe.py（管线级矩阵）、
+tools/archive/_ocr_micro_scope.py（微观：--peer 子模式/SMT 校准/金丝雀/
+memcopy 剂量）、outputs/dual_phase_probe/ 与 outputs/dual_micro/。
+
+
+### 长区间验证与优化落地（2026-08-25 续，用户 AFK 自主轮）
+
+- **test6 全量（23441f / 8002 段）**：solo auto 14.11~14.18s vs NVDEC
+  纯解码地板 13.87s——余量仅 **1.7%**，生产单 auto 已贴硬件极限；hybrid
+  OCR（TRT+ONNX@2T/4T 经 _run_pipelined(_ocr_engines=[...])）13.91~
+  14.42s 无增益——OCR 本就完全藏于解码窗，AV1 全量同样 decode-bound。
+  3000 帧窗口的 12% 余量主要是启动/排空摩擦，长区间摊薄后消失。
+- **test5 全量**：solo 7.52s、dual 5.93~6.11s（-20%）；test3 dual 3.20s。
+- **引擎落地补丁（_dual_pipeline.py 启动竞态屏障）**：两流水线 OCR
+  引擎初始化完成后才进入头部片/竞争队列（init_barrier，60s 超时兜底，
+  env DUAL_NO_INIT_BARRIER=1 可关）。动机=消除 TRT 反序列化窗口期慢路径
+  多抢片+开局空转；实测 AV1 窗口 dual 上界收窄（3.87→3.74）、中位微降，
+  h264 中性（r≈1 分配本就不敏感）。**回归门禁：pytest 100 passed +
+  准确率漏斗全视频 0 错误（148/148）**。
+- **decord fork 评估结论：无需改动**。诊断定位的两个约束均为硬件边界
+  （NVDEC 固定功能不可二分、uncore 访存争抢），fork 解码层无可动刀处；
+  AV1 帧并行恢复已在 v0.7.11 落地。数据：outputs/long_haul/
+  （_long_haul_probe.py --video X --mode solo|hybrid|dual|floor-gpu，
+  支持 --frames 子集）。
+
 ## 工作流约束
 
 - **git 安全**：绝不删分支（曾因 git init 毁掉整个 .git）；force push /
