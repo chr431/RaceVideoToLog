@@ -6,14 +6,10 @@
 - 段值：每段最清晰代表帧 OCR（sharpness=灰度std），OCR 线程批处理闭合段
 - 段级检测：中值滤波（跟随弯曲，误读=尖峰被中值剔除）
 - 段级纠正：可信锚点插值（锚点距离上界，跳过曲线正确段）
-- 解码：实验开关 HYBRID_DECODE_ENV（RVTOL_HYBRID_DECODE，默认关，不暴露
-  GUI/CLI 参数）开启时，GPU 模式（auto/nvdec）改走 CPU+NVDEC 双解码器
-  并行（CPU 前段 + GPU 后段，见 _open_hybrid_vrs；AV1 特判按纯 GPU）；
-  显式传 decode_backend='cpu+nvdec' 仍为混合（旧版程序化用法）
 
-实现已按职责拆分：segmentation.py（灰度/Otsu/聚类）、hybrid_decode.py
-（混合解码 worker/队列）、seg_correction.py（检测/置信度/DP）。
-本文件保留 SegmentPipeline 编排、串行参考路径与 CSV 输出。
+实现已按职责拆分：segmentation.py（灰度/Otsu/聚类）、seg_correction.py
+（检测/置信度/DP）。本文件保留 SegmentPipeline 编排、串行参考路径与
+CSV 输出。CPU+NVDEC 混合解码已从引擎移除。
 
 注意：_decode_all/_segment/_ocr_segments/_detect/_correct 是串行参考路径
 （仅 tools/ 与测试使用），生产 run() 走 _run_pipelined + _dense_correct。
@@ -33,13 +29,10 @@ from constants import Flag
 from ocr_engine import extract_speed_value
 from video_ocr_engine import FieldExtractor  # 识别链（解码/分段/OCR 文本）由引擎提供
 from segmentation import (  # noqa: F401 — 兼容 tools/tests 的历史导入路径
-    _apply_gamma, _cluster_win3, _gray, _gray_batch, _gray_seg,
-    _gray_seg_batch, _gray_seg_yuv, _gray_seg_yuv_batch, _otsu, _seg_gamma,
+    _cluster_win3, _gray, _gray_batch, _gray_seg,
+    _gray_seg_batch, _gray_seg_yuv, _gray_seg_yuv_batch, _otsu,
 )
 from video_utils import _nv12_luma_full, _preprocess_standard, nv12_to_rgb
-from hybrid_decode import (  # noqa: F401 — 兼容 tests 的历史导入路径
-    HYBRID_BACKEND_ALIASES, _decode_range_worker, _drain_queue, _hybrid_ranges,
-)
 from seg_correction import (
     confidence_scores, correct_segments, dense_correct, detect_segments,
     dp_run, fill_values, local_bandwidth, spike_second_pass,
@@ -88,8 +81,8 @@ class _ProgressGate:
 
 
 def _ocr_batch_size() -> int:
-    """OCR 批大小（段数）：RVTOL_OCR_BATCH 实验钩子 > config.OCR_BATCH_SIZE。"""
-    _env = _os.environ.get("RVTOL_OCR_BATCH")
+    """OCR 批大小（段数）：OCR_BATCH 实验钩子 > config.OCR_BATCH_SIZE。"""
+    _env = _os.environ.get("OCR_BATCH")
     if _env and _env.isdigit():
         return max(1, int(_env))
     return config.OCR_BATCH_SIZE
@@ -128,10 +121,10 @@ class SegmentPipeline(FieldExtractor):
                  progress_cb=None, cancel_check=None,
                  gray_output: bool = False,
                  yuv_output: bool = False,
-                 merge_similar: bool = False,
+                 merge_similar: bool = True,
                  merge_similar_threshold: float | None = None,
+                 merge_text_sep: str | None = None,
                  dual_pipeline: bool | None = None,
-                 dual_pipeline_chunks: int = 0,
                  dual_backends: list | None = None):
         # 引擎字段（解码/分段/OCR 识别链）由 FieldExtractor.__init__ 设置
         super().__init__(
@@ -145,9 +138,9 @@ class SegmentPipeline(FieldExtractor):
             keep_crops=True, keep_frames=True,
             merge_similar=merge_similar,
             merge_similar_threshold=merge_similar_threshold,
+            merge_text_sep=merge_text_sep,
             dual_pipeline=dual_pipeline,
-            dual_pipeline_chunks=dual_pipeline_chunks,
-            dual_backends=dual_backends)
+            dual_backends=dual_backends)  # kfe 为引擎唯一分片方法，无 chunks 参数
         # ── 速度后处理与速度专属字段（应用层，不在引擎）──
         self._max_speed = max_speed_kmh
         self._max_accel = max_accel_mps2

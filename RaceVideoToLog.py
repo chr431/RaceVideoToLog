@@ -91,17 +91,13 @@ def main() -> None:
         help="强制横向宽高比（0=不启用；>0 时宽度=48×此值）。扁宽字体设 1.5-2.0 可改善识别")
     parser.add_argument("--decode-backend", choices=config.DECODE_BACKEND_KEYS,
         default=config.DEFAULT_DECODE_BACKEND,
-        help="解码后端（auto/cpu/nvdec，默认 auto 自动选 GPU；实验性 "
-             "CPU+NVDEC 混合解码可用环境变量 "
-             + config.HYBRID_DECODE_ENV + "=1 开启）")
+        help="解码后端（auto/cpu/nvdec，默认 auto 自动选 GPU）")
     parser.add_argument("--ocr-backend", choices=config.OCR_BACKEND_KEYS,
         default=config.DEFAULT_OCR_BACKEND,
         help="OCR 推理后端（auto/cpu/tensorrt，默认 auto 自动选 GPU）")
     parser.add_argument("--dual-pipeline", action="store_true", default=False,
-        help="开启单实例双完整流水线并行（实验；需要 NVDEC 和 TensorRT 均可用，"
+        help="开启单实例双完整流水线并行（kfe 分片；需要 NVDEC 和 TensorRT 均可用，"
              "否则自动回退单流水线）")
-    parser.add_argument("--dual-pipeline-chunks", type=int, default=0,
-        metavar="N", help="双流水线切片数（默认 4；2~4 实测较优）")
     parser.add_argument("--dual-backends", nargs="*", default=None,
         metavar=("DEC,OCR"), help="两条流水线后端组合，形如 "
              "cpu,auto cpu,auto（不传则主后端+互补后端）")

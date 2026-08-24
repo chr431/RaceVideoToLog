@@ -62,7 +62,7 @@ def run_combo(video: str, ocr: str, dec: str, runs: int, frames: int,
     """子进程跑 bench_decoder（单跑、无监控），返回 timing + 指纹。"""
     env = dict(os.environ)
     env["PYTHONIOENCODING"] = "utf-8"
-    env.pop("RVTOL_OCR_BATCH", None)  # 基线口径：生产默认 B=16
+    env.pop("OCR_BATCH", None)  # 基线口径：生产默认 B=16
     json_path = PROJECT / "outputs" / f"_baseline_{video}_{ocr}_{dec}_{tag}.json"
     cmd = [sys.executable, "tools/bench_decoder.py", "--video", video,
            "--backend", ocr, "--decode-backend", dec, "--runs", str(runs),

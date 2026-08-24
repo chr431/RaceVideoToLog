@@ -44,8 +44,7 @@ def run_funnel(videos, tol: float = 1.0, decode_backend: str = "auto",
     """对每个视频跑生产管线并统计漏斗指标。
 
     返回 {"videos": {name: {metric: value}}, "total": {metric: value}}。
-    decode_backend: decord 解码后端（门禁默认 auto 不变；实验性混合
-    解码对照用 env RVTOL_HYBRID_DECODE=1）。
+    decode_backend: decord 解码后端（门禁默认 auto 不变）。
     merge_similar: 是否启用引擎相似段合并（实验对比用，默认关闭）。
     """
     per_video: dict = {}
@@ -165,8 +164,7 @@ def main() -> None:
     ap.add_argument("--tol", type=float, default=1.0)
     ap.add_argument("--decode-backend", default="auto",
                     choices=config.DECODE_BACKEND_KEYS,
-                    help="decord 解码后端（auto/cpu/nvdec；门禁默认 auto 不变；"
-                         "实验性混合用 env RVTOL_HYBRID_DECODE=1）")
+                    help="decord 解码后端（auto/cpu/nvdec；门禁默认 auto 不变）")
     ap.add_argument("--merge-similar", action="store_true",
                     help="启用引擎相似段合并（实验对比，默认关闭）")
     ap.add_argument("--merge-similar-threshold", type=float, default=None,

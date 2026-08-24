@@ -10,7 +10,7 @@
 漏斗（tools/accuracy_breakdown.py）确认 5 错误基线无回归，再用
 make_regression_fixtures.py 重新生成本夹具与 seg_series 夹具。
 
-确定性：onnxruntime CPU + RVTOL_OCR_THREADS=1（单线程推理，跨机器
+确定性：onnxruntime CPU + OCR_THREADS=1（单线程推理，跨机器
 逐位一致）。若 onnxruntime 版本升级导致浮点内核差异翻转某案例读数，
 优先考虑在 pyproject 固定 onnxruntime 版本。
 """
@@ -38,7 +38,7 @@ def _cases():
 @pytest.fixture(scope="module")
 def engine():
     # 单线程推理：确定性（CI 与本机逐位一致）
-    os.environ.setdefault("RVTOL_OCR_THREADS", "1")
+    os.environ.setdefault("OCR_THREADS", "1")
     from ocr_native import OcrEngine
     return OcrEngine("v6_small", "onnxruntime", fill_width=224)
 

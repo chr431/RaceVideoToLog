@@ -33,6 +33,7 @@ Thumbs.db
 
 # Self-built decord binaries
 _decord_build/
+_decord_build.bak*/
 
 # Large bundles (not needed after DML removal)
 ort_dml_bundle/

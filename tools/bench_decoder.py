@@ -44,7 +44,7 @@ def resolve(video_name: str) -> tuple[str, str]:
 def run(video: str, truth: str, backend: str, out_csv: str,
         decode_backend: str = "auto", buffer_size: int = config.DEFAULT_BUFFER_SIZE,
         no_monitor: bool = False, frames: int | None = None,
-        dual_pipeline: bool = False, dual_pipeline_chunks: int = 0,
+        dual_pipeline: bool = False,
         dual_backends: list | None = None) -> dict:
     """Run headless pipeline, parse timing + actual backend from output CSV/stdout.
 
@@ -86,8 +86,6 @@ def run(video: str, truth: str, backend: str, out_csv: str,
         cli_args += ["--no-monitor"]
     if dual_pipeline:
         cli_args += ["--dual-pipeline"]
-        if dual_pipeline_chunks:
-            cli_args += ["--dual-pipeline-chunks", str(dual_pipeline_chunks)]
         if dual_backends:
             cli_args += ["--dual-backends", *[f"{d},{o}" for d, o in dual_backends]]
     cli_args += ["-o", out_csv]
@@ -209,9 +207,7 @@ def main() -> None:
     ap.add_argument("--backend", default="tensorrt", choices=["tensorrt", "cpu", "auto"])
     ap.add_argument("--decode-backend", default="auto",
                     choices=config.DECODE_BACKEND_KEYS,
-                    help="decord 解码后端 (auto/cpu/nvdec；实验性混合："
-                         "设 RVTOL_HYBRID_DECODE=1 后 auto/nvdec 内部走"
-                         " CPU+NVDEC 并行)")
+                    help="decord 解码后端 (auto/cpu/nvdec)")
     ap.add_argument("--buffer", type=int, default=config.DEFAULT_BUFFER_SIZE,
                     help="流水线队列缓冲（段数，显式传入防 from-csv 旧头 buffer=16 覆盖）")
     ap.add_argument("--no-monitor", action="store_true",
@@ -221,9 +217,7 @@ def main() -> None:
                     help="截取帧数（相对 frame_start；0 = 全量）——快速迭代测量用，"
                          "提交前跑全量")
     ap.add_argument("--dual-pipeline", action="store_true", default=False,
-                    help="开启单实例双完整流水线并行")
-    ap.add_argument("--dual-pipeline-chunks", type=int, default=0,
-                    help="双流水线切片数（默认引擎 4）")
+                    help="开启单实例双完整流水线并行（kfe 分片）")
     ap.add_argument("--dual-backends", nargs="*", default=None,
                     metavar=("DEC,OCR",), help="两条流水线后端，如 cpu,auto cpu,auto")
     ap.add_argument("--json", type=str, default="", help="save record to JSON (default outputs/bench_<video>.json)")
@@ -244,7 +238,6 @@ def main() -> None:
                     "decode_backend": args.decode_backend,
                     "buffer": args.buffer, "frames_cap": args.frames or None,
                     "dual_pipeline": args.dual_pipeline,
-                    "dual_pipeline_chunks": args.dual_pipeline_chunks,
                     "dual_backends": args.dual_backends,
                     "runs": []}
     for run_i in range(args.runs):
@@ -255,7 +248,6 @@ def main() -> None:
                 decode_backend=args.decode_backend, buffer_size=args.buffer,
                 no_monitor=args.no_monitor, frames=args.frames or None,
                 dual_pipeline=args.dual_pipeline,
-                dual_pipeline_chunks=args.dual_pipeline_chunks,
                 dual_backends=args.dual_backends)
         acc = accuracy(out_csv, truth) if "frames" in t else None
         if run_i == args.runs - 1:  # warm run -> report + record

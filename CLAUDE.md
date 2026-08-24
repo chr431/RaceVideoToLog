@@ -585,9 +585,8 @@ GPU 干活，与核心数无关 → auto 决策无需按核心数调整。
 
 引擎新增“单实例双完整流水线”后，在 Race 作了跨编码实测。Race 侧新增：
 - `SegmentPipeline` / headless CLI 参数：`--dual-pipeline` /
-  `--dual-pipeline-chunks` / `--dual-backends`；
-- `tools/bench_dual_pipeline.py`：单跑、串行，输出每条流水线的
-  `parallel_pipe1/2_chunks` / `_s` / `_backend` / `_ocr` 诊断。
+  `--dual-backends`（当时还有 `--dual-pipeline-chunks`，引擎七轮 kfe 转正后
+  已移除——kfe 为唯一分片方法，片数不再可指定）；
 
 ### 1500 帧窗口（本机 7945HX + RTX 4060，auto+auto，单跑）
 Plan B（持久 OCR 会话跨片流式）后复测：
@@ -615,9 +614,23 @@ Plan B（持久 OCR 会话跨片流式）后复测：
 - 若要暴露给用户：保持默认关、用户显式开启；切片数仍建议 2~4，8 片在部分
   视频会因 seek/边界处理变慢。
 
+### 新版 API 适配后复测（2026-08，3000 帧窗口）
+
+引擎补齐 `seek_accurate` 并默认混配 `(auto,auto) ∥ (cpu,cpu)` 后，
+Race 通过 submodule 同步新版引擎，`tools/bench_dual_pipeline.py` 实测：
+
+| 视频 | 编码 | 单 auto | 默认双 2片 | Δ |
+|---|---|---:|---:|---:|
+| test3 | h264 | 3.48s | 2.82s | **-19%** |
+| test5 | h264 | 3.24s | 2.45s | **-24%** |
+| test6 | AV1 | 2.07s | 2.10s | +1%（按编码回退单流水线） |
+
+结论：h264 测试视频上 DUAL_PIPELINE 有实际收益；AV1 仍按编码回退，
+不作为双流水线目标场景。
+
 ## 相似帧合并 + binary 分离评估（2026-08）
 
-- 方法：`merge_similar=True` + `RVTOL_TEXT_SEP_MERGE=binary`（仅合并使用分离图，OCR 输入不变）。
+- 方法：`merge_similar=True` + `TEXT_SEP_MERGE=binary`（仅合并使用分离图，OCR 输入不变）。
 - 全量 Race 5 视频：
   - 默认：总分段 14534，最终错误 0
   - merge+binary：总分段 14305（-229，约 -1.6%），最终错误仍 0

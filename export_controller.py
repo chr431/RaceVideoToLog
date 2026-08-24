@@ -73,8 +73,7 @@ class ExportControllerMixin:
                 "decord/cpu": 1, "decord/gpu": 2,
             }),
             # CSV 的 ocr_backend 记录实际引擎：onnxruntime → CPU；
-            # tensorrt+onnxruntime 是实验混合（env 开关），GUI 无对应
-            # 项，归一到 auto（开启 RVTOL_HYBRID_OCR 时 auto 可重现）
+            # tensorrt+onnxruntime 是历史实验混合，GUI 无对应项，归一到 auto
             "ocr_backend": (s["ocr_backend_combo"], {
                 "auto": 0, "cpu": 1, "onnxruntime": 1,
                 "tensorrt": 2, "tensorrt+onnxruntime": 0,

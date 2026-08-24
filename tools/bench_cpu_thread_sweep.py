@@ -18,18 +18,18 @@ from tools.bench_decoder import resolve, run, print_row  # noqa: E402
 
 # (label, env_overrides)：None 值 = 删除该 env（回到默认）
 CONFIGS = [
-    ("ocr8_dcd4(现状)",  {"RVTOL_OCR_THREADS": "8"}),          # 8 OCR + 4 FFmpeg
-    ("ocr10_dcd4",      {"RVTOL_OCR_THREADS": "10"}),
-    ("ocr12_dcd4",      {"RVTOL_OCR_THREADS": "12"}),
-    ("ocr16_dcd4",      {"RVTOL_OCR_THREADS": "16"}),
-    ("ocr20_dcd4",      {"RVTOL_OCR_THREADS": "20"}),
-    ("ocr24_dcd4",      {"RVTOL_OCR_THREADS": "24"}),
-    ("ocr32_dcd4",      {"RVTOL_OCR_THREADS": "32"}),
-    ("ocr8_dcd0(auto)", {"RVTOL_OCR_THREADS": "8", "DECORD_FFMPEG_THREAD_COUNT": "0"}),
-    ("ocr8_dcd8",       {"RVTOL_OCR_THREADS": "8", "DECORD_FFMPEG_THREAD_COUNT": "8"}),
-    ("ocr12_dcd8",      {"RVTOL_OCR_THREADS": "12", "DECORD_FFMPEG_THREAD_COUNT": "8"}),
-    ("ocr16_dcd8",      {"RVTOL_OCR_THREADS": "16", "DECORD_FFMPEG_THREAD_COUNT": "8"}),
-    ("ocr12_dcd12",     {"RVTOL_OCR_THREADS": "12", "DECORD_FFMPEG_THREAD_COUNT": "12"}),
+    ("ocr8_dcd4(现状)",  {"OCR_THREADS": "8"}),          # 8 OCR + 4 FFmpeg
+    ("ocr10_dcd4",      {"OCR_THREADS": "10"}),
+    ("ocr12_dcd4",      {"OCR_THREADS": "12"}),
+    ("ocr16_dcd4",      {"OCR_THREADS": "16"}),
+    ("ocr20_dcd4",      {"OCR_THREADS": "20"}),
+    ("ocr24_dcd4",      {"OCR_THREADS": "24"}),
+    ("ocr32_dcd4",      {"OCR_THREADS": "32"}),
+    ("ocr8_dcd0(auto)", {"OCR_THREADS": "8", "DECORD_FFMPEG_THREAD_COUNT": "0"}),
+    ("ocr8_dcd8",       {"OCR_THREADS": "8", "DECORD_FFMPEG_THREAD_COUNT": "8"}),
+    ("ocr12_dcd8",      {"OCR_THREADS": "12", "DECORD_FFMPEG_THREAD_COUNT": "8"}),
+    ("ocr16_dcd8",      {"OCR_THREADS": "16", "DECORD_FFMPEG_THREAD_COUNT": "8"}),
+    ("ocr12_dcd12",     {"OCR_THREADS": "12", "DECORD_FFMPEG_THREAD_COUNT": "12"}),
 ]
 
 

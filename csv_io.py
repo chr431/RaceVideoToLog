@@ -35,8 +35,7 @@ _CSV_FIELD_MAP: dict[str, tuple[str, str]] = {
 # auto/cpu/tensorrt。导入时统一归一化到可请求值：
 #   onnxruntime → cpu（实际跑 ONNX 即 CPU 后端）
 #   tensorrt    → tensorrt
-#   tensorrt+onnxruntime → auto（实验混合仅由 RVTOL_HYBRID_OCR 开启，
-#                           auto 在开启该环境变量时可重现混合）
+#   tensorrt+onnxruntime → auto（历史实验混合，保留旧 CSV 兼容）
 _OCR_BACKEND_IMPORT_MAP: dict[str, str] = {
     "auto": "auto",
     "cpu": "cpu",
