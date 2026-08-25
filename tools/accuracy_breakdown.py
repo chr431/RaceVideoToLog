@@ -164,7 +164,7 @@ def main() -> None:
     ap.add_argument("--tol", type=float, default=1.0)
     ap.add_argument("--decode-backend", default="auto",
                     choices=config.DECODE_BACKEND_KEYS,
-                    help="decord 解码后端（auto/cpu/nvdec；门禁默认 auto 不变）")
+                    help="decord 解码后端（auto/cpu/nvdec/hybrid；门禁默认 auto 不变）")
     ap.add_argument("--merge-similar", action="store_true",
                     help="启用引擎相似段合并（实验对比，默认关闭）")
     ap.add_argument("--merge-similar-threshold", type=float, default=None,

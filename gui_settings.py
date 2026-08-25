@@ -25,7 +25,7 @@ def build_settings_panel(parent) -> dict:
         format_ms, format_kmh, format_mph  -- RadioButton (speed format)
         max_speed_edit, max_accel_edit      -- LineEdit
         buffer_spin, fill_width_spin  -- CompactSpinBox; force_aspect_edit -- LineEdit
-        backend_combo                        -- ComboBox (解码后端 auto/cpu/nvdec)
+        backend_combo                        -- ComboBox (解码后端 auto/cpu/nvdec/hybrid)
         ocr_backend_combo                    -- ComboBox (OCR 后端 auto/cpu/tensorrt)
         log_level_combo                     -- ComboBox
         monitor_checkbox                    -- CheckBox (资源监控开关)
@@ -87,7 +87,7 @@ def build_settings_panel(parent) -> dict:
     widgets["backend_combo"].addItems(
         [config.DECODE_BACKEND_LABELS[k] for k in config.DECODE_BACKEND_KEYS])
     widgets["backend_combo"].setCurrentIndex(0)
-    widgets["backend_combo"].setFixedWidth(115)
+    widgets["backend_combo"].setFixedWidth(170)
     pl.addWidget(widgets["backend_combo"], 3, 1)
     pl.addWidget(BodyLabel("OCR 后端"), 3, 2)
     widgets["ocr_backend_combo"] = ComboBox()

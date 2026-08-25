@@ -13,6 +13,25 @@ import config
 from gui_export import ExportThread
 
 
+# CSV 头的 backend 写的是实际解码器标签（decord/CPU、decord/GPU、
+# decord/GPU+CPU-hybrid），导入 GUI 时归一化到 DECODE_BACKEND_KEYS 下标。
+_DECODE_BACKEND_ALIASES: dict[str, str] = {
+    "auto": "auto",
+    "cpu": "cpu", "decord/cpu": "cpu",
+    "nvdec": "nvdec", "gpu": "nvdec", "decord/gpu": "nvdec",
+    "hybrid": "hybrid", "gpu+cpu-hybrid": "hybrid",
+    "decord/gpu+cpu-hybrid": "hybrid",
+}
+
+
+def _decode_backend_combo_index(raw: str) -> int:
+    """CSV backend 标签 → 解码下拉框下标（未知标签回退 auto）。"""
+    key = _DECODE_BACKEND_ALIASES.get(str(raw).strip().lower(), "auto")
+    if key not in config.DECODE_BACKEND_KEYS:
+        return 0
+    return config.DECODE_BACKEND_KEYS.index(key)
+
+
 class ExportControllerMixin:
     """依赖宿主：video_path/metadata/_settings/_export_thread/_pipeline 等状态。"""
 
@@ -66,12 +85,9 @@ class ExportControllerMixin:
             if val is not None:
                 widget.setValue(val)
 
-        # ── 下拉框字段：CSV backend 写的是 decord/CPU|GPU 标签，兼容旧头 ──
+        # ── 下拉框字段：CSV backend 写的是 decord/CPU|GPU|GPU+CPU-hybrid 标签，兼容旧头 ──
         _combo_map = {
-            "backend": (s["backend_combo"], {
-                "auto": 0, "cpu": 1, "nvdec": 2,
-                "decord/cpu": 1, "decord/gpu": 2,
-            }),
+            "backend": (s["backend_combo"], _decode_backend_combo_index),
             # CSV 的 ocr_backend 记录实际引擎：onnxruntime → CPU；
             # tensorrt+onnxruntime 是历史实验混合，GUI 无对应项，归一到 auto
             "ocr_backend": (s["ocr_backend_combo"], {
@@ -82,7 +98,10 @@ class ExportControllerMixin:
         for key, (combo, mapping) in _combo_map.items():
             val = parse_csv_setting(key, settings.get(key, ""))
             if val is not None:
-                idx = mapping.get(str(val).lower(), 0)
+                if callable(mapping):
+                    idx = mapping(val)
+                else:
+                    idx = mapping.get(str(val).lower(), 0)
                 combo.setCurrentIndex(idx)
         if "format" in settings:
             fmt = settings["format"].lower()

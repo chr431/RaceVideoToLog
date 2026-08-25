@@ -3,6 +3,32 @@
 从赛车视频 OCR 提取速度，输出时间-速度-距离 CSV。Python 3.11+，PySide6 GUI +
 CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
 
+## 引擎重大重构适配（submodule e8b2637，2026-08）
+
+- **单实例双完整流水线已从引擎移除**：`FieldExtractor` 不再接受
+  `dual_pipeline / dual_backends`；Race 侧 `--dual-pipeline / --dual-backends`
+  CLI 参数、`tools/bench_dual_pipeline.py`（已归档）、`tools/detect_eval.py --dual`
+  一并移除。历史实验结论保留在 `tools/archive/` 与本文下方各节，仅作参考。
+- **hybrid 转正为一等解码后端**：`decode_backend="hybrid"`（`engine_config.
+  DECODE_BACKEND_KEYS` 含 hybrid），GUI/CLI 解码选择均已暴露。引擎
+  `hybrid_decode.HybridDecoder`（kfe 分片 + CPU∥NVDEC 双生产者竞争）由
+  FieldExtractor 自动激活：需 NVDEC 可用、stride==1、未开 GPU 全驻留管线、
+  **编码非 AV1**（AV1 自动回退纯 GPU）；初始化失败回退纯 GPU。
+  旧 env `RVTOL_HYBRID_DECODE` 已删除，无环境变量入口；新 env：
+  `HYBRID_CPU_THREADS`（0=核数//2）、`HYBRID_MAX_CHUNKS`（默认 16）。
+- **速度域常量回归应用侧**：引擎 engine_config 重构后不再携带速度/纠错常量
+  （SEG_* / SEG_CONF_* / SEG_DP_* / SEG_SPIKE_* / MPS_TO_KMH / SOURCE_TO_KMH /
+  DEFAULT_SPEED_FORMAT / DEFAULT_MAX_SPEED / DEFAULT_MAX_ACCEL 等），
+  已移回 `config.py`（应用侧单一事实源）。
+- **双 ONNX 实例开关改名**：`DUAL_ONNX` → `OCR_INSTANCES`
+  （`OCR_INSTANCES_MIN_THREADS=8`）。
+- 测量工具：`tools/bench_hybrid.py`（auto vs hybrid 端到端 + AV1 回退校验）。
+- **Race 全量端到端实测（2026-08，本机 auto+auto，单跑 warm）**：
+  test5 h264 **-31%**、test3 h264 **-17%**（解码受限场景有效）；
+  test2 h264 **+24%**、test HEVC **+21%**（NVDEC 已足够快，混合反成开销）；
+  test6 AV1 自动回退纯 GPU、持平（+0.0%）。**hybrid 不是全编码普适加速，
+  生产默认仍保持 auto**，hybrid 作为用户显式选择的解码后端保留。
+
 ## 引擎独立仓库（v2.16 拆仓完成）
 
 - **解码+OCR 识别链拆为独立仓库 [chr431/video_ocr_engine](https://github.com/chr431/video_ocr_engine)**
@@ -23,7 +49,7 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
   ③ pytest 根 `conftest.py`（本地/CI）。
   frozen（PyInstaller）下引擎已由 spec 的 pathex + hiddenimports 打包进 EXE，
   `ensure_engine_path()` 检测 `sys.frozen` 直接跳过。
-- **版本解耦**：引擎独立版本线（`engine_config.__version__ = "0.1.x"`）；应用版本
+- **版本解耦**：引擎独立版本线（`engine_config.__version__ = "0.3.x"`）；应用版本
   `config.__version__ = "2.15.x"` 仍是本仓库单一事实源 —— `tools/version.py` 已移除
   engine_config 引用（不再跨仓双重校验）。
 - **模型资产只随引擎仓库**：本仓库 `assets/ocr_models` 已删除。打包时 `RaceVideoToLog.spec`
@@ -81,17 +107,15 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
   - 独立验证：`tools/bench_engine_smoke.py`（600 帧→254 段→纯文本输出；
     断言引擎模块无 extract_speed_value）。冒烟通过、基线指纹 e43369f7… 一致、
     漏斗 0 错误。
-- **config 拆分**：管线引擎域常量（解码/OCR/分段/纠错/DP/尖峰）迁到
-  `engine_config.py`（单一事实源，含完整注释）；`config.py` 保留 GUI/应用域
-  （颜色/窗口/图表/monitor/日志）并 `from engine_config import *` 聚合导出，
-  故 `import config; config.SEG_*` 全兼容。`tools/version.py` 双校验两处
-  `__version__` 一致性。
-- **第三步拆仓路径**：引擎仓库 = `video_ocr_engine/` + `engine_config.py` +
+- **config 拆分**：引擎域常量（解码/OCR/分段/合并/采样）单一事实源在
+  `engine_config.py`；速度/纠错/DP/尖峰/单位常量已在引擎重构后回归
+  `config.py`（应用侧单一事实源）。`config.py` 仍 `from engine_config import *`
+  聚合导出，故 `import config; config.SEG_*` 全兼容。
+- **第三步拆仓路径（已完成）**：引擎仓库 = `video_ocr_engine/` + `engine_config.py` +
   `segmentation.py` + `hybrid_decode.py` + `ocr_native.py` + `ocr_trt.py` +
-  `ocr_engine.py` + `video_utils.py`（引擎依赖侧）——但引擎仍 `import config`
-  （聚合层），拆仓时改 `import engine_config` 验证依赖反转；`_run_pipelined`
-  再去掉 extract_speed_value（速度解析完全移到应用）。本仓库剩余 = GUI +
-  速度后处理（seg_correction/ocr_text/segment_flow 的 14 方法）。
+  `video_utils.py`（引擎依赖侧），引擎已不再 `import config`
+  （依赖反转完成）；`_run_pipelined` 只输出文本（速度解析完全移到应用）。
+  本仓库保留 = GUI + 速度后处理（seg_correction/ocr_text/segment_flow）。
 
 ## 回归门禁（改动后必跑）
 
@@ -126,7 +150,7 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
   `test_correction_chain.py`（conf/DP/build_rows/预处理）、`test_csv_io.py`、
   `test_from_csv.py`（from-csv 显式参数优先语义）、`test_packaging.py`
   （py-modules 完整性）、`test_seg_series.py`、`test_ocr_fixtures.py`、
-  `test_hybrid_decoder.py`（cpu+nvdec 识别/切分/解码 worker）、
+  `test_hybrid_backend.py`（hybrid 选项/CSV 映射回归）、
   `test_decoder_integration.py`（缺 decord 显式跳过）。
 - CI（.github/workflows/ci.yml）：test job 跑全量 pytest；decoder-smoke job
   从 chr431/decord release v0.7.11 下载 fork 真实跑解码集成测试（下载失败
@@ -341,7 +365,7 @@ GPU 干活，与核心数无关 → auto 决策无需按核心数调整。
   master 是滚动开发版不稳定 → 保持 ff8.1（n8.1.2-20260814）。
   decord build-ff9 目录保留作参考。
 
-### 双 ONNX 实例 OCR（v2.16 落地，RVTOL_DUAL_ONNX=0 关闭）
+### 双 ONNX 实例 OCR（v2.16 落地，现 env 名为 OCR_INSTANCES=0 关闭）
 - onnxruntime 单实例 intra-op 线程池扩展亚线性（16 线程仅 4.2×，内部
   同步开销）；两个独立实例（各 ocrT//2 线程）并发取批：纯吞吐 313→355
   段/s（+15-18%）。端到端：8 核 test5 CPU+ONNX 8.90→7.30s（-18%，
@@ -423,22 +447,11 @@ GPU 干活，与核心数无关 → auto 决策无需按核心数调整。
   CPU+NVDEC+TRT 7.0s / CPU+NVDEC+CPU 8.1s**（v2.15 新增混合后端）。
   生产者各 Python/numpy 子步骤合计仅 ~4%（GPU ~1000fps / CPU ~1260fps
   ROI-only）。DLL 在 _decord_build + site-packages 两处
-- **CPU+NVDEC 混合解码（实验开关，v2.15，_open_hybrid_vrs）**：不暴露
-  GUI/CLI 参数；环境变量 RVTOL_HYBRID_DECODE=1（config.HYBRID_DECODE_ENV，
-  默认关）开启后，GPU 模式（auto/nvdec）内部改走混合；显式传
-  decode_backend='cpu+nvdec'/'hybrid'（旧程序化用法）恒为混合。CPU
-  reader 覆盖前 10%（calib 后，保守分法）、GPU reader 覆盖后 90%
-  （独立 seek_accurate 到段首），两 worker 线程并行填有界队列、消费者
-  按序合并（帧序与单解码器一致）。**v0.7.8 起两后端灰度逐位一致**
-  （GPU 也直出 Y，range 语义同 CPU swscale）→ 接缝无跨后端差异，
-  auto 与混合门禁结果逐位相同（11 错）。切分比例 config.HYBRID_CPU_SPLIT
-  =0.10（env RVTOL_HYBRID_SPLIT）。**AV1 特判**：CPU 软解 AV1 极耗核且
-  与 GPU 段并发竞争拖慢 GPU 吞吐（混合 19.1s vs 纯 GPU 14.4s）→ 不
-  打开 CPU reader、按纯 GPU 分支走（_open_hybrid_vrs 返回 (vr_gpu,
-  vr_gpu)，调用方见 vr_gpu is vr 置 hybrid=False；_hybrid_split 返回
-  0 兜底）。实测（venv+TRT，decode 阶段）：HEVC 2.5 vs GPU 2.6s、
-  h264 3.1 vs 3.3s / 7.2 vs 7.7s、AV1 14.4 vs 14.1s —— 三种编码均
-  不弱于纯 GPU。GPU 不可用自动回退纯 CPU。
+- **CPU+NVDEC 混合解码（引擎一等后端 `decode_backend="hybrid"`，v2.15 的
+  `_open_hybrid_vrs` 实验已由引擎移除并重写）**：`hybrid_decode.HybridDecoder`
+  （kfe 分片 + CPU∥NVDEC 双生产者竞争）是唯一实现；仅显式参数选择，无 env
+  入口；AV1 自动回退纯 GPU；`HYBRID_CPU_THREADS`（0=核数//2）、
+  `HYBRID_MAX_CHUNKS`（默认 16）可调。详见文首「引擎重大重构适配」。
 - **OCR 混合（实验开关，v2.15，RVTOL_HYBRID_OCR=1，config.HYBRID_OCR_ENV，
   默认关）**：TRT（GPU）+ onnxruntime（CPU）双引擎并发处理段批。与解码
   不同，OCR 无状态约束——结果按段索引聚合、批顺序无关 → 实现只需共享

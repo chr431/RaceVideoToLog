@@ -1,16 +1,8 @@
-"""Race 引擎级双流水线 benchmark：单流水线 vs 单实例 DUAL_PIPELINE（kfe 分片）。
+"""Race 引擎级双流水线 benchmark（已归档，2026-08）。
 
-引擎七轮后 kfe（每关键帧一片）是双流水线唯一分片方法，旧的等分 chunks
-旋钮（dual_pipeline_chunks / DUAL_PIPELINE_CHUNKS）已移除——本工具不再扫
-切片数，直接对比 kfe 默认（DUAL_KEYFRAME_EVERY_MIN_GAP=16 /
-DUAL_KEYFRAME_EVERY_MAX_CHUNKS=8 上限）下的单/双流水线墙钟与两条路径
-各自完成的片数。
-
-用法：
-    python tools/bench_dual_pipeline.py --videos test3 test5 test6 --frames 0
-
-输出每个配置的墙钟、decode/ocr 时间，以及双流水线每条路径完成的片数和
-墙钟（parallel_pipe1/pipe2）。所有测量单跑、串行，避免 CPU/GPU 互抢。
+引擎 v0.3（submodule e8b2637）已移除单实例双完整流水线
+（dual_pipeline / dual_backends），本工具不再可用；历史参考保留于此。
+现役 hybrid 对比工具见 tools/bench_hybrid.py（auto vs hybrid）。
 """
 from __future__ import annotations
 
@@ -20,7 +12,7 @@ import sys
 import time
 from pathlib import Path
 
-PROJECT = Path(__file__).resolve().parent.parent
+PROJECT = Path(__file__).resolve().parent.parent.parent
 VIDEO_DIR = Path("D:/Videos/racelog_test")
 OUT_DIR = PROJECT / "outputs" / "dual_pipeline_bench"
 
@@ -49,7 +41,7 @@ def run_one(video: str, dual: bool, backends: list | None, frames: int,
         decode_backend=decode_backend,
         ocr_backend=ocr_backend,
         yuv_output=True,
-        dual_pipeline=dual,
+        dual_pipeline=dual,          # 引擎已移除该参数，仅历史参考
         dual_backends=backends,
     )
     out = OUT_DIR / f"{video}_{label}.csv"

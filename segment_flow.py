@@ -9,7 +9,7 @@
 
 实现已按职责拆分：segmentation.py（灰度/Otsu/聚类）、seg_correction.py
 （检测/置信度/DP）。本文件保留 SegmentPipeline 编排、串行参考路径与
-CSV 输出。CPU+NVDEC 混合解码已从引擎移除。
+CSV 输出。CPU+NVDEC 混合解码为引擎一等后端（decode_backend='hybrid'）。
 
 注意：_decode_all/_segment/_ocr_segments/_detect/_correct 是串行参考路径
 （仅 tools/ 与测试使用），生产 run() 走 _run_pipelined + _dense_correct。
@@ -123,9 +123,7 @@ class SegmentPipeline(FieldExtractor):
                  yuv_output: bool = False,
                  merge_similar: bool = True,
                  merge_similar_threshold: float | None = None,
-                 merge_text_sep: str | None = None,
-                 dual_pipeline: bool | None = None,
-                 dual_backends: list | None = None):
+                 merge_text_sep: str | None = None):
         # 引擎字段（解码/分段/OCR 识别链）由 FieldExtractor.__init__ 设置
         super().__init__(
             video_path=video_path, roi=roi, frame_start=frame_start,
@@ -138,10 +136,10 @@ class SegmentPipeline(FieldExtractor):
             keep_crops=True, keep_frames=True,
             merge_similar=merge_similar,
             merge_similar_threshold=merge_similar_threshold,
-            merge_text_sep=merge_text_sep,
-            dual_pipeline=dual_pipeline,
-            dual_backends=dual_backends)  # kfe 为引擎唯一分片方法，无 chunks 参数
+            merge_text_sep=merge_text_sep)
         # ── 速度后处理与速度专属字段（应用层，不在引擎）──
+        # 引擎重构后不再初始化纠错计数（应用语义），此处补默认值
+        self._n_corr = 0
         self._max_speed = max_speed_kmh
         self._max_accel = max_accel_mps2
         self._speed_format = speed_format
@@ -166,6 +164,36 @@ class SegmentPipeline(FieldExtractor):
 
     # ── 公共只读 API（run 后有效；tools/tests/GUI 一律走这里，
     #    不直接读 _ 前缀私有状态）──────────────────────────────
+    # 引擎重构后 corrected/confidence/n_corrected 是速度领域状态，
+    # 由应用层（本类）实现；frames/segment_frames/ocr_values/ocr_texts/
+    # ocr_confidences/n_segments 仍由 FieldExtractor 基类提供。
+
+    @property
+    def corrected_values(self) -> list:
+        """段级纠错后数值（DP + 第二遍尖峰后；run 后有效）。"""
+        return self._corr_vals
+
+    @corrected_values.setter
+    def corrected_values(self, v: list) -> None:
+        self._corr_vals = v
+
+    @property
+    def confidence_values(self) -> list:
+        """段级置信度（供测试夹具/tools 使用）。"""
+        return self._conf_vals
+
+    @confidence_values.setter
+    def confidence_values(self, v: list) -> None:
+        self._conf_vals = v
+
+    @property
+    def n_corrected(self) -> int:
+        """被纠正段数（DP + 第二遍尖峰）。"""
+        return self._n_corr
+
+    @n_corrected.setter
+    def n_corrected(self, v: int) -> None:
+        self._n_corr = v
 
     # ── 阶段 1：解码 + 特征（diff/清晰度）──
 

@@ -12,7 +12,7 @@
   本版直接给“纠错后最终错误”与缺失帧数（生产语义，串行路径已不可复现）。
 
 用法：python tools/detect_eval.py [--tol 1] [videos...]
-（load_meta 保持原签名，tools/bench_dual_pipeline.py 仍依赖它。）
+（load_meta 保持原签名，tools/bench_hybrid.py 仍依赖它。）
 """
 from __future__ import annotations
 import sys
@@ -93,8 +93,6 @@ def main() -> None:
     ap.add_argument("videos", nargs="*",
                     default=["test", "test2", "test3", "test5", "test6"])
     ap.add_argument("--tol", type=float, default=1.0, help="±容差，默认 1")
-    ap.add_argument("--dual", action="store_true",
-                    help="用引擎级双流水线跑（默认单流水线生产路径）")
     args = ap.parse_args()
     TOL = args.tol
 
@@ -108,8 +106,7 @@ def main() -> None:
         out = PROJECT / "outputs" / f"detect_eval_{v}.csv"
         pipe = SegmentPipeline(
             f"D:/Videos/racelog_test/{v}.mp4", roi, ms, ma, fps, f_start,
-            f_end, force_aspect=mw, yuv_output=True,
-            dual_pipeline=args.dual)
+            f_end, force_aspect=mw, yuv_output=True)
         pipe.run(str(out))
         rows = _read_rows(out)
         err = ok = missing = 0

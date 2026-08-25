@@ -43,9 +43,7 @@ def resolve(video_name: str) -> tuple[str, str]:
 
 def run(video: str, truth: str, backend: str, out_csv: str,
         decode_backend: str = "auto", buffer_size: int = config.DEFAULT_BUFFER_SIZE,
-        no_monitor: bool = False, frames: int | None = None,
-        dual_pipeline: bool = False,
-        dual_backends: list | None = None) -> dict:
+        no_monitor: bool = False, frames: int | None = None) -> dict:
     """Run headless pipeline, parse timing + actual backend from output CSV/stdout.
 
     OCR 模型固定 v6_small（v2.14 起移除模型选择）。
@@ -84,10 +82,6 @@ def run(video: str, truth: str, backend: str, out_csv: str,
         cli_args += ["--frame-end", str(f_start + frames)]
     if no_monitor:
         cli_args += ["--no-monitor"]
-    if dual_pipeline:
-        cli_args += ["--dual-pipeline"]
-        if dual_backends:
-            cli_args += ["--dual-backends", *[f"{d},{o}" for d, o in dual_backends]]
     cli_args += ["-o", out_csv]
     child = subprocess.Popen(
         cli_args,
@@ -144,8 +138,14 @@ def run(video: str, truth: str, backend: str, out_csv: str,
         timing["total_pipeline_s"] = float(m.group(1))
     # Stage timing from the CSV header (written by _write_csv):
     # "# timing: ocr=..s, decode=..s, inference=..s, correction=..s, total=..s"
+    header_backend = None
     with open(out_csv, "r", encoding="utf-8-sig", errors="replace") as f:
         for line in f:
+            if line.startswith("# backend="):
+                _b = line.split("=", 1)[1].strip().split(",", 1)[0].strip()
+                if _b.startswith("decord/"):
+                    _b = _b[len("decord/"):]
+                header_backend = _b
             if line.startswith("# timing:"):
                 for part in line.split(":", 1)[1].split(","):
                     k, _, v = part.strip().partition("=")
@@ -161,6 +161,8 @@ def run(video: str, truth: str, backend: str, out_csv: str,
                     except ValueError:
                         pass
                 break
+    if header_backend:
+        timing["actual_backend"] = header_backend
     if r.returncode != 0:
         timing["error"] = (r.stderr or r.stdout)[-400:]
     elif "Error" in text or "Traceback" in text:
@@ -207,7 +209,7 @@ def main() -> None:
     ap.add_argument("--backend", default="tensorrt", choices=["tensorrt", "cpu", "auto"])
     ap.add_argument("--decode-backend", default="auto",
                     choices=config.DECODE_BACKEND_KEYS,
-                    help="decord 解码后端 (auto/cpu/nvdec)")
+                    help="decord 解码后端 (auto/cpu/nvdec/hybrid)")
     ap.add_argument("--buffer", type=int, default=config.DEFAULT_BUFFER_SIZE,
                     help="流水线队列缓冲（段数，显式传入防 from-csv 旧头 buffer=16 覆盖）")
     ap.add_argument("--no-monitor", action="store_true",
@@ -216,15 +218,8 @@ def main() -> None:
     ap.add_argument("--frames", type=int, default=0,
                     help="截取帧数（相对 frame_start；0 = 全量）——快速迭代测量用，"
                          "提交前跑全量")
-    ap.add_argument("--dual-pipeline", action="store_true", default=False,
-                    help="开启单实例双完整流水线并行（kfe 分片）")
-    ap.add_argument("--dual-backends", nargs="*", default=None,
-                    metavar=("DEC,OCR",), help="两条流水线后端，如 cpu,auto cpu,auto")
     ap.add_argument("--json", type=str, default="", help="save record to JSON (default outputs/bench_<video>.json)")
     args = ap.parse_args()
-    if args.dual_backends:
-        args.dual_backends = [
-            tuple(tok.split(",")) for tok in args.dual_backends]
 
     video, truth = resolve(args.video)
     OUT_DIR.mkdir(exist_ok=True)
@@ -237,8 +232,6 @@ def main() -> None:
     record: dict = {"video": args.video, "backend": args.backend,
                     "decode_backend": args.decode_backend,
                     "buffer": args.buffer, "frames_cap": args.frames or None,
-                    "dual_pipeline": args.dual_pipeline,
-                    "dual_backends": args.dual_backends,
                     "runs": []}
     for run_i in range(args.runs):
         out_csv = str(OUT_DIR / f"bench_{args.video}_r{run_i + 1}.csv")
@@ -246,9 +239,7 @@ def main() -> None:
         print(f"  Running {label}...", end=" ", flush=True)
         t = run(video, truth, args.backend, out_csv,
                 decode_backend=args.decode_backend, buffer_size=args.buffer,
-                no_monitor=args.no_monitor, frames=args.frames or None,
-                dual_pipeline=args.dual_pipeline,
-                dual_backends=args.dual_backends)
+                no_monitor=args.no_monitor, frames=args.frames or None)
         acc = accuracy(out_csv, truth) if "frames" in t else None
         if run_i == args.runs - 1:  # warm run -> report + record
             print_row(label, t, acc)

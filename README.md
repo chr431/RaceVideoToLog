@@ -131,7 +131,7 @@ python RaceVideoToLog.py [video] [options]
   --force-aspect N               强制宽高比 (默认: 0=不启用；>0 宽度=48×此值)
   --fill-width N                 预处理 pad 宽度下限 px (默认: 224；速度窄图更准)
   --buffer N                     解码∥OCR 流水线队列缓冲，段数 (默认: 128)
-  --decode-backend {auto,cpu,nvdec}  解码后端 (默认: auto 自动选 GPU；实验性 CPU+NVDEC 混合：设环境变量 RVTOL_HYBRID_DECODE=1 后 auto/nvdec 内部走 CPU+NVDEC 并行)
+  --decode-backend {auto,cpu,nvdec,hybrid}  解码后端 (默认: auto 自动选 GPU；hybrid=CPU+NVDEC 混合解码，NVDEC 与 CPU 软解按关键帧分片竞争，AV1 自动回退纯 NVDEC)
   --ocr-backend {auto,cpu,tensorrt}  OCR 推理后端 (默认: auto 自动选 GPU)
   --log-level {normal,detailed,debug} 日志级别 (默认: normal)
   --frame-start N                起始帧号

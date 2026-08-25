@@ -11,7 +11,64 @@ from __future__ import annotations
 # 管线引擎域 + 共享常量（单一事实源在引擎仓库 engine_config.py）
 from engine_config import *  # noqa: F401,F403 — 聚合导出兼容
 
-# 版本：应用侧单一事实源（引擎独立版本线 0.1.x 不随应用 bump）；
+# ═══════════════════ 应用域常量（引擎 v0.3 重构后回归应用侧）═══════════════════
+# 引擎重构清空了领域后处理/速度语义常量（引擎是零领域语义通用库），
+# 以下常量原属 engine_config，现是本仓库（速度提取应用）的单一事实源。
+
+# ── 速度单位 ──
+MPS_TO_KMH: float = 3.6          # m/s → km/h 转换因子
+SOURCE_TO_KMH: dict[str, float] = {
+    "m/s": MPS_TO_KMH,
+    "km/h": 1.0,
+    "mile/h": 1.609344,
+}
+DEFAULT_SPEED_FORMAT: str = "km/h"   # 速度单位 (km/h / m/s / mile/h)
+DEFAULT_MAX_SPEED: float = 400.0     # 最大速度 (km/h)
+DEFAULT_MAX_ACCEL: float = 50.0      # 最大加速度 (m/s²)
+
+# ── 段级检测/纠错（速度领域参数，引擎不感知）──
+SEG_WIN: int = 30               # 段级检测带宽窗口（换算成帧：×中位段间距，上限 120 帧）
+SEG_WIN_MAX_FRAMES: float = 120.0  # _local_bandwidth 的帧窗口上限
+SEG_MULT: float = 2.0           # 检测门限倍率：|值-中值| > 带宽×mult ⇒ suspect
+SEG_MIN_DEV: float = 6.0        # 纠正最小偏差：|插值-当前| > 此值才改
+SEG_MED_K: int = 10             # 中值滤波窗口半宽（段索引）：平滑值曲线，误读=尖峰
+SEG_DETECT_FLOOR: float = 3.0   # 带宽下限 (km/h)
+SEG_SINGLE_FLOOR: float = 2.0   # 单帧段专用带宽下限
+SEG_ANCHOR_MAX_FRAMES: float = 120.0  # 纠错锚点最大帧距离
+
+# ── 段级置信度（中值偏差 + 急动度加权，供 DP 锚定）──
+SEG_CONF_W_MED: float = 0.7
+SEG_CONF_W_JERK: float = 0.3
+SEG_CONF_JERK_SCALE: float = 3.0
+SEG_CONF_MIN_NEIGHBORS: int = 3
+SEG_CONF_SHORT_NEIGHBOR: float = 30.0
+SEG_CONF_EDGE: float = 100.0
+SEG_CONF_MED_GATE: float = 50.0
+SEG_CONF_MIN_CONSISTENT_FRAMES: int = 3
+SEG_CONF_MIN_CONSISTENT_FRAMES_EXACT: int = 5
+SEG_CONF_SHORT_RUN_CAP: float = 15.0
+SEG_CONF_ISLAND_TOL: float = 2.0
+SEG_CONF_ISLAND_DEV_MULT: float = 3.0
+
+# ── 段级稠密格点 DP 纠正──
+SEG_DP_OBS_WEIGHT: float = 1.0
+SEG_DP_ACCEL_WEIGHT: float = 1.0
+SEG_DP_MAX_DV_CAP: float = 4.0
+SEG_DP_ANCHOR_COST: float = 0.1
+SEG_DP_CHANGE_THRESHOLD: float = 3.0
+SEG_DP_ANCHOR_CONF: float = 20.0
+SEG_DP_DEANCHOR_JERK_MIN: float = 5.0
+SEG_DP_DEANCHOR_JERK_MAX: float = 40.0
+SEG_DP_DEANCHOR_CONF_MAX: float = 50.0
+
+# ── 第二遍尖峰检测（孤立 2-off 单帧误读）──
+SEG_SPIKE_K: int = 2
+SEG_SPIKE_THRESH: float = 2.0
+SEG_SPIKE_MIN_FIX: float = 2.0
+SEG_SPIKE_MIN_NBR: int = 2
+SEG_SPIKE_MIN_FPS: float = 40.0
+
+# 版本：应用侧单一事实源（引擎独立版本线 0.3.x 不随应用 bump）；
 # 运行时 CSV 头/控制台读 config.__version__（历史入口保持不变）
 __version__ = "2.15.2"
 

@@ -110,3 +110,24 @@ def test_import_settings_reads_force_aspect(monkeypatch, tmp_path):
     assert s["force_aspect_edit"].text() == "1.5"
     assert s["max_speed_edit"].text() == "320.0"
     assert s["fill_width_spin"].value() == 160
+
+
+def test_import_settings_reads_hybrid_backend(monkeypatch, tmp_path):
+    """CSV 头 backend=decord/GPU+CPU-hybrid 必须映射到解码下拉框 import。"""
+    import config
+    csv = tmp_path / "in.csv"
+    csv.write_text("# backend=decord/GPU+CPU-hybrid\n"
+                   "0,0.0,0,0\n", encoding="utf-8")
+
+    class _Dialog:
+        @staticmethod
+        def getOpenFileName(*args, **kwargs):
+            return (str(csv), "")
+
+    monkeypatch.setattr(export_controller, "QFileDialog", _Dialog)
+
+    s = _settings_panel()
+    app = FakeApp(s)
+    ExportControllerMixin._import_settings(app)
+
+    assert s["backend_combo"]._index == config.DECODE_BACKEND_KEYS.index("hybrid")
