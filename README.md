@@ -1,4 +1,4 @@
-# RaceVideoToLog v2.15.2
+# RaceVideoToLog v2.16.0
 
 从赛车视频中提取速度数据，生成时间-速度-距离 CSV 文件。
 
@@ -23,7 +23,7 @@ git submodule update --init --recursive
 也内置引导（`engine_bootstrap.py`），任意入口都能 import 引擎模块。
 
 源码运行时引擎缓存/日志写在本子模块目录内（引擎仓库 `.gitignore` 已忽略，
-不会弄脏引擎提交）。引擎使用独立版本线（0.1.x）；应用版本（2.15.x）仍以
+不会弄脏引擎提交）。引擎使用独立版本线（0.3.x）；应用版本（2.16.x）仍以
 `config.__version__` 为单一事实源，两者解耦。
 
 ## 前置要求
@@ -97,7 +97,7 @@ _decord_build\
 ## 输出格式
 
 ```csv
-# RaceVideoToLog v2.15.2
+# RaceVideoToLog v2.16.0
 # video=test5.mp4, fps=59.767
 # roi=843,993,948,1025, format=km/h, frame_start=362, frame_end=7585
 # max_speed=400.0, max_accel=50.0, force_aspect=0.0, fill_width=224
@@ -165,14 +165,14 @@ python RaceVideoToLog.py [video] [options]
 
 跑 test/test2/test3/test5/test6（测试视频在 `D:\Videos\racelog_test`，truth 在
 `ground_truth_csv/`）并与 `tools/baseline.json` 对比：任一视频或总量的最终错误数
-增加即退出码 1（回归）。当前基线 12 错误（test 4 / test2 8 / test3/5/6 0）。
+增加即退出码 1（回归）。当前基线 **0 错误**（全部视频 0，TOL±1）。
 
 ### CI 回归夹具（tests/fixtures/，无视频可跑）
 
 - `seg_series/*.json` + `tests/test_seg_series.py`：生产 run() 的全量段级序列，
   CI 重构置信度+稠密 DP 纠错并逐段断言与基线一致。
-- `ocr_frames/` + `tests/test_ocr_fixtures.py`：12 个错误案例代表帧的原始 ROI
-  裁剪，onnxruntime CPU 锁定 OCR 行为基线。
+- `ocr_frames/` + `tests/test_ocr_fixtures.py`：错误案例代表帧的原始 ROI
+  裁剪（当前 0 案例），onnxruntime CPU 锁定 OCR 行为基线。
 - `videos/smoke_speedo.mp4`：解码集成测试的迷你视频（127KB，仓库内唯一入库视频）。
 
 夹具由 `tools/make_regression_fixtures.py` 生成（需本机 decord + 测试视频）。
@@ -197,7 +197,7 @@ build_exe.bat
 
 ## 变更记录
 
-完整发布日志（v2.7.1 → v2.15.2）见 [release_notes.md](release_notes.md)。
+完整发布日志（v2.7.1 → v2.16.0）见 [release_notes.md](release_notes.md)。
 
 ## 运行时缓存（卸载时需删除）
 

@@ -50,7 +50,7 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
   frozen（PyInstaller）下引擎已由 spec 的 pathex + hiddenimports 打包进 EXE，
   `ensure_engine_path()` 检测 `sys.frozen` 直接跳过。
 - **版本解耦**：引擎独立版本线（`engine_config.__version__ = "0.3.x"`）；应用版本
-  `config.__version__ = "2.15.x"` 仍是本仓库单一事实源 —— `tools/version.py` 已移除
+  `config.__version__ = "2.16.x"` 仍是本仓库单一事实源 —— `tools/version.py` 已移除
   engine_config 引用（不再跨仓双重校验）。
 - **模型资产只随引擎仓库**：本仓库 `assets/ocr_models` 已删除。打包时 `RaceVideoToLog.spec`
   从 `third_party/video_ocr_engine/assets/ocr_models` 收集到 `_internal/ocr_models`

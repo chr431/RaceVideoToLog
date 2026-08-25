@@ -1,5 +1,44 @@
 # Release Notes
 
+## v2.16.0（2026-08-26）— 适配 video_ocr_engine 重构：hybrid 解码后端转正
+
+> 本节面向使用者：只讲你能直接感知到的变化。技术细节见下方各节。
+
+### 🚀 新功能
+
+- 解码后端新增 **hybrid（混合(CPU+NVDEC)）**：GUI「解码后端」下拉与 CLI
+  `--decode-backend hybrid` 可选；同一实例内 NVDEC 与 CPU 软解按关键帧分片
+  竞争，谁快谁多拿（引擎 `HybridDecoder`）。AV1 自动回退纯 GPU；NVDEC 不可用
+  时回退 CPU。
+- 引擎子模块同步到 `chr431/video_ocr_engine e8b2637`：CPU+NVDEC 混合解码从
+  环境变量实验入口正式转为**显式解码后端**（旧 `RVTOL_HYBRID_DECODE` 已删除，
+  调优改用 `HYBRID_CPU_THREADS` / `HYBRID_MAX_CHUNKS`）。
+- 移除已过时的 `--dual-pipeline / --dual-backends` 实验参数（引擎已彻底移除
+  单实例双完整流水线）。
+
+### 🧪 实测性能（本机 7945HX + RTX 4060，全量帧、单跑、warm）
+
+| 视频 | 编码 | auto | hybrid | Δ |
+|---|---|---:|---:|---:|
+| test5 | h264 | 7.8s | 5.4s | **-30.8%** |
+| test3 | h264 | 3.6s | 3.0s | **-16.7%** |
+| test2 | h264 | 3.0s | 3.4s | +13.3% |
+| test | HEVC | 3.3s | 4.5s | +36.4% |
+| test6 | AV1 | 15.1s | 15.1s | +0.0%（自动回退纯 GPU） |
+
+结论：test5/test3（NVDEC 解码受限的 h264）显著提速；test2/HEVC 无收益甚至更慢；
+AV1 按设定自动回退纯 GPU。**生产默认仍为 auto**，hybrid 作为用户显式选项保留。
+
+### 🎯 准确率
+
+- auto 与 hybrid 全量漏斗均 **最终错误 0**（5 视频 14534 段、148/148 检出），
+  hybrid 与 auto 读数完全一致，无回归。
+
+### 🔧 其他
+
+- 引擎配置拆分：速度/纠错/DP/尖峰常量回归应用侧 `config.py`（引擎保持零速度语义）。
+- 新增测量工具 `tools/bench_hybrid.py`（auto vs hybrid 端到端 + AV1 回退校验）。
+
 ## v2.15.2（2026-08-16）— 第二遍尖峰检测 + test2 真值表人工复核
 
 > 本节面向使用者：只讲你能直接感知到的变化。技术细节见下方各节。
