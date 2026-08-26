@@ -163,9 +163,8 @@ class ExportControllerMixin:
             frame_start=s["frame_start_edit"].text(),
             frame_end=s["frame_end_edit"].text(),
             monitor_enabled=monitor_enabled,
-            # YUV420 解码输出（decord ≥0.7.10）：分段/OCR 只取 Y 平面，
-            # 代表帧保留 YUV 供最终检查前转 RGB 预览
-            yuv_output=True,
+            # 代表帧保留 YUV（rep_crop_format="yuv"；内部恒为单通道灰度链）
+            rep_crop_format="yuv",
             output_path=Path(out),
             parent=self,
         )
@@ -266,7 +265,7 @@ class ExportControllerMixin:
             import logging
             _log = logging.getLogger("RaceVideoToLog.gui")
             try:
-                from video_utils import rss_mb, sum_nbytes
+                from video_utils_app import rss_mb, sum_nbytes
                 _raw_mb = sum_nbytes(list(pipeline.crops.values())) / 1e6
                 _log.info("[MEM] _finish_export PRE-clear: crops=%d(%.1fMB) rss=%.0fMB",
                     len(pipeline.crops), _raw_mb, rss_mb())
@@ -275,7 +274,7 @@ class ExportControllerMixin:
             pipeline.crops.clear()
             import gc; gc.collect()
             try:
-                from video_utils import rss_mb
+                from video_utils_app import rss_mb
                 _log.info("[MEM] _finish_export POST-clear: rss=%.0fMB", rss_mb())
             except Exception:
                 pass

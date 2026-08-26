@@ -56,7 +56,7 @@ def run_funnel(videos, tol: float = 1.0, decode_backend: str = "auto",
         pipe = SegmentPipeline(f"{VIDEO_DIR}/{v}.mp4", roi, ms, ma,
                                fps, f_start, f_end, force_aspect=mw,
                                decode_backend=decode_backend,
-                               yuv_output=True,
+                               rep_crop_format="yuv",
                                merge_similar=merge_similar,
                                merge_similar_threshold=merge_similar_threshold)
         pipe.run(str(PROJECT / "outputs" / f"_brk_{v}.csv"))

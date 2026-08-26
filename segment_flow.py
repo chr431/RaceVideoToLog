@@ -121,6 +121,7 @@ class SegmentPipeline(FieldExtractor):
                  progress_cb=None, cancel_check=None,
                  gray_output: bool = False,
                  yuv_output: bool = False,
+                 rep_crop_format: str | None = None,
                  merge_similar: bool = True,
                  merge_similar_threshold: float | None = None,
                  merge_text_sep: str | None = None):
@@ -129,17 +130,28 @@ class SegmentPipeline(FieldExtractor):
             video_path=video_path, roi=roi, frame_start=frame_start,
             frame_end=frame_end, force_aspect=force_aspect,
             decode_backend=decode_backend, ocr_backend=ocr_backend,
-            buffer_size=buffer_size, fill_width=fill_width, C=C, fps=fps,
+            buffer_size=buffer_size, fill_width=fill_width, C=C,
+            # fps 参数 0.7.0 已从引擎移除（此前即被静默忽略），保留应用侧
+            # 签名仅为兼容（引擎自测帧率，忽略外部传入）
             progress_cb=progress_cb, cancel_check=cancel_check,
             gray_output=gray_output, yuv_output=yuv_output,
+            rep_crop_format=rep_crop_format,
             # GUI review 需要代表帧预览，显式保留（引擎默认 True，这里加固）
             keep_crops=True, keep_frames=True,
             merge_similar=merge_similar,
             merge_similar_threshold=merge_similar_threshold,
             merge_text_sep=merge_text_sep)
         # ── 速度后处理与速度专属字段（应用层，不在引擎）──
-        # 引擎重构后不再初始化纠错计数（应用语义），此处补默认值
+        # 引擎 0.7.0 不再初始化速度域属性轨，应用侧补默认值
+        # （run() 前 tools/测试直接调用内部方法时保持旧行为）
         self._n_corr = 0
+        self._segs = []
+        self._ocr_vals = []
+        self._corr_vals = []
+        self._conf_vals = []
+        self.rows = []
+        self.segments = []
+        self._pinned = set()
         self._max_speed = max_speed_kmh
         self._max_accel = max_accel_mps2
         self._speed_format = speed_format
@@ -164,9 +176,8 @@ class SegmentPipeline(FieldExtractor):
 
     # ── 公共只读 API（run 后有效；tools/tests/GUI 一律走这里，
     #    不直接读 _ 前缀私有状态）──────────────────────────────
-    # 引擎重构后 corrected/confidence/n_corrected 是速度领域状态，
-    # 由应用层（本类）实现；frames/segment_frames/ocr_values/ocr_texts/
-    # ocr_confidences/n_segments 仍由 FieldExtractor 基类提供。
+    # 引擎 0.7.0「公共 API 清理」后，段级公共属性与 review/timing 工具
+    # 方法均回归应用层（本类）；引擎只保留 extract()/结果对象。
 
     @property
     def corrected_values(self) -> list:
@@ -194,6 +205,80 @@ class SegmentPipeline(FieldExtractor):
     @n_corrected.setter
     def n_corrected(self, v: int) -> None:
         self._n_corr = v
+
+    @property
+    def frames(self) -> list:
+        """全部采样帧号（run 后有效）。"""
+        return self._frames
+
+    @frames.setter
+    def frames(self, v: list) -> None:
+        self._frames = v
+
+    @property
+    def segment_frames(self) -> list:
+        """每段的帧号序列（[[start..end], ...]）。"""
+        return self._segs
+
+    @segment_frames.setter
+    def segment_frames(self, v: list) -> None:
+        self._segs = v
+
+    @property
+    def ocr_values(self) -> list:
+        """每段 OCR 原始速度读数（None=该段未读出）。"""
+        return self._ocr_vals
+
+    @ocr_values.setter
+    def ocr_values(self, v: list) -> None:
+        self._ocr_vals = v
+
+    @property
+    def ocr_texts(self) -> list:
+        """每段 OCR 原始文本（识别层原始输出；None=未读出）。"""
+        return self._ocr_texts
+
+    @ocr_texts.setter
+    def ocr_texts(self, v: list) -> None:
+        self._ocr_texts = v
+
+    @property
+    def ocr_confidences(self) -> list:
+        """每段 OCR 置信度（0-1，0.0=不可用）。"""
+        return self._ocr_confs
+
+    @ocr_confidences.setter
+    def ocr_confidences(self, v: list) -> None:
+        self._ocr_confs = v
+
+    @property
+    def n_segments(self) -> int:
+        """段总数（run 后有效；无段时 0）。"""
+        return getattr(self, '_n_segments', 0)
+
+    @n_segments.setter
+    def n_segments(self, v: int) -> None:
+        self._n_segments = v
+
+    def prepare_review_rgb(self) -> None:
+        """最终检查前：把全部代表帧 packed YUV420 就地转成 RGB。
+
+        只转换代表帧（每段一张）：test5 ~2.5k 段、test6 ~8.1k 段均为
+        毫秒~亚秒级 numpy 操作。转换后释放 self.crops 的 YUV 引用
+        （segments 内已换成 RGB，finalize 不需要）。
+        """
+        if not self._yuv_output:
+            return
+        for seg in self.segments:
+            crop = seg.get('rep_crop')
+            if crop is not None and crop.ndim == 2:
+                seg['rep_crop'] = nv12_to_rgb(crop)
+        self.crops.clear()
+
+    def timing_flat(self) -> dict:
+        """展平 timing dict（丢弃嵌套值），兼容 headless/gui_export 调用。"""
+        return {k: v for k, v in self.timing.items()
+                if isinstance(v, (int, float))}
 
     # ── 阶段 1：解码 + 特征（diff/清晰度）──
 

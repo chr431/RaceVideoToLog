@@ -1,5 +1,45 @@
 # Release Notes
 
+## v2.16.1（2026-08-26）— 同步引擎 0.7.0（公共 API 清理 + GPU 零拷贝优化）
+
+> 本节面向使用者：只讲你能直接感知到的变化。技术细节见下方各节。
+
+### 🚀 引擎升级（0.7.0，随 submodule 同步）
+
+- 引擎子模块更新到 `chr431/video_ocr_engine 832f39c`（0.7.0）：
+  - **GPU 全驻留零拷贝管线转正**：`auto`（NVDEC+TRT）生产路线默认走
+    分段/校准/合并/OCR 全程 GPU，代表帧按需 D2H；`test5` 端到端再提速
+    （-32.5% vs 上一版 -30.8%）。
+  - **公共 API 清理**：`gray_output/yuv_output` 降级为 deprecated 别名，
+    主参数改为 `rep_crop_format("yuv"|"gray")`；`fps` 构造参数移除；
+    引擎移除实例属性轨与 `prepare_review_rgb/timing_flat`、以及
+    `open_decord_vr/VideoMetadata/format_duration/rss_mb/sum_nbytes`。
+  - 混合解码（hybrid）校准崩溃等健壮性修复。
+
+### 🔧 适配（Race 侧）
+
+- 生产/GUI/工具全部改用 `rep_crop_format="yuv"`（保持代表帧 packed NV12
+  预览与 YUV 灰度链不变）。
+- 段级公共属性（`frames/segment_frames/ocr_values/ocr_texts/
+  ocr_confidences/n_segments`）与 `prepare_review_rgb()/timing_flat()`
+  回归 `SegmentPipeline`（引擎只保留 `extract() → ExtractionResult`）。
+- 新增应用侧 `video_utils_app.py` 承接引擎移除的预览/元数据/内存 helper。
+- 回归：准确率漏斗 auto / hybrid 均 **0 错误**（14534 段 / 148 检出）；
+  pytest 104 passed。
+
+### 🧪 实测性能（全量帧、单跑、warm，auto+auto）
+
+| 视频 | 编码 | auto | hybrid | Δ |
+|---|---|---:|---:|---:|
+| test5 | h264 | 8.3s | 5.6s | **-32.5%** |
+| test3 | h264 | 3.9s | 3.1s | **-20.5%** |
+| test2 | h264 | 2.8s | 5.3s | +89.3% |
+| test | HEVC | 3.2s | 4.6s | +43.7% |
+| test6 | AV1 | 15.0s | 15.2s | +1.3%（自动回退纯 GPU） |
+
+hybrid 仍在 h264 解码受限场景（test5/test3）显著受益；test2/HEVC 无收益
+甚至更慢，生产默认保持 auto。
+
 ## v2.16.0（2026-08-26）— 适配 video_ocr_engine 重构：hybrid 解码后端转正
 
 > 本节面向使用者：只讲你能直接感知到的变化。技术细节见下方各节。

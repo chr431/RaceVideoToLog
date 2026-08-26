@@ -22,7 +22,7 @@ ex = FieldExtractor(
     video_path="D:/Videos/racelog_test/test.mp4", roi=roi,
     frame_start=f_start, frame_end=f_start + 600,
     decode_backend="auto", ocr_backend="cpu",
-    yuv_output=True,
+    rep_crop_format="yuv",
     # 冒烟只验证识别链，不需要保留代表帧预览图
     keep_crops=False)
 frames, segs, texts, confs, rep_frames = ex._run_pipelined()

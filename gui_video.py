@@ -24,7 +24,7 @@ class VideoLoadMixin:
             self._status_label.setText("导入失败。")
 
     def _load_video(self, path: Path) -> None:
-        from video_utils import open_decord_vr
+        from video_utils_app import open_decord_vr
         from monitor import gui_mark
 
         gui_mark("load_video: start")

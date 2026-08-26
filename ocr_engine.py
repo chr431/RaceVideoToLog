@@ -22,6 +22,6 @@ from ocr_text import (  # noqa: F401
 from signals import (  # noqa: F401
     _savgol_filter_np,
 )
-from video_utils import (  # noqa: F401
+from video_utils_app import (  # noqa: F401
     VideoMetadata, format_duration,
 )

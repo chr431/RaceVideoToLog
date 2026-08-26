@@ -106,7 +106,7 @@ def main() -> None:
         out = PROJECT / "outputs" / f"detect_eval_{v}.csv"
         pipe = SegmentPipeline(
             f"D:/Videos/racelog_test/{v}.mp4", roi, ms, ma, fps, f_start,
-            f_end, force_aspect=mw, yuv_output=True)
+            f_end, force_aspect=mw, rep_crop_format="yuv")
         pipe.run(str(out))
         rows = _read_rows(out)
         err = ok = missing = 0

@@ -24,7 +24,7 @@ p = SegmentPipeline(
     decode_backend="auto", ocr_backend="cpu",
     fill_width=config.DEFAULT_FILL_WIDTH,
     speed_format="km/h", frame_start=f_start, frame_end=f_start + 600,
-    force_aspect=mw, fps=None, yuv_output=True)
+    force_aspect=mw, fps=None, rep_crop_format="yuv")
 p.run(str(PROJECT / "outputs" / "_text_preserve.csv"))
 print("segments:", len(p.segments),
       "ocr_values:", len(p.ocr_values),

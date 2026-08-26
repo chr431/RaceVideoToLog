@@ -1,4 +1,4 @@
-# RaceVideoToLog v2.16.0
+# RaceVideoToLog v2.16.1
 
 从赛车视频中提取速度数据，生成时间-速度-距离 CSV 文件。
 
@@ -23,7 +23,7 @@ git submodule update --init --recursive
 也内置引导（`engine_bootstrap.py`），任意入口都能 import 引擎模块。
 
 源码运行时引擎缓存/日志写在本子模块目录内（引擎仓库 `.gitignore` 已忽略，
-不会弄脏引擎提交）。引擎使用独立版本线（0.3.x）；应用版本（2.16.x）仍以
+不会弄脏引擎提交）。引擎使用独立版本线（0.7.x）；应用版本（2.16.x）仍以
 `config.__version__` 为单一事实源，两者解耦。
 
 ## 前置要求
@@ -97,7 +97,7 @@ _decord_build\
 ## 输出格式
 
 ```csv
-# RaceVideoToLog v2.16.0
+# RaceVideoToLog v2.16.1
 # video=test5.mp4, fps=59.767
 # roi=843,993,948,1025, format=km/h, frame_start=362, frame_end=7585
 # max_speed=400.0, max_accel=50.0, force_aspect=0.0, fill_width=224
@@ -197,7 +197,7 @@ build_exe.bat
 
 ## 变更记录
 
-完整发布日志（v2.7.1 → v2.16.0）见 [release_notes.md](release_notes.md)。
+完整发布日志（v2.7.1 → v2.16.1）见 [release_notes.md](release_notes.md)。
 
 ## 运行时缓存（卸载时需删除）
 
