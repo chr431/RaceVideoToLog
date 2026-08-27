@@ -36,10 +36,11 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
   ocr_texts/ocr_confidences/n_segments`）与 `prepare_review_rgb/timing_flat`
   回归 `SegmentPipeline`；新建 `video_utils_app.py` 承接预览/元数据/内存
   helper；生产/GUI/tools 改用 `rep_crop_format="yuv"`。
-- **Race 全量端到端实测（0.7.0，2026-08，本机 auto+auto，单跑 warm）**：
-  test5 h264 **-32.5%**、test3 h264 **-20.5%**（h264 解码受限场景有效）；
-  test2 h264 **+89.3%**、test HEVC **+43.7%**（NVDEC 已足够快，混合反成
-  开销）；test6 AV1 自动回退纯 GPU（+1.3%，波动内）。
+- **Race 全量端到端实测（0.7.0，2026-08，本机 auto+auto，单跑 warm，复测
+  runs=3 取最后次；此前 +89.3% 系后台干扰异常值）**：
+  test5 h264 **-30.1%**、test3 h264 **-20.5%**（h264 解码受限场景有效）；
+  test2 h264 **+26.7%**、test HEVC **+36.4%**（NVDEC 已足够快，混合反成
+  开销）；test6 AV1 自动回退纯 GPU（+2.0%，波动内）。
   **hybrid 不是全编码普适加速，生产默认仍保持 auto**，hybrid 作为用户
   显式选择的解码后端保留。
 

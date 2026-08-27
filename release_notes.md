@@ -9,7 +9,7 @@
 - 引擎子模块更新到 `chr431/video_ocr_engine 832f39c`（0.7.0）：
   - **GPU 全驻留零拷贝管线转正**：`auto`（NVDEC+TRT）生产路线默认走
     分段/校准/合并/OCR 全程 GPU，代表帧按需 D2H；`test5` 端到端再提速
-    （-32.5% vs 上一版 -30.8%）。
+    （复测 -30.1%，干净单跑口径）。
   - **公共 API 清理**：`gray_output/yuv_output` 降级为 deprecated 别名，
     主参数改为 `rep_crop_format("yuv"|"gray")`；`fps` 构造参数移除；
     引擎移除实例属性轨与 `prepare_review_rgb/timing_flat`、以及
@@ -27,15 +27,18 @@
 - 回归：准确率漏斗 auto / hybrid 均 **0 错误**（14534 段 / 148 检出）；
   pytest 104 passed。
 
-### 🧪 实测性能（全量帧、单跑、warm，auto+auto）
+### 🧪 实测性能（全量帧、单跑、warm，auto+auto，复测 runs=3 取最后次）
 
 | 视频 | 编码 | auto | hybrid | Δ |
 |---|---|---:|---:|---:|
-| test5 | h264 | 8.3s | 5.6s | **-32.5%** |
+| test5 | h264 | 8.3s | 5.8s | **-30.1%** |
 | test3 | h264 | 3.9s | 3.1s | **-20.5%** |
-| test2 | h264 | 2.8s | 5.3s | +89.3% |
-| test | HEVC | 3.2s | 4.6s | +43.7% |
-| test6 | AV1 | 15.0s | 15.2s | +1.3%（自动回退纯 GPU） |
+| test2 | h264 | 3.0s | 3.8s | +26.7% |
+| test | HEVC | 3.3s | 4.5s | +36.4% |
+| test6 | AV1 | 15.0s | 15.3s | +2.0%（自动回退纯 GPU） |
+
+> 注：首轮 0.7.0 记录中 test2 hybrid +89.3% 经复核为后台干扰异常值；
+> 干净单跑复测后收敛为 +26.7%（与 2.16.0 的 +13.3% 同向）。
 
 hybrid 仍在 h264 解码受限场景（test5/test3）显著受益；test2/HEVC 无收益
 甚至更慢，生产默认保持 auto。
