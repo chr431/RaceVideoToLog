@@ -56,8 +56,10 @@ def test_auto_budget_without_env(monkeypatch):
 def test_split_cores_on_low_core_cpu_decode(monkeypatch):
     """解码线程分档（引擎 0.8.0 起接管，0.9.0 收敛为恒分档）。
 
-    _decode_num_threads 不再返回 None（旧"多核用 decord 默认 8 线程"
-    白丢 ~28% 解码吞吐，见引擎 extractor._decode_num_threads 注释）：
+    _decode_num_threads 不再返回 None，且 GPU-OCR 档与核数无关
+    （默认 ocr_backend=auto/TRT → 逻辑核钳 [8,32]，下限 8 兜底少核机；
+    本测试曾在 4 核 CI runner 上误以为少核走 cores//2 —— 那是
+    OCR-on-CPU 分支的规则，见 test_cpu_ocr_stride_tiers_decode_threads）：
       · OCR 在 GPU（默认 auto/TRT）：吃满逻辑核，钳 [8, 32]
       · OCR 在 CPU + 少核（物理 ≤8）：cores//2
       · OCR 在 CPU + 多核：stride>1 → 逻辑核 3/4 钳 [8,24]；
@@ -68,15 +70,15 @@ def test_split_cores_on_low_core_cpu_decode(monkeypatch):
     p._backend = "decord/CPU"
     cores = cpu_physical_cores()
     logical = os.cpu_count() or cores
+    # 默认 OCR 在 GPU：解码钳 [8, 32]，任何核数一致
+    assert p._decode_num_threads() == max(
+        config.DECODE_THREADS_GPU_OCR_MIN,
+        min(config.DECODE_THREADS_GPU_OCR_MAX, logical))
+    # _ocr_num_threads 的分核只看 decord/CPU 后端 + 物理核数
     if cores <= config.CPU_CORES_SPLIT_THRESHOLD:
-        expect = max(2, cores // 2)
-        assert p._ocr_num_threads() == expect
-        assert p._decode_num_threads() == expect
-    else:  # 核数多：OCR 保持全核；解码按 OCR 落点分档（默认 GPU → 逻辑核钳 [8,32]）
+        assert p._ocr_num_threads() == max(2, cores // 2)
+    else:
         assert p._ocr_num_threads() == cores
-        assert p._decode_num_threads() == max(
-            config.DECODE_THREADS_GPU_OCR_MIN,
-            min(config.DECODE_THREADS_GPU_OCR_MAX, logical))
     # GPU 解码：OCR 保持全核（_decode_num_threads 与 _backend 无关，
     # 只看 _ocr_backend；GPU 分支在调用方不传 num_threads）
     p._backend = "decord/GPU"
