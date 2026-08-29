@@ -4,7 +4,7 @@
 #   1. 校验版本引用一致性（tools/version.py，退出码 1 = 不一致即中止）
 #   2. 读取 config.__version__（单一事实源），确认 tag v<版本> 不存在
 #   3. 下载 decord fork 发布产物 decord-<ver>-win64-gpu.zip（chr431/decord，
-#      decord-version 输入，默认 0.7.10）解压到 _decord_build\
+#      decord-version 输入，默认 0.7.11）解压到 _decord_build\
 #   4. setup_venv.bat --ci + build_exe.bat --ci 构建 EXE（--ci 跳过 pause）
 #   5. 打包 RaceVideoToLog.<版本>.7z（7-Zip LZMA2 mx=9 最大压缩，win-latest
 #      runner 预装 7z）—— 布局与现有 release 一致（RaceVideoToLog.exe 在
@@ -31,7 +31,7 @@ on:
       decord-version:
         description: 'decord fork release version to consume (chr431/decord)'
         required: false
-        default: '0.7.10'
+        default: '0.7.11'
         type: string
 
 permissions:
@@ -131,6 +131,48 @@ jobs:
           }
           if (-not (Test-Path "dist/RaceVideoToLog/RaceVideoToLog.exe")) {
             Write-Error "dist/RaceVideoToLog/RaceVideoToLog.exe 未生成"
+            exit 1
+          }
+
+      - name: Smoke check EXE (headless, CPU backend, no GPU needed)
+        # 构建成功 ≠ 产物可用：本步骤在打 tag/发布**之前**真实运行
+        # frozen exe（合成视频 + CPU 解码 + ONNX OCR），把 import 面/
+        # 打包遗漏类回归（如 cuda-python 13.3.1 merged-wheel 连锁崩）
+        # 拦在发布前。失败不产生 tag/release。
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "_smoke" | Out-Null
+          ffmpeg -y -f lavfi -i "testsrc=duration=3:size=640x360:rate=30" `
+            -pix_fmt yuv420p "_smoke\input.mp4" 2>$null
+          if (-not (Test-Path "_smoke\input.mp4")) {
+            Write-Error "ffmpeg 合成测试视频失败"
+            exit 1
+          }
+          $ver = "${{ steps.ver.outputs.version }}"
+          dist\RaceVideoToLog\RaceVideoToLog.exe "_smoke\input.mp4" `
+            --roi 20 20 300 80 --decode-backend cpu --ocr-backend cpu `
+            --no-monitor --frame-end 60 -o "_smoke\out.csv"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "frozen exe 冒烟运行失败（exit $LASTEXITCODE）"
+            exit 1
+          }
+          $csv = Get-Content "_smoke\out.csv" -Encoding UTF8
+          if (-not ($csv | Where-Object { $_ -match "RaceVideoToLog v$ver" })) {
+            Write-Error "CSV 头缺少 'RaceVideoToLog v$ver'"
+            exit 1
+          }
+          $n = ($csv | Where-Object { $_ -notmatch "^#" -and $_.Trim() }).Count
+          Write-Host "smoke OK: CSV $n 行（读数可为空——冒烟只验产物可运行）"
+
+      - name: Check artifact size (<400MB)
+        shell: pwsh
+        run: |
+          $size = (Get-ChildItem "dist/RaceVideoToLog" -Recurse | `
+                   Measure-Object -Property Length -Sum).Sum
+          $mb = [math]::Round($size / 1MB)
+          Write-Host "dist 总体积: ${mb}MB"
+          if ($size -gt 400MB) {
+            Write-Error "产物总体积 ${mb}MB 超过 400MB 上限"
             exit 1
           }
 
