@@ -3,7 +3,7 @@
 从赛车视频 OCR 提取速度，输出时间-速度-距离 CSV。Python 3.11+，PySide6 GUI +
 CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
 
-## 引擎同步（pip 依赖 v0.9.0，2026-08；已不再是 submodule）
+## 引擎同步（pip 依赖 v0.9.1，2026-08；已不再是 submodule）
 
 - **0.9.0 同步适配（2026-08-29）**：
   - 引擎构造参数 `gray_output/yuv_output` 已删除（0.7.0 标 deprecated，
@@ -116,7 +116,7 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
   `RaceVideoToLog.spec` 用 `ocr_native._models_dir()` 定位并收集到
   `_internal/ocr_models`（该函数覆盖 frozen / 源码树 / site-packages 三种布局）。
 - **更新引擎**：改引擎代码在 `D:\Repo\video_ocr_engine` 提交 push 后，把本仓库
-  `pyproject.toml` 里的 tag（`v0.9.0`）改到新版本 —— 这是**唯一的接入点**，
+  `pyproject.toml` 里的 tag（`v0.9.1`）改到新版本 —— 这是**唯一的接入点**，
   不再有 submodule 指针。
 - **⚠️ 仓库根目录不要留名为 `video_ocr_engine` 的空目录**：`sys.path[0]` 是当前
   工作目录，`PathFinder` 在 `meta_path` 中先于 editable install 的 finder，

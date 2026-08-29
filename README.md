@@ -1,4 +1,4 @@
-# RaceVideoToLog v2.17.1
+# RaceVideoToLog v2.17.2
 
 从赛车视频中提取速度数据，生成时间-速度-距离 CSV 文件。
 
@@ -11,7 +11,7 @@
 `pyproject.toml` 中按 git tag 锁定：
 
 ```toml
-"video-ocr-engine @ git+https://github.com/chr431/video_ocr_engine.git@v0.9.0"
+"video-ocr-engine @ git+https://github.com/chr431/video_ocr_engine.git@v0.9.1"
 ```
 
 `setup_venv.bat` 会自动安装。若本地存在引擎源码树（与本仓库同级目录的
@@ -102,7 +102,7 @@ _decord_build\
 ## 输出格式
 
 ```csv
-# RaceVideoToLog v2.17.1
+# RaceVideoToLog v2.17.2
 # video=test5.mp4, fps=59.767
 # roi=843,993,948,1025, format=km/h, frame_start=362, frame_end=7585
 # max_speed=400.0, max_accel=50.0, force_aspect=0.0, fill_width=224
@@ -202,7 +202,7 @@ build_exe.bat
 
 ## 变更记录
 
-完整发布日志（v2.7.1 → v2.17.1）见 [release_notes.md](release_notes.md)。
+完整发布日志（v2.7.1 → v2.17.2）见 [release_notes.md](release_notes.md)。
 
 ## 运行时缓存（卸载时需删除）
 

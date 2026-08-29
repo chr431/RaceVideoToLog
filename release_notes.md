@@ -1,5 +1,58 @@
 # Release Notes
 
+## v2.17.2（2026-08-30）— 引擎接入方式改为 pip 依赖（不再用 git submodule）
+
+> 本节面向使用者：只讲你能直接感知到的变化。技术细节见下方各节。
+
+### 🎯 对你意味着什么
+
+- **安装更简单**：不再需要 `git clone --recurse-submodules` 或
+  `git submodule update --init --recursive`。`setup_venv.bat` 会自动安装引擎，
+  版本在 `pyproject.toml` 里按 tag 锁定（当前 `v0.9.0`）。
+- **引擎不再有"指针不同步"的可能**：此前 `third_party/video_ocr_engine`
+  是 submodule，detached HEAD 下可以本地提交而不被告警，也曾出现本地分支
+  落后上游 90 个提交的情况 —— 误操作会让引擎静默回退且 gitlink 毫不知情。
+  现在版本由一行依赖声明锁定，CI 与全新环境的引擎版本完全一致。
+- **venv 不再写死绝对路径**：旧做法把 `D:\...\third_party\video_ocr_engine`
+  写进 site-packages 的 `.pth`，硬编码盘符、换机器即失效。
+- **开发体验不变**：本地存在引擎源码树时（与本仓库同级的 `video_ocr_engine/`），
+  `setup_venv.bat` 自动改用 editable 安装，改引擎代码仍立刻生效。
+- **本次不改变任何识别结果**：生产门禁（5 视频全量帧）原始误读 126、
+  最终错误 0，与改造前逐项一致。
+
+### 🎯 同步带上的引擎 v0.9.1：OCR 输入余量 10% → 20%（原始误读再降 2）
+
+引擎在裁掉 OCR 输入两侧空白时，会在内容两端各保留一定余量。之前是 ROI 宽的
+10%，实测在 ROI 比较紧凑的视频上会切到数字边缘笔画。改为 20% 后：
+
+| 视频 | 不裁 | 余量 10%（旧） | **余量 20%（新）** |
+|---|---:|---:|---:|
+| test5 | 7  | 0  | **0** |
+| test6 | 17 | 0  | **0** |
+| test  | 78 | 80 | **78** |
+| test2 | 51 | 51 | **51** |
+
+生产门禁原始误读 **126 → 124**，最终错误仍为 0。分段结构（段边界/代表帧）
+完全未变，只有 OCR 原始读数变化 31 段。
+
+顺带澄清一个此前的误判：裁切收益与 `force_aspect` **无关**，真正相关的是
+**ROI 相对内容的宽裕程度**（test5/test6 左侧留白 24%、是右侧的约 4 倍 ——
+数字右对齐、ROI 按最长状态取，短数字时空白堆在左侧）。`force_aspect` 只是
+恰好与这个特征重合。
+
+### 升级引擎的方式（变了）
+
+改引擎 → 推引擎仓 → 打新 tag → 改本仓库 `pyproject.toml` 里那一行
+`video-ocr-engine @ git+...@v0.9.1` → 重跑 `setup_venv.bat`。
+不再有 submodule 指针要同步。
+
+> 维护提示：本仓库有测试断言夹具版本必须等于 `config.__version__`
+> （`tests/test_seg_series.py::test_fixture_versions_consistent`）。
+> **每次提升版本号都要重跑 `tools/make_regression_fixtures.py`**，
+> 否则 CI 会红 —— 本次已重新生成。
+
+---
+
 ## v2.17.1（2026-08-29）— 原始读数质量回退修复（pad 224）+ CPU 解码准确率守门
 
 > 本节面向使用者：只讲你能直接感知到的变化。技术细节见下方各节。
