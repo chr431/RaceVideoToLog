@@ -143,8 +143,16 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "_smoke" | Out-Null
-          ffmpeg -y -f lavfi -i "testsrc=duration=3:size=640x360:rate=30" `
-            -pix_fmt yuv420p "_smoke\input.mp4" 2>$null
+          # windows-2025 runner 不预装 ffmpeg：PATH 缺失时用 imageio-ffmpeg
+          # 的静态构建兜底（venv 已就绪，装包 ~10s）
+          $ff = (Get-Command ffmpeg -ErrorAction SilentlyContinue).Source
+          if (-not $ff) {
+            python -m pip install -q imageio-ffmpeg
+            $ff = (python -c "import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())").Trim()
+          }
+          & $ff -y -loglevel error -f lavfi `
+            -i "testsrc=duration=3:size=640x360:rate=30" `
+            -c:v libx264 -pix_fmt yuv420p "_smoke\input.mp4"
           if (-not (Test-Path "_smoke\input.mp4")) {
             Write-Error "ffmpeg 合成测试视频失败"
             exit 1
