@@ -158,11 +158,15 @@ jobs:
             exit 1
           }
           $ver = "${{ steps.ver.outputs.version }}"
-          dist\RaceVideoToLog\RaceVideoToLog.exe "_smoke\input.mp4" `
-            --roi 20 20 300 80 --decode-backend cpu --ocr-backend cpu `
-            --no-monitor --frame-end 60 -o "_smoke\out.csv"
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "frozen exe 冒烟运行失败（exit $LASTEXITCODE）"
+          # exe 为 console=False（GUI 子系统）：pwsh 的 & 不等待 GUI 进程，
+          # 必须用 Start-Process -Wait，否则 CSV 尚未写出就做存在性检查
+          $p = Start-Process -FilePath "dist\RaceVideoToLog\RaceVideoToLog.exe" `
+            -ArgumentList "_smoke\input.mp4", "--roi", "20", "20", "300", "80", `
+              "--decode-backend", "cpu", "--ocr-backend", "cpu", `
+              "--no-monitor", "--frame-end", "60", "-o", "_smoke\out.csv" `
+            -Wait -PassThru -NoNewWindow
+          if ($p.ExitCode -ne 0) {
+            Write-Error "frozen exe 冒烟运行失败（exit $($p.ExitCode)）"
             exit 1
           }
           $csv = Get-Content "_smoke\out.csv" -Encoding UTF8
