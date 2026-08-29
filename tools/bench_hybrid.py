@@ -2,7 +2,9 @@
 
 引擎 v0.3（submodule e8b2637）起 `decode_backend="hybrid"` 是一等解码后端：
 同一实例内 NVDEC 与 CPU 软解作为双生产者，按关键帧分片动态竞争，谁快谁多拿。
-AV1（CPU 软解已知净负）按引擎安全门自动回退纯 GPU——本工具显式校验该回退。
+引擎 0.8.x hybrid v3/v4 实测 HEVC/AV1 与纯 NVDEC 持平后**移除了编码回退门**
+（0.9.0 现役：任何编码都可 hybrid）——本工具相应校验 AV1（test6）保持
+hybrid 且墙钟不明显劣于 auto（ratio<1.10 "不退化"门）。
 
 用法：
     python tools/bench_hybrid.py                          # 3000 帧窗口 × 5 视频
@@ -83,7 +85,7 @@ def main() -> None:
         "frames": args.frames or None,
         "runs": args.runs,
         "ocr_backend": args.ocr_backend,
-        "av1_fallback_check": {},
+        "av1_hybrid_check": {},
         "combos": {},
     }
     for video in args.videos:
@@ -103,25 +105,35 @@ def main() -> None:
                    (f"回退({h.get('actual_backend')})" if a.get("actual_backend") == h.get("actual_backend") else f"后端变化({h.get('actual_backend')})")
             print(f"    → Δtotal {dt:+.2f}s ({delta:+.1f}%), ratio {ratio:.3f}, "
                   f"backend {a.get('actual_backend')} → {h.get('actual_backend')} [{mark}]")
-        # AV1（test6）必须自动回退：hybrid 实际后端不得含 hybrid 字样
+        # AV1（test6）：引擎 0.8.x 起 hybrid 支持所有编码（v3 速率比例分界
+        # 实测 HEVC/AV1 与纯 NVDEC 持平，回退门已删）——校验改为"保持
+        # hybrid 且不明显慢于 auto"（ratio<1.10 即不退化门）。
         if video == "test6":
             hb = str(h.get("actual_backend", "")).lower()
-            fallback_ok = "hybrid" not in hb
-            record["av1_fallback_check"][video] = {
+            stays_hybrid = "hybrid" in hb
+            _a = a.get("total_pipeline_s", 0) or 0
+            _h = h.get("total_pipeline_s", 0) or 0
+            ratio = (_h / _a) if _a else 0.0
+            no_regress = bool(_a) and ratio < 1.10
+            record["av1_hybrid_check"][video] = {
                 "auto_backend": a.get("actual_backend"),
                 "hybrid_backend": h.get("actual_backend"),
-                "fallback_ok": fallback_ok,
+                "stays_hybrid": stays_hybrid,
+                "ratio": round(ratio, 3),
+                "no_regress": no_regress,
             }
-            print(f"    → AV1 回退校验: {'OK（未启用 hybrid）' if fallback_ok else 'FAIL（仍为 hybrid）'}")
+            print(f"    → AV1 hybrid 校验: "
+                  f"{'OK（保持 hybrid，ratio %.3f）' % ratio if stays_hybrid and no_regress else 'FAIL'}")
         record["combos"][video] = results
 
     with open(args.json, "w", encoding="utf-8") as f:
         json.dump(record, f, ensure_ascii=False, indent=2)
     print(f"Record saved: {args.json}")
 
-    fails = [k for k, v in record["av1_fallback_check"].items() if not v["fallback_ok"]]
+    fails = [k for k, v in record["av1_hybrid_check"].items()
+             if not (v["stays_hybrid"] and v["no_regress"])]
     if fails:
-        print(f"FAIL: AV1 自动回退校验未通过: {fails}")
+        print(f"FAIL: AV1 hybrid 校验未通过（回退或退化）: {fails}")
         sys.exit(1)
 
 

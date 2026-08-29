@@ -1,11 +1,15 @@
 """OCR 线程预算单测：auto_ocr_thread_count / _ocr_num_threads 语义。
 
-锁定"根本性解决抢核"的预算规则：OCR 吃满全部物理核，解码走 NVDEC
-卸载或 fork 默认线程（不抢核）；OCR_THREADS env 钩子优先。
-v2.15.2 新增少核 CPU 软解分核：物理核 ≤8 且 CPU 解码时 OCR 与 FFmpeg
-各分 cores//2（实测 4 核 -15%、8 核 -14%）；核数多/GPU 解码保持全核。
+锁定"根本性解决抢核"的预算规则：OCR 吃满全部物理核；OCR_THREADS env
+钩子优先。v2.15.2 新增少核 CPU 软解分核：物理核 ≤8 且 CPU 解码时 OCR
+与 FFmpeg 各分 cores//2（实测 4 核 -15%、8 核 -14%）。
+引擎 0.8.0 起接管解码线程预算（_decode_num_threads），0.9.0 收敛为
+恒分档（不再对多核返回 None）——分档规则见
+test_split_cores_on_low_core_cpu_decode 的 docstring。
 """
 from __future__ import annotations
+
+import os
 
 import config
 from segment_flow import SegmentPipeline
@@ -50,26 +54,55 @@ def test_auto_budget_without_env(monkeypatch):
 
 
 def test_split_cores_on_low_core_cpu_decode(monkeypatch):
-    """少核 + CPU 软解：OCR 与解码显式分核（cores//2）。
+    """解码线程分档（引擎 0.8.0 起接管，0.9.0 收敛为恒分档）。
 
-    _decode_num_threads 只由 CPU 解码调用方（_open_vr 的 CPU 分支）使用，
-    返回值与 _backend 无关（按物理核判定）。
+    _decode_num_threads 不再返回 None（旧"多核用 decord 默认 8 线程"
+    白丢 ~28% 解码吞吐，见引擎 extractor._decode_num_threads 注释）：
+      · OCR 在 GPU（默认 auto/TRT）：吃满逻辑核，钳 [8, 32]
+      · OCR 在 CPU + 少核（物理 ≤8）：cores//2
+      · OCR 在 CPU + 多核：stride>1 → 逻辑核 3/4 钳 [8,24]；
+        stride==1 → 逻辑核 1/3 钳 [8,12]
     """
     monkeypatch.delenv("OCR_THREADS", raising=False)
     p = _pipe()
+    p._backend = "decord/CPU"
+    cores = cpu_physical_cores()
+    logical = os.cpu_count() or cores
+    if cores <= config.CPU_CORES_SPLIT_THRESHOLD:
+        expect = max(2, cores // 2)
+        assert p._ocr_num_threads() == expect
+        assert p._decode_num_threads() == expect
+    else:  # 核数多：OCR 保持全核；解码按 OCR 落点分档（默认 GPU → 逻辑核钳 [8,32]）
+        assert p._ocr_num_threads() == cores
+        assert p._decode_num_threads() == max(
+            config.DECODE_THREADS_GPU_OCR_MIN,
+            min(config.DECODE_THREADS_GPU_OCR_MAX, logical))
+    # GPU 解码：OCR 保持全核（_decode_num_threads 与 _backend 无关，
+    # 只看 _ocr_backend；GPU 分支在调用方不传 num_threads）
+    p._backend = "decord/GPU"
+    assert p._ocr_num_threads() == cores
+
+
+def test_cpu_ocr_stride_tiers_decode_threads(monkeypatch):
+    """OCR 在 CPU + 多核：解码线程按采样步长分档（引擎 0.9.0 契约）。"""
+    monkeypatch.delenv("OCR_THREADS", raising=False)
+    p = _pipe(ocr_backend="cpu")
     p._backend = "decord/CPU"
     cores = cpu_physical_cores()
     if cores <= config.CPU_CORES_SPLIT_THRESHOLD:
         expect = max(2, cores // 2)
         assert p._ocr_num_threads() == expect
         assert p._decode_num_threads() == expect
-    else:  # 核数多：保持全核，解码用 decord 默认（None）
-        assert p._ocr_num_threads() == cores
-        assert p._decode_num_threads() is None
-    # GPU 解码：OCR 保持全核（_decode_num_threads 与 backend 无关，
-    # GPU 分支在调用方不传 num_threads）
-    p._backend = "decord/GPU"
+        return
+    logical = os.cpu_count() or cores
     assert p._ocr_num_threads() == cores
+    # stride==1（OCR 受限）：逻辑核 1/3 钳 [8, 12]
+    assert p._decode_num_threads() == max(
+        8, min(config.DECODE_THREADS_CPU_OCR_STRIDE1_MAX, logical // 3))
+    # stride>1（解码受限）：逻辑核 3/4 钳 [8, 24]
+    p._sample_stride = 8
+    assert p._decode_num_threads() == max(
+        8, min(config.DECODE_THREADS_CPU_OCR_MAX, logical * 3 // 4))
 
 
 def test_av1_cpu_decode_allocates_more_to_decode(monkeypatch):

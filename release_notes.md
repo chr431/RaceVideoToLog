@@ -1,5 +1,59 @@
 # Release Notes
 
+## v2.17.0（2026-08-29）— 同步引擎 0.9.0（性能轮 + AV1 hybrid 解禁 + API 收口）
+
+> 本节面向使用者：只讲你能直接感知到的变化。技术细节见下方各节。
+
+### 🚀 引擎升级（0.9.0，随 submodule 同步）
+
+- 引擎子模块更新到 `chr431/video_ocr_engine 6657133`（0.9.0）：
+  - **hybrid 解码不再按编码回退**：0.8.x hybrid v3/v4 实测 HEVC/AV1 与纯
+    NVDEC 持平后移除编码回退门——AV1 片源（test6）也可 hybrid，本机实测
+    还略快于 auto（-3.9%~-5.3%）；HEVC 的 hybrid 从 0.7.0 的 +36.4%
+    劣化收敛到 +9.7%（墙钟 4.5s → 3.4s），见下表。
+  - **性能轮**（0.8.x 系列）：CPU 软解关去块滤波默认开（HEVC 墙钟
+    -13%~-18%、h264 -5%~-13%，六片真值 + test4 视觉裁定确认 OCR 无负面
+    影响）；CPU 解码线程按"OCR 在 GPU/CPU + 采样步长"分档（TRT 场景
+    -45%~-50%）；TRT 批对齐 max_batch；host 输入 TRT 批走 GPU argmax；
+    OCR 输入宽度自适应裁切；hybrid × GPU 全驻留管线合并（互斥门控移除）。
+  - **0.9.0 API 收口（破坏性）**：构造参数 `gray_output/yuv_output` 删除
+    （一律 `rep_crop_format`）；实验钩子 `GPU_PIPELINE_ASYNC` /
+    `HYBRID_CALIB_ROUNDS` / `DECORD_FORCE_CPU` / merge_similar 的
+    `contrast` 分离模式删除（历史结论留痕于引擎 docs/PERFORMANCE.md）。
+  - 行为提示：关去块滤波后，显示为补零形式的两位速度（如 `020`）OCR 会
+    如实带前导零输出；应用侧按数值解析（`020`→20），日志结果不受影响。
+
+### 🔧 适配（Race 侧）
+
+- `SegmentPipeline` 不再向引擎透传已删除的 `gray_output/yuv_output`
+  构造参数（应用侧签名保留为兼容别名，内部解析为 `rep_crop_format`）。
+- `tests/test_thread_budget.py` 更新为引擎 0.9.0 解码线程分档契约
+  （多核不再返回 None：OCR 在 GPU 钳逻辑核 8~32；OCR 在 CPU 按步长
+  3/4 或 1/3 分档），并新增 stride 分档断言。
+- `tools/bench_hybrid.py` 的 AV1 校验翻转为"保持 hybrid 且不明显慢于
+  auto（ratio<1.10）"（原"必须回退纯 GPU"断言已过时）。
+
+### 🎯 准确率
+
+- auto 与 hybrid 全量漏斗均 **最终错误 0**（5 视频 14533 段）：
+  原始误读 149 → 190（关去块滤波后 OCR 输入更"忠实"导致的账面波动），
+  检出/纠正 **190/190 = 100%**、误改 0，与基线门禁一致无回归。
+
+### 🧪 实测性能（全量帧、单跑、warm，runs=2 取最后次，auto+auto OCR）
+
+| 视频 | 编码 | auto | hybrid | Δ |
+|---|---|---:|---:|---:|
+| test | HEVC | 3.1s | 3.4s | +9.7% |
+| test2 | h264 | 2.9s | 2.8s | -3.4% |
+| test3 | h264 | 4.1s | 3.2s | **-22.0%** |
+| test5 | h264 | 8.6s | 5.7s | **-33.7%** |
+| test6 | AV1 | 15.2s | 14.6s | -3.9%（0.8.x 起 hybrid 支持 AV1，不再回退） |
+
+对照 0.7.0（v2.16.1）：auto 各片 ±0.3s（噪声级）；hybrid 在 h264 受益
+场景持平或略优（test5 -33.7% vs -30.1%、test3 -22.0% vs -20.5%），
+HEVC/AV1 从"无收益甚至更慢"变为持平或略快（test +9.7% vs +36.4%、
+test6 -3.9% vs +2.0%）。生产默认仍为 auto。
+
 ## v2.16.1（2026-08-26）— 同步引擎 0.7.0（公共 API 清理 + GPU 零拷贝优化）
 
 > 本节面向使用者：只讲你能直接感知到的变化。技术细节见下方各节。

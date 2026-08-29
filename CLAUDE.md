@@ -3,8 +3,29 @@
 从赛车视频 OCR 提取速度，输出时间-速度-距离 CSV。Python 3.11+，PySide6 GUI +
 CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
 
-## 引擎同步（submodule 832f39c，engine 0.7.0，2026-08）
+## 引擎同步（submodule 6657133，engine 0.9.0，2026-08）
 
+- **0.9.0 同步适配（2026-08-29）**：
+  - 引擎构造参数 `gray_output/yuv_output` 已删除（0.7.0 标 deprecated，
+    0.9.0 移除，一律 `rep_crop_format`）——`SegmentPipeline.__init__`
+    保留应用侧签名为兼容别名，内部解析为 `rep_crop_format` 后只转发
+    引擎现役参数；`gui_export.ExportThread` 同理（应用侧签名，未触引擎）。
+  - 引擎 0.8.x 接管解码线程预算，0.9.0 收敛为**恒分档**（多核不再返回
+    None）：OCR 在 GPU → 逻辑核钳 [8,32]；OCR 在 CPU 按步长分档
+    （stride>1 → 3/4 钳 [8,24]；stride==1 → 1/3 钳 [8,12]；少核 →
+    cores//2）。`tests/test_thread_budget.py` 已按新契约更新并新增
+    stride 分档断言。
+  - 实验钩子删除留痕：`GPU_PIPELINE_ASYNC` / `HYBRID_CALIB_ROUNDS` /
+    `DECORD_FORCE_CPU`（env）/ merge_similar 的 `contrast` 分离模式
+    （本仓库无任何引用，`video_utils_app.open_decord_vr` 的
+    `DECORD_FORCE_CPU` 是应用侧预览逻辑，与引擎钩子无关，保留）。
+  - **hybrid 编码回退门已移除**（0.8.x hybrid v3/v4 实测 HEVC/AV1 与纯
+    NVDEC 持平）：任何编码都可 hybrid；`tools/bench_hybrid.py` 的 test6
+    校验翻转为"保持 hybrid 且 ratio<1.10 不退化"。
+  - CPU 软解关去块滤波默认开（`DECORD_SKIP_LOOP_FILTER=all`，引擎
+    import 时 setdefault）：补零显示（`020`）OCR 如实带前导零，应用侧
+    `_extract_speed_from_text` 按数值解析不受影响；实测原始误读账面
+    149 → 190，检出/纠正 190/190、最终 0 不变。
 - **单实例双完整流水线已从引擎移除**：`FieldExtractor` 不再接受
   `dual_pipeline / dual_backends`；Race 侧 `--dual-pipeline / --dual-backends`
   CLI 参数、`tools/bench_dual_pipeline.py`（已归档）、`tools/detect_eval.py --dual`
@@ -12,9 +33,10 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
 - **hybrid 转正为一等解码后端**：`decode_backend="hybrid"`（`engine_config.
   DECODE_BACKEND_KEYS` 含 hybrid），GUI/CLI 解码选择均已暴露。引擎
   `hybrid_decode.HybridDecoder`（kfe 分片 + CPU∥NVDEC 双生产者竞争）由
-  FieldExtractor 自动激活：需 NVDEC 可用、stride==1、未开 GPU 全驻留管线、
-  **编码非 AV1**（AV1 自动回退纯 GPU）；初始化失败回退纯 GPU。
-  旧 env `RVTOL_HYBRID_DECODE` 已删除，无环境变量入口；新 env：
+  FieldExtractor 自动激活：`decode_backend="hybrid"` 且 NVDEC 可用即可
+  （0.8.x 起 stride>1 解禁、编码门删除；§8.3 起 hybrid × GPU 全驻留管线
+  合并不再互斥）；NVDEC 不可用回退 CPU、初始化失败回退纯 GPU。旧 env
+  `RVTOL_HYBRID_DECODE` 已删除，无环境变量入口；新 env：
   `HYBRID_CPU_THREADS`（0=核数//2）、`HYBRID_MAX_CHUNKS`（默认 16）。
 - **速度域常量回归应用侧**：引擎 engine_config 重构后不再携带速度/纠错常量
   （SEG_* / SEG_CONF_* / SEG_DP_* / SEG_SPIKE_* / MPS_TO_KMH / SOURCE_TO_KMH /
@@ -22,7 +44,8 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
   已移回 `config.py`（应用侧单一事实源）。
 - **双 ONNX 实例开关改名**：`DUAL_ONNX` → `OCR_INSTANCES`
   （`OCR_INSTANCES_MIN_THREADS=8`）。
-- 测量工具：`tools/bench_hybrid.py`（auto vs hybrid 端到端 + AV1 回退校验）。
+- 测量工具：`tools/bench_hybrid.py`（auto vs hybrid 端到端 + test6 AV1
+  "保持 hybrid 且不退化"校验）。
 - **0.7.0 公共 API 清理（破坏性）**：引擎移除 `fps` 构造参数（此前即被
   静默忽略）、`gray_output/yuv_output` 降级为 deprecated 别名（主参数
   `rep_crop_format("yuv"|"gray")`，`yuv_output=True≡"yuv"`）；删除实例
@@ -43,6 +66,14 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
   开销）；test6 AV1 自动回退纯 GPU（+2.0%，波动内）。
   **hybrid 不是全编码普适加速，生产默认仍保持 auto**，hybrid 作为用户
   显式选择的解码后端保留。
+- **Race 全量端到端实测（0.9.0，2026-08-29，本机 auto+auto，单跑 warm，
+  runs=2 取最后次）**：test5 h264 hybrid **-33.7%**、test3 h264 **-22.0%**
+  （受益场景持平或略优于 0.7.0）；test2 h264 **-3.4%**、test HEVC **+9.7%**
+  （0.7.0 为 +36.4%，关去块滤波 + hybrid v4 后大幅收敛）；test6 AV1
+  hybrid **-3.9%**（回退门删除后 hybrid 首次覆盖 AV1 且不劣化）。
+  auto 各片 ±0.3s（噪声级）。准确率漏斗 auto/hybrid 均 final=0
+  （14533 段；原始误读 149→190 系关去块滤波账面波动，190/190 全检出）。
+  pytest 105 passed + 1 skipped。
 
 ## 引擎独立仓库（v2.16 拆仓完成）
 
@@ -64,8 +95,8 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
   ③ pytest 根 `conftest.py`（本地/CI）。
   frozen（PyInstaller）下引擎已由 spec 的 pathex + hiddenimports 打包进 EXE，
   `ensure_engine_path()` 检测 `sys.frozen` 直接跳过。
-- **版本解耦**：引擎独立版本线（`engine_config.__version__ = "0.7.x"`）；应用版本
-  `config.__version__ = "2.16.x"` 仍是本仓库单一事实源 —— `tools/version.py` 已移除
+- **版本解耦**：引擎独立版本线（`engine_config.__version__ = "0.9.x"`）；应用版本
+  `config.__version__ = "2.17.x"` 仍是本仓库单一事实源 —— `tools/version.py` 已移除
   engine_config 引用（不再跨仓双重校验）。
 - **模型资产只随引擎仓库**：本仓库 `assets/ocr_models` 已删除。打包时 `RaceVideoToLog.spec`
   从 `third_party/video_ocr_engine/assets/ocr_models` 收集到 `_internal/ocr_models`

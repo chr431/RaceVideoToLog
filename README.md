@@ -23,7 +23,7 @@ git submodule update --init --recursive
 也内置引导（`engine_bootstrap.py`），任意入口都能 import 引擎模块。
 
 源码运行时引擎缓存/日志写在本子模块目录内（引擎仓库 `.gitignore` 已忽略，
-不会弄脏引擎提交）。引擎使用独立版本线（0.7.x）；应用版本（2.16.x）仍以
+不会弄脏引擎提交）。引擎使用独立版本线（0.9.x）；应用版本（2.17.x）仍以
 `config.__version__` 为单一事实源，两者解耦。
 
 ## 前置要求

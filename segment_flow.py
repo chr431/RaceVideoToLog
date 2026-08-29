@@ -126,15 +126,18 @@ class SegmentPipeline(FieldExtractor):
                  merge_similar_threshold: float | None = None,
                  merge_text_sep: str | None = None):
         # 引擎字段（解码/分段/OCR 识别链）由 FieldExtractor.__init__ 设置
+        # fps/gray_output/yuv_output 参数 0.7.0 起已被引擎移除（fps 此前即
+        # 被静默忽略；gray/yuv 0.9.0 归一为 rep_crop_format），保留应用侧
+        # 签名仅为兼容，在此解析后只转发引擎现役参数
+        if rep_crop_format is None:
+            rep_crop_format = ("yuv" if yuv_output
+                               else ("gray" if gray_output else None))
         super().__init__(
             video_path=video_path, roi=roi, frame_start=frame_start,
             frame_end=frame_end, force_aspect=force_aspect,
             decode_backend=decode_backend, ocr_backend=ocr_backend,
             buffer_size=buffer_size, fill_width=fill_width, C=C,
-            # fps 参数 0.7.0 已从引擎移除（此前即被静默忽略），保留应用侧
-            # 签名仅为兼容（引擎自测帧率，忽略外部传入）
             progress_cb=progress_cb, cancel_check=cancel_check,
-            gray_output=gray_output, yuv_output=yuv_output,
             rep_crop_format=rep_crop_format,
             # GUI review 需要代表帧预览，显式保留（引擎默认 True，这里加固）
             keep_crops=True, keep_frames=True,

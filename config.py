@@ -70,7 +70,7 @@ SEG_SPIKE_MIN_FPS: float = 40.0
 
 # 版本：应用侧单一事实源（引擎独立版本线 0.3.x 不随应用 bump）；
 # 运行时 CSV 头/控制台读 config.__version__（历史入口保持不变）
-__version__ = "2.16.1"
+__version__ = "2.17.0"
 
 # ═══════════════════ 应用/日志与监控 ═══════════════════
 DEFAULT_LOG_LEVEL: str = "normal"      # 日志级别 (normal / detailed / debug)
