@@ -12,7 +12,7 @@
 | cuda-python | 13.3.1 | PyPI | CUDA Python 绑定（TRT 执行 + decord GPU DLL 注册） |
 | tensorrt_cu13_bindings | 11.2.1.2 | PyPI | TensorRT Python 绑定（~1MB） |
 | psutil | 7.2.2 | PyPI | 资源监测 RSS / CPU%（可选：缺失时降级为 None，GPU 采样不受影响） |
-| decord | **0.7.11** | 自建仓库 chr431/decord | NVDEC 硬解 + CPU 软件解码；FFmpeg 8.x DLL。**2026-08-18 统一为 GitHub release v0.7.11 构建**（site-packages 与 _decord_build 同 sha `89D82E5B`，python 层 libinfo 0.7.11）。**PyPI 版不支持 next_roi / CPU ROI 优化 / YUV420 输出**，见 setup_venv.bat。引擎 `sample_stride>1`（分频采样）的等差步长快速路径在 fork v0.7.12+，父仓默认 stride=1 用 v0.7.11 即可 |
+| decord | **0.7.14** | 自建仓库 chr431/decord | NVDEC 硬解 + CPU 软件解码；FFmpeg 8.x DLL。**发布产物（frozen exe）自 v2.17.0 起统一为 fork v0.7.14**：引擎 0.9.0 的 `DECORD_SKIP_LOOP_FILTER` 透传需 ≥v0.7.13、`sample_stride>1` 等差步长快速路径需 ≥v0.7.12——用旧版这些优化静默失效。**PyPI 版不支持 next_roi / CPU ROI 优化 / YUV420 输出**，见 setup_venv.bat |
 | video_ocr_engine | 0.9.x | git submodule chr431/video_ocr_engine | 解码+OCR 识别链引擎（FieldExtractor，零速度语义）；经 `third_party/video_ocr_engine`（sys.path bootstrap / .pth）提供引擎顶层模块与 `video_ocr_engine/` 包；OCR 模型资产随引擎仓库（PP-OCRv6_small + 字符表） |
 | pyinstaller | 6.22.2 | PyPI | 打包工具（6.21→6.22.2） |
 
