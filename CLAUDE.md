@@ -22,10 +22,18 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
   - **hybrid 编码回退门已移除**（0.8.x hybrid v3/v4 实测 HEVC/AV1 与纯
     NVDEC 持平）：任何编码都可 hybrid；`tools/bench_hybrid.py` 的 test6
     校验翻转为"保持 hybrid 且 ratio<1.10 不退化"。
-  - CPU 软解关去块滤波默认开（`DECORD_SKIP_LOOP_FILTER=all`，引擎
-    import 时 setdefault）：补零显示（`020`）OCR 如实带前导零，应用侧
-    `_extract_speed_from_text` 按数值解析不受影响；实测原始误读账面
-    149 → 190，检出/纠正 190/190、最终 0 不变。
+  - CPU 软解关去块滤波（`DECORD_SKIP_LOOP_FILTER`，引擎 0.9.0 import 时
+    setdefault=all）：**应用侧已 opt-out**——`config.py` 顶部 setdefault
+    'none'（先于引擎包 import 生效，显式 env=all 可覆盖）。决策依据
+    （2026-08-29，本地 decord 升 0.7.14 后首次真实生效的 A/B）：
+    · 准确度（CPU 解码全量漏斗）：all 段界漂移 +60 段、检出率 97.9%、
+      **最终错误 0→7**（test 3 / test2 4，漏 4 + 纠错错 2 + 误改 1）；
+      none 与 0.7.11 逐位一致 → 违反最终错误数硬门禁，回退。
+    · 性能（decode=cpu 3000 帧 warm）：HEVC（test）total -12%
+      （3.3→2.9s，decode 2.0→1.6s）；h264（test5）无收益（2.0s 持平）。
+      auto（NVDEC）完全不受该开关影响。
+    · 此前"原始误读 149→190 系关去块滤波"为**错误归因**：本地当时
+      decord 0.7.11 不支持该 env，190 来自引擎 0.9.0 其他变化。
 - **单实例双完整流水线已从引擎移除**：`FieldExtractor` 不再接受
   `dual_pipeline / dual_backends`；Race 侧 `--dual-pipeline / --dual-backends`
   CLI 参数、`tools/bench_dual_pipeline.py`（已归档）、`tools/detect_eval.py --dual`

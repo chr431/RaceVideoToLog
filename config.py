@@ -8,6 +8,19 @@ config.SEG_*` 的既有引用），并保留 GUI/应用专属常量（颜色/窗
 """
 from __future__ import annotations
 
+import os as _os
+
+# ── 解码预处理策略（应用侧决策，必须先于引擎包 import 生效）──
+# 引擎 0.9.0 起 import 时 setdefault DECORD_SKIP_LOOP_FILTER=all（CPU 软解
+# 关去块滤波，HEVC 解码 -13%~-18%）。引擎级真值裁定为中性，但本应用
+# CPU 解码路径实测（5 视频全量漏斗，2026-08-29，decord 0.7.14）：段界
+# 漂移 +60 段、检出率 100%→97.9%、最终错误 0→7（test 3 / test2 4）——
+# 最终错误数是本应用硬门禁，故在此 setdefault 回完整去块滤波（none）。
+# 本 setdefault 先于引擎包 __init__ 的同名 setdefault 执行即生效；生产
+# 默认 auto 走 NVDEC 本就不受该开关影响。如需引擎默认速度（hybrid/cpu
+# 后端），可预先显式设置 DECORD_SKIP_LOOP_FILTER=all 覆盖。
+_os.environ.setdefault("DECORD_SKIP_LOOP_FILTER", "none")
+
 # 管线引擎域 + 共享常量（单一事实源在引擎仓库 engine_config.py）
 from engine_config import *  # noqa: F401,F403 — 聚合导出兼容
 
