@@ -13,7 +13,7 @@
 | tensorrt_cu13_bindings | 11.2.1.2 | PyPI | TensorRT Python 绑定（~1MB） |
 | psutil | 7.2.2 | PyPI | 资源监测 RSS / CPU%（可选：缺失时降级为 None，GPU 采样不受影响） |
 | decord | **0.7.14** | 自建仓库 chr431/decord | NVDEC 硬解 + CPU 软件解码；FFmpeg 8.x DLL。**发布产物（frozen exe）自 v2.17.0 起统一为 fork v0.7.14**：引擎 0.9.0 的 `DECORD_SKIP_LOOP_FILTER` 透传需 ≥v0.7.13、`sample_stride>1` 等差步长快速路径需 ≥v0.7.12——用旧版这些优化静默失效。**PyPI 版不支持 next_roi / CPU ROI 优化 / YUV420 输出**，见 setup_venv.bat |
-| video_ocr_engine | 0.9.x | git submodule chr431/video_ocr_engine | 解码+OCR 识别链引擎（FieldExtractor，零速度语义）；经 `third_party/video_ocr_engine`（sys.path bootstrap / .pth）提供引擎顶层模块与 `video_ocr_engine/` 包；OCR 模型资产随引擎仓库（PP-OCRv6_small + 字符表） |
+| video_ocr_engine | **0.9.0** | pip（git tag 锁定）chr431/video_ocr_engine | 解码+OCR 识别链引擎（FieldExtractor，零速度语义）。提供 `video_ocr_engine/` 包与 `engine_config/segmentation/ocr_native/ocr_trt/video_utils/hybrid_decode/gpu_setup` 顶层模块；OCR 模型资产随引擎仓库（PP-OCRv6_small + 字符表）。**2026-08-30 起由 git submodule 改为 pip 依赖**：`pyproject.toml` 中 `video-ocr-engine @ git+...@v0.9.0` 锁定；本地有源码树时 setup_venv.bat 自动改 editable 安装（改引擎立刻生效） |
 | pyinstaller | 6.22.2 | PyPI | 打包工具（6.21→6.22.2） |
 
 ## GPU 加速（运行时，不打包）

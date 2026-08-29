@@ -23,11 +23,10 @@ PROJECT = Path(__file__).parent.parent
 if str(PROJECT) not in sys.path:
     sys.path.insert(0, str(PROJECT))
 
-# 模型资产随引擎子模块（third_party/video_ocr_engine/assets/ocr_models）
-ENGINE_ROOT = PROJECT / "third_party" / "video_ocr_engine"
-if str(ENGINE_ROOT) not in sys.path:
-    sys.path.insert(0, str(ENGINE_ROOT))
-MODELS = ENGINE_ROOT / "assets" / "ocr_models"
+# 模型资产随引擎包（video-ocr-engine pip 依赖）分发；位置由引擎自己解析，
+# 覆盖 源码树 / site-packages / frozen 三种布局。
+import ocr_native as _ocr_native
+MODELS = _ocr_native._models_dir()
 
 
 def build_engine(variant: str, out_path: Path, fp16: bool) -> None:

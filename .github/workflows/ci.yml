@@ -11,9 +11,9 @@ jobs:
     if: github.ref_name != 'master'  # master is the release branch (no tests/)
     runs-on: windows-latest
     steps:
+      # 引擎 video_ocr_engine 已 pip 化，版本由 pyproject.toml 的 git tag
+      # 锁定，由下面的 `pip install -e .` 拉取 —— 不再需要 submodule checkout。
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive  # 引擎子模块 third_party/video_ocr_engine
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -34,8 +34,6 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive  # 引擎子模块 third_party/video_ocr_engine
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'

@@ -31,8 +31,9 @@ hiddenimports = [
     'gui_export', 'gui_settings', 'gui_preview', 'gui_video',
     'export_controller', 'review_chart',
     'widget_utils', 'theme_manager', 'csv_io', 'ocr_text', 'signals',
-    'monitor', 'logging_setup', 'engine_bootstrap',
-    # 引擎子模块（third_party/video_ocr_engine）：识别链模块经 pathex 提供
+    'monitor', 'logging_setup',
+    # 引擎模块（video_ocr_engine pip 包 + 顶层模块）：已随 venv 安装，
+    # 显式列出以免 PyInstaller 漏收动态 import 的部分
     'engine_config', 'gpu_setup', 'hybrid_decode', 'ocr_native', 'ocr_trt',
     'segmentation', 'video_utils', 'tensorrt', 'video_ocr_engine',
 ]
@@ -185,10 +186,15 @@ datas = [(s, d) for s, d in datas
 # 缓存到 <程序目录>/ocr_engines/（免安装设计；旧 %LOCALAPPDATA% 缓存只读回退）
 # 只打包 v6_small（v2.13 起唯一模型，GUI/CLI 无模型选择）—— tiny onnx
 # 已无用，排除省 ~4.3MB。
-# 模型资产随引擎子模块（third_party/video_ocr_engine/assets/ocr_models）提供：
+# 模型资产随引擎包分发（video-ocr-engine 的 data-files），由下面的
+# _models_dir() 定位：
 # 打包到 _internal/ocr_models（与 ocr_native._models_dir() 的 frozen 语义一致）。
-_ENGINE_ROOT = os.path.join(os.path.abspath('.'), 'third_party', 'video_ocr_engine')
-_OCR_MODELS_ROOT = os.path.join(_ENGINE_ROOT, 'assets', 'ocr_models')
+# 引擎已 pip 化：模型资产位置交给引擎自己解析（ocr_native._models_dir 覆盖
+# 源码树 / site-packages / frozen 三种布局），不再拼 third_party 路径。
+# 注意：spec 由 PyInstaller 在构建环境执行，此时尚未 frozen，拿到的是
+# 已安装引擎的资产目录。
+import ocr_native as _ocr_native
+_OCR_MODELS_ROOT = str(_ocr_native._models_dir())
 for _root, _dirs, _files in os.walk(_OCR_MODELS_ROOT):
     for _f in _files:
         if _f.endswith('.engine') or 'tiny' in _f:

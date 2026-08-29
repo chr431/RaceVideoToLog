@@ -39,20 +39,31 @@ echo Upgrading pip ...
 .venv\Scripts\python -m pip install --upgrade pip -q
 
 echo.
-echo Writing engine submodule path into site-packages (.pth) ...
-rem 引擎子模块 third_party/video_ocr_engine 是 Python 源码根（顶层含
-rem engine_config/segmentation/ocr_native/... 与 video_ocr_engine 包）。
-rem 写 site-packages 的 .pth 让任何 venv 进程（CLI/GUI/tools/测试）都能
-rem import 引擎模块，无需逐个入口插 sys.path。
-> ".venv\Lib\site-packages\video_ocr_engine.pth" echo %~dp0third_party\video_ocr_engine
-
-echo.
 echo Installing project dependencies ...
 .venv\Scripts\python -m pip install -e .
 if errorlevel 1 (
     echo [ERROR] Dependency installation failed.
     if not "%_NOPAUSE%"=="1" pause
     exit /b 1
+)
+
+rem ── 引擎 video_ocr_engine：pip 依赖，不再用 git submodule ──
+rem 旧做法：把 third_party/video_ocr_engine 的绝对路径写进 site-packages
+rem 的 .pth —— 硬编码盘符，换机器即失效，且与 submodule 的 detached HEAD
+rem 绑死（曾出现本地 commit 未被上游吸收、本地分支落后 90 个提交）。
+rem 新做法：引擎是普通 pip 包，版本由 pyproject.toml 的 git tag 锁定。
+rem 本地存在引擎源码树时以 editable 覆盖，改引擎代码立刻生效；
+rem 必须在装完生产仓依赖后再装一次，否则 pip 会用 git 版本覆盖掉源码直连。
+set "_ENGINE_SRC=%~dp0..\video_ocr_engine"
+if exist "%_ENGINE_SRC%\pyproject.toml" (
+    echo.
+    echo Linking local engine source tree (editable) ...
+    .venv\Scripts\python -m pip install -e "%_ENGINE_SRC%" --no-deps
+    if errorlevel 1 (
+        echo [ERROR] Engine editable install failed.
+        if not "%_NOPAUSE%"=="1" pause
+        exit /b 1
+    )
 )
 
 echo.

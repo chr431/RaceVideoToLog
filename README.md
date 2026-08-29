@@ -2,29 +2,35 @@
 
 从赛车视频中提取速度数据，生成时间-速度-距离 CSV 文件。
 
-## 引擎子模块（third_party/video_ocr_engine）
+## 引擎依赖（video_ocr_engine）
 
 解码 + OCR 识别链已拆分为独立的通用引擎仓库
 [chr431/video_ocr_engine](https://github.com/chr431/video_ocr_engine)
 （`FieldExtractor`：解码 → 像素分段 → 代表帧 → OCR 文本+置信度，**零速度语义**，
-也可用于字幕提取等通用场景）。本仓库通过 **git submodule** 调用：
+也可用于字幕提取等通用场景）。本仓库以 **pip 依赖**调用，版本在
+`pyproject.toml` 中按 git tag 锁定：
 
-```bash
-# 克隆时带子模块：
-git clone --recurse-submodules https://github.com/chr431/RaceVideoToLog.git
-# 或已克隆后初始化：
-git submodule update --init --recursive
+```toml
+"video-ocr-engine @ git+https://github.com/chr431/video_ocr_engine.git@v0.9.0"
 ```
 
-引擎源码根目录 = `third_party/video_ocr_engine`（含 `video_ocr_engine/` Python 包、
-`engine_config/segmentation/ocr_native/ocr_trt/video_utils/hybrid_decode/gpu_setup`
-顶层模块与 OCR 模型资产）。调用方式为 **sys.path bootstrap**：`setup_venv.bat`
-向 venv 写入 `video_ocr_engine.pth`，`RaceVideoToLog.py` 与 pytest 根 `conftest.py`
-也内置引导（`engine_bootstrap.py`），任意入口都能 import 引擎模块。
+`setup_venv.bat` 会自动安装。若本地存在引擎源码树（与本仓库同级目录的
+`video_ocr_engine/`），脚本改用 **editable** 方式安装 —— 改引擎代码立刻生效，
+与旧 submodule 模式体验一致；没有源码树时按上面锁定的 tag 从 git 拉取。
 
-源码运行时引擎缓存/日志写在本子模块目录内（引擎仓库 `.gitignore` 已忽略，
-不会弄脏引擎提交）。引擎使用独立版本线（0.9.x）；应用版本（2.17.x）仍以
-`config.__version__` 为单一事实源，两者解耦。
+**升级引擎**：改 `pyproject.toml` 里的 tag 后重跑 `setup_venv.bat`。这是唯一的
+接入点 —— 不再有 submodule 指针要手动同步。
+
+> **2026-08-30 起不再使用 git submodule。** 此前 `third_party/video_ocr_engine`
+> 是 submodule，存在三个问题：detached HEAD 下可本地提交而不被告警（曾出现
+> 本地 commit 未被上游吸收、本地分支落后上游 90 个提交，误 checkout 会把引擎
+> 静默回退）；`setup_venv.bat` 把绝对路径写进 `.pth`，硬编码盘符、换机器即失效；
+> 版本推进全靠手动改指针、无约束。改为 pip 依赖后版本由一行锁定，CI 与全新
+> 环境可复现。
+
+引擎使用独立版本线（0.9.x，即 wheel 版本号 —— 引擎 `pyproject.toml` 用
+`dynamic` 从 `engine_config.__version__` 读取，避免两处不同步）；应用版本
+（2.17.x）仍以 `config.__version__` 为单一事实源，两者解耦。
 
 ## 前置要求
 
@@ -35,8 +41,7 @@ git submodule update --init --recursive
 
 ## 一键安装
 
-**前提**：已初始化引擎子模块（`git submodule update --init --recursive`，见上节）；
-`setup_venv.bat` 会向 venv 写入引擎 `.pth`（`video_ocr_engine.pth`）。
+**前提**：无需任何额外步骤（引擎是 pip 依赖，`setup_venv.bat` 自动安装）。
 
 ```bash
 setup_venv.bat

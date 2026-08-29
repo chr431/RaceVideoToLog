@@ -14,8 +14,9 @@ PROJECT = Path(__file__).parent.parent
 # - runtime_hook.py: PyInstaller runtime hook（.spec 引用，不作为库分发）
 # - tensorrt.py: TRT shim —— 仅源码运行时遮蔽 PyPI tensorrt 元包；
 #   pip 安装后必须让真实 tensorrt 包生效，故不入清单
-# - conftest.py: pytest 根配置（sys.path 引导引擎子模块），非分发模块
-WHITELIST = {"runtime_hook", "tensorrt", "conftest"}
+# （原 conftest.py 曾在此：它只为 submodule 模式注入 sys.path；引擎 pip 化后
+#   已删除，pytest 直接解析已安装的引擎包）
+WHITELIST = {"runtime_hook", "tensorrt"}
 
 
 def _listed_modules() -> set:

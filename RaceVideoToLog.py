@@ -25,10 +25,9 @@ for _stream_name in ('stdout', 'stderr'):
 
 import argparse
 
-# ── 引擎子模块路径引导（必须在任何 import engine_config/引擎模块之前）──
-# 识别链由 git submodule third_party/video_ocr_engine 提供（自拆仓起）。
-from engine_bootstrap import ensure_engine_path  # noqa: E402
-ensure_engine_path()
+
+# 引擎（video_ocr_engine / engine_config / ocr_native ...）已 pip 化，
+# 由 venv 中的已安装包提供，无需 sys.path 引导（原 engine_bootstrap）。
 
 
 def apply_csv_settings(args, defaults: dict, argv=None) -> "object":

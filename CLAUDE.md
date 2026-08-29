@@ -3,7 +3,7 @@
 从赛车视频 OCR 提取速度，输出时间-速度-距离 CSV。Python 3.11+，PySide6 GUI +
 CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
 
-## 引擎同步（submodule 6657133，engine 0.9.0，2026-08）
+## 引擎同步（pip 依赖 v0.9.0，2026-08；已不再是 submodule）
 
 - **0.9.0 同步适配（2026-08-29）**：
   - 引擎构造参数 `gray_output/yuv_output` 已删除（0.7.0 标 deprecated，
@@ -94,34 +94,35 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
 ## 引擎独立仓库（v2.16 拆仓完成）
 
 - **解码+OCR 识别链拆为独立仓库 [chr431/video_ocr_engine](https://github.com/chr431/video_ocr_engine)**
-  （本地 `D:\Repo\video_ocr_engine`），本仓库通过 **git submodule**
-  `third_party/video_ocr_engine` 调用（**sys.path bootstrap，非 pip 依赖**）。
+  （本地 `D:\Repo\video_ocr_engine`），本仓库以 **pip 依赖**调用：
+  `pyproject.toml` 中 `video-ocr-engine @ git+...@vX.Y.Z`，由 `setup_venv.bat`
+  安装；本地有引擎源码树时自动改以 **editable** 方式装（改引擎立刻生效）。
 - 引擎仓库内容：`video_ocr_engine/` 包（FieldExtractor / ExtractedSegment /
   ExtractionResult）+ 顶层 `engine_config.py / segmentation.py / hybrid_decode.py /
   ocr_native.py / ocr_trt.py / video_utils.py / gpu_setup.py` + 模型资产
   `assets/ocr_models/`（PP-OCRv6_small.onnx + ppocrv6_dict.txt）。**引擎 import
-  全部用顶层名字**（`import engine_config as config` / `from segmentation import ...`），
-  引擎仓库根目录即 Python 源码根。
-- **sys.path 引导（关键）**：引擎模块是顶层模块名，本仓库不再含这些文件 → 必须把
-  `third_party/video_ocr_engine` 放进 sys.path。三处覆盖：
-  ① `setup_venv.bat` 写 venv `<site-packages>/video_ocr_engine.pth`（任何 venv
-  进程，含 tools/）；
-  ② `RaceVideoToLog.py` 顶部 `engine_bootstrap.ensure_engine_path()`（CLI/GUI，
-  **必须先于任何引擎 import**）；
-  ③ pytest 根 `conftest.py`（本地/CI）。
-  frozen（PyInstaller）下引擎已由 spec 的 pathex + hiddenimports 打包进 EXE，
-  `ensure_engine_path()` 检测 `sys.frozen` 直接跳过。
-- **版本解耦**：引擎独立版本线（`engine_config.__version__ = "0.9.x"`）；应用版本
-  `config.__version__ = "2.17.x"` 仍是本仓库单一事实源 —— `tools/version.py` 已移除
-  engine_config 引用（不再跨仓双重校验）。
-- **模型资产只随引擎仓库**：本仓库 `assets/ocr_models` 已删除。打包时 `RaceVideoToLog.spec`
-  从 `third_party/video_ocr_engine/assets/ocr_models` 收集到 `_internal/ocr_models`
-  （`ocr_native._models_dir()` frozen 语义）；源码运行解析到引擎子模块内 assets。
-- **源码运行时引擎缓存/日志**（`ocr_engines/` 与 `logs/`）落在 `third_party/
-  video_ocr_engine/` 内 —— 引擎仓库 `.gitignore` 已忽略，不会把子模块标记 dirty。
-- **更新引擎**：`git -C third_party/video_ocr_engine pull`（或 `git submodule
-  update --remote`，引擎发版后）。改引擎代码直接在子模块仓库（`D:\Repo\video_ocr_engine`）
-  提交 push，本仓库 `third_party/` 只锁定其 commit 指针。
+  全部用顶层名字**（`import engine_config as config` / `from segmentation import ...`）。
+- **为何不用 git submodule（2026-08-30 改造）**：此前 `third_party/video_ocr_engine`
+  是 submodule，存在三类问题 —— ① detached HEAD 下可本地提交且不会被告警
+  （曾有一次本地 commit 未被上游吸收，另有本地 `main` 分支落后上游 90 个提交，
+  一旦误 checkout 就把引擎静默回退 10 天）；② `setup_venv.bat` 把
+  `D:\...\third_party\video_ocr_engine` 绝对路径写进 site-packages 的 `.pth`，
+  硬编码盘符、换机器即失效；③ 推进全靠人记得手动改指针，无版本约束。
+  改为 pip 依赖后版本由 pyproject 一行锁定，CI 与全新环境可复现。
+- **版本解耦**：引擎独立版本线（`engine_config.__version__ = "0.9.x"`，也是
+  wheel 版本号 —— pyproject 用 `dynamic` 从该属性读取，避免两处不同步）；
+  应用版本 `config.__version__ = "2.17.x"` 仍是本仓库单一事实源。
+- **模型资产只随引擎仓库**：本仓库 `assets/ocr_models` 已删除。打包时
+  `RaceVideoToLog.spec` 用 `ocr_native._models_dir()` 定位并收集到
+  `_internal/ocr_models`（该函数覆盖 frozen / 源码树 / site-packages 三种布局）。
+- **更新引擎**：改引擎代码在 `D:\Repo\video_ocr_engine` 提交 push 后，把本仓库
+  `pyproject.toml` 里的 tag（`v0.9.0`）改到新版本 —— 这是**唯一的接入点**，
+  不再有 submodule 指针。
+- **⚠️ 仓库根目录不要留名为 `video_ocr_engine` 的空目录**：`sys.path[0]` 是当前
+  工作目录，`PathFinder` 在 `meta_path` 中先于 editable install 的 finder，
+  若 cwd 下存在同名目录（即使为空、只有 `__pycache__`）会抢先解析成
+  **namespace package**，导致 `video_ocr_engine.__file__ is None`、
+  属性缺失。拆仓时这里就留过一个这样的空壳目录，已清理。
 - **历史工具（已归档）**：`tools/archive/_gen_engine_extractor.py` /
   `_build_extractor.py` / `_assemble_extractor.py` / `_engine_repo_assess.py` /
   `_engine_import_audit.py` 是拆仓前的代码生成/评估脚本（路径仍指向旧的
