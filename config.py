@@ -24,6 +24,18 @@ _os.environ.setdefault("DECORD_SKIP_LOOP_FILTER", "none")
 # 管线引擎域 + 共享常量（单一事实源在引擎仓库 engine_config.py）
 from engine_config import *  # noqa: F401,F403 — 聚合导出兼容
 
+# ── OCR 输入 pad 宽度下限：224（回退引擎 0.9.0 的 160 默认，P0-5）──
+# 引擎按"逐帧全等准确率"将 224→160；本应用按生产漏斗口径（分段代表帧
+# OCR + tol=1 + 检测/纠正链）实测（2026-08-29，5 视频全量帧，单变量
+# OCR_PAD_SMALL）：160 使原始误读 150→190（test5 7→26、test6 17→32），
+# 224 恢复 0.7.0 时代水平（≈149）且 auto 路径墙钟零差（test5/test6
+# 3000 帧 4.1/2.8s 持平）。两处同步覆写：engine_config 模块属性供引擎
+# 内部默认读取（extractor fill_width=None 分支），应用命名空间供 GUI
+# 默认值（FILL_WIDTH_RANGE 内，用户仍可调）。
+import engine_config as _engine_config  # noqa: E402
+_engine_config.DEFAULT_FILL_WIDTH = 224
+DEFAULT_FILL_WIDTH = 224
+
 # ═══════════════════ 应用域常量（引擎 v0.3 重构后回归应用侧）═══════════════════
 # 引擎重构清空了领域后处理/速度语义常量（引擎是零领域语义通用库），
 # 以下常量原属 engine_config，现是本仓库（速度提取应用）的单一事实源。
@@ -83,7 +95,7 @@ SEG_SPIKE_MIN_FPS: float = 40.0
 
 # 版本：应用侧单一事实源（引擎独立版本线 0.3.x 不随应用 bump）；
 # 运行时 CSV 头/控制台读 config.__version__（历史入口保持不变）
-__version__ = "2.17.0"
+__version__ = "2.17.1"
 
 # ═══════════════════ 应用/日志与监控 ═══════════════════
 DEFAULT_LOG_LEVEL: str = "normal"      # 日志级别 (normal / detailed / debug)
