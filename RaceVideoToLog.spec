@@ -67,11 +67,74 @@ hiddenimports += [
     'cuda.bindings.utils._ptx_utils',
     'cuda.bindings.utils._version_check',
 ]
-# cuda.pathfinder 是纯 Python 子包（driver 运行时经它找系统 DLL），
-# cuda 是 namespace package，PyInstaller 不会自动展开 → 显式收集子模块。
+# cuda.bindings 的 pyd 全量收集（cuda/bindings/*.pyd 与 _internal/*.pyd）：
+# 这些 Cython 扩展之间存在 Python 级内部 import（如 nvrtc→cynvrtc、
+# system→nvml），静态分析不可见，逐个点名每升级一版就漏一批
+# （No module named 'cuda.bindings.cynvrtc' / '_internal.nvrtc' /
+# 'nvml' 三连）。改为按磁盘文件名全量枚举（合计 ~2.5MB），对上游
+# 增删 pyd 免疫。cudla/cufile 等不用模块一并收下，换健壮性。
 try:
-    from PyInstaller.utils.hooks import collect_submodules
+    import glob as _glob
+    import importlib.util as _ilu_b
+    import os as _os_b
+    _b_spec = _ilu_b.find_spec('cuda.bindings')
+    if _b_spec and _b_spec.submodule_search_locations:
+        _b_root = list(_b_spec.submodule_search_locations)[0]
+        for _sub in ('', '_internal'):
+            _dir = _os_b.path.join(_b_root, _sub) if _sub else _b_root
+            for _pyd in _glob.glob(_os_b.path.join(_dir, '*.pyd')):
+                _name = _os_b.path.splitext(
+                    _os_b.path.basename(_pyd))[0].split('.')[0]
+                _mod = 'cuda.bindings.' + (_sub + '.' if _sub else '') + _name
+                if _mod not in hiddenimports:
+                    hiddenimports.append(_mod)
+except Exception:
+    pass  # cuda-python not installed
+# cuda.pathfinder 是纯 Python 子包，cuda 是 namespace package，PyInstaller
+# 不会自动展开 → 显式收集子模块。
+try:
+    from PyInstaller.utils.hooks import collect_submodules, copy_metadata
     hiddenimports += collect_submodules('cuda.pathfinder')
+    # cuda.core._utils.version 运行时经 importlib.metadata 查询包版本，
+    # dist-info 默认不入包 → 补齐四个相关分发
+    for _meta in ('cuda-python', 'cuda-core', 'cuda-bindings',
+                  'cuda-pathfinder'):
+        datas += copy_metadata(_meta)
+except Exception:
+    pass  # cuda-python not installed
+
+# cuda.core 13.x（cuda-core ≥1.0.1 merged-wheel）：真实实现全部位于
+# cuda/core/cu13/，顶层 __init__（stub）运行时经
+# globals().update(cu13.__dict__) 把 __path__ 等 dunder 覆写指向 cu13，
+# 之后所有 cuda.core._X / checkpoint / system / utils 都从 cu13 解析。
+# PyInstaller 静态分析拿不到这个运行期改写，PYZ 里只有 stub 本身 →
+# frozen 下 "cannot import name Device" / "cannot import name
+# 'checkpoint'" 等。修法：把 cuda/core 全树（含 cu13/ 子目录与
+# __init__.py，保持相对路径）平移进 _internal/cuda/core/，使 stub 的
+# import_module('.cu13') 在 frozen 下同样成功、路径改写与源码完全一致。
+# cu12 变体永不加载（本仓固定 CUDA 13 绑定，省 ~5.4MB），pxd/缓存不收。
+try:
+    import importlib.util as _ilu
+    import os as _os
+    _core_spec = _ilu.find_spec('cuda.core')
+    if _core_spec and _core_spec.submodule_search_locations:
+        _core_root = list(_core_spec.submodule_search_locations)[0]
+        for _root, _dirs, _files in _os.walk(_core_root):
+            _dirs[:] = [d for d in _dirs
+                        if d != '__pycache__' and d != 'cu12']
+            for _f in _files:
+                if _f.endswith(('.pxd', '.pyc')):
+                    continue
+                _src = _os.path.join(_root, _f)
+                _rel_dir = _os.path.dirname(
+                    _os.path.relpath(_src, _core_root)).replace('\\', '/')
+                _dest = ('cuda/core' if _rel_dir == '.'
+                         else 'cuda/core/' + _rel_dir)
+                _entry = (_src, _dest)
+                if _f.endswith('.pyd'):
+                    binaries.append(_entry)
+                else:
+                    datas.append(_entry)
 except Exception:
     pass  # cuda-python not installed
 

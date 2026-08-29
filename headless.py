@@ -4,6 +4,7 @@ import argparse
 import os as _os
 import sys
 import time
+import traceback
 from pathlib import Path
 
 import config
@@ -96,6 +97,8 @@ def run_headless(args: argparse.Namespace) -> None:
         pipeline.run(output_path)
     except Exception as e:
         print(f"\n错误: {e}")
+        if args.log_level == "debug":
+            traceback.print_exc()
         sys.exit(1)
     finally:
         _stats = _monitor.stop()
