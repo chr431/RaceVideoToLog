@@ -228,6 +228,8 @@ _PROJECT_ROOT = os.path.abspath('.')
 # 引擎根目录从已安装的 ocr_native 模块位置派生（pip 安装 → site-packages，
 # editable → 引擎源码树），供 pathex 搜索；引擎 pip 化后不再有 third_party 固定路径
 _ENGINE_ROOT = os.path.dirname(os.path.abspath(_ocr_native.__file__))
+# 窗口/任务栏图标 PNG（EXE 文件图标另经 EXE(icon=assets/app.ico) 嵌入）
+datas.append((os.path.join(_PROJECT_ROOT, 'assets', 'app_icon_256.png'), 'assets'))
 a = Analysis(
     [os.path.join(_PROJECT_ROOT, 'RaceVideoToLog.py')],
     pathex=[_PROJECT_ROOT, _ENGINE_ROOT],
@@ -318,6 +320,7 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     version=_VERSION_INFO,
+    icon='assets/app.ico',
 )
 # Post-Analysis 精简：移除 Analysis 重新发现的 DLL
 _EXCLUDE_BINARIES = {

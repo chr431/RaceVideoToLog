@@ -1,6 +1,15 @@
 # RaceVideoToLog v2.17.3
 
+![RaceVideoToLog](docs/images/banner.png)
+
 从赛车视频中提取速度数据，生成时间-速度-距离 CSV 文件。
+
+## 工作流程
+
+![生产流水线](docs/images/pipeline.png)
+
+输入视频 + ROI 标注 → 引擎 `video_ocr_engine`（解码 / 分段 / 代表帧 / OCR）
+→ 应用后处理（速度解析 / 置信度 / DP 纠正 / 尖峰补抓）→ CSV 与 GUI 产物。
 
 ## 引擎依赖（video_ocr_engine）
 

@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- RaceVideoToLog 应用图标：速度表（速度数据）+ 播放三角（视频）
+       版面：内容整体上移 8.5px（表盘中心 y=129.5），上下留白各 ~40px -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2a3140"/>
+      <stop offset="1" stop-color="#161a22"/>
+    </linearGradient>
+    <linearGradient id="arc" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ff8a2a"/>
+      <stop offset="1" stop-color="#ffc247"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#bg)"/>
+  <rect x="10" y="10" width="236" height="236" rx="54" fill="none"
+        stroke="#ffffff" stroke-opacity="0.06" stroke-width="2"/>
+
+  <!-- 表盘轨道：上半弧 270°（7:30 → 12:00 → 4:30），底部缺口留给播放键 -->
+  <path d="M 75.7 181.8 A 74 74 0 1 1 180.3 181.8"
+        fill="none" stroke="#39414f" stroke-width="14" stroke-linecap="round"/>
+  <!-- 进度弧（61% 负荷，止于指针角度） -->
+  <path d="M 75.7 181.8 A 74 74 0 0 1 165.0 65.4"
+        fill="none" stroke="url(#arc)" stroke-width="14" stroke-linecap="round"/>
+
+  <!-- 主刻度 -->
+  <g stroke="#d8e0ea" stroke-width="5" stroke-linecap="round" opacity="0.9">
+    <line x1="92.6"  y1="164.9" x2="82.7"  y2="174.8"/>
+    <line x1="78"    y1="129.5" x2="64"    y2="129.5"/>
+    <line x1="92.6"  y1="94.1"  x2="82.7"  y2="84.2"/>
+    <line x1="128"   y1="79.5"  x2="128"   y2="65.5"/>
+    <line x1="163.4" y1="94.1"  x2="173.3" y2="84.2"/>
+    <line x1="178"   y1="129.5" x2="192"   y2="129.5"/>
+    <line x1="163.4" y1="164.9" x2="173.3" y2="174.8"/>
+  </g>
+
+  <!-- 指针（1:00 方向，与进度弧终点同角度）+ 轴心 -->
+  <line x1="136.5" y1="114.8" x2="157" y2="79.3"
+        stroke="#f4f7fb" stroke-width="10" stroke-linecap="round"/>
+  <circle cx="128" cy="129.5" r="13" fill="#ff6a1f" stroke="#1a1e26" stroke-width="5"/>
+
+  <!-- 播放三角（底部缺口；质心对齐轴心 128，非 bbox 居中） -->
+  <path d="M 121 181.5 L 121 205.5 L 142 193.5 Z"
+        fill="#f4f7fb" stroke="#f4f7fb" stroke-width="6"
+        stroke-linejoin="round"/>
+</svg>

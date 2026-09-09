@@ -134,6 +134,13 @@ def main() -> None:
             _sys.stdout = _saved
         from gui import RaceVideoToLogApp
         app = QApplication(sys.argv)
+        # 窗口/任务栏图标（frozen 下资源在 _MEIPASS/assets，源码运行取仓库 assets/）
+        from pathlib import Path as _Path
+        from PySide6.QtGui import QIcon as _QIcon
+        _icon = (_Path(getattr(sys, '_MEIPASS', _Path(__file__).resolve().parent))
+                 / 'assets' / 'app_icon_256.png')
+        if _icon.exists():
+            app.setWindowIcon(_QIcon(str(_icon)))
         setTheme(Theme.AUTO)
         window = RaceVideoToLogApp()
         window.show()

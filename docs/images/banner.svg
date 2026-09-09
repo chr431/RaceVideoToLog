@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 320" width="1200" height="320">
+  <!-- README 首页横幅：图标 + 标识 + 迷你速度曲线 + 格纹条 -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2a3140"/>
+      <stop offset="1" stop-color="#14181f"/>
+    </linearGradient>
+    <linearGradient id="arc" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ff8a2a"/>
+      <stop offset="1" stop-color="#ffc247"/>
+    </linearGradient>
+    <pattern id="chk" width="40" height="40" patternUnits="userSpaceOnUse">
+      <rect width="20" height="20" fill="#ffffff" opacity="0.85"/>
+      <rect x="20" y="20" width="20" height="20" fill="#ffffff" opacity="0.85"/>
+      <rect x="20" width="20" height="20" fill="#ffffff" opacity="0.14"/>
+      <rect y="20" width="20" height="20" fill="#ffffff" opacity="0.14"/>
+    </pattern>
+  </defs>
+
+  <rect width="1200" height="320" rx="20" fill="url(#bg)"/>
+
+  <!-- 速度流线 -->
+  <g stroke="#ffffff" stroke-linecap="round">
+    <line x1="320" y1="52" x2="560" y2="52" stroke-width="3" opacity="0.06"/>
+    <line x1="700" y1="40" x2="900" y2="40" stroke-width="3" opacity="0.08"/>
+  </g>
+
+  <!-- 应用图标（缩小内嵌） -->
+  <g transform="translate(48,38) scale(0.94)">
+    <rect x="8" y="8" width="240" height="240" rx="56" fill="#1c212b"
+          stroke="#ffffff" stroke-opacity="0.07" stroke-width="2"/>
+    <path d="M 75.7 181.8 A 74 74 0 1 1 180.3 181.8"
+          fill="none" stroke="#39414f" stroke-width="14" stroke-linecap="round"/>
+    <path d="M 75.7 181.8 A 74 74 0 0 1 165.0 65.4"
+          fill="none" stroke="url(#arc)" stroke-width="14" stroke-linecap="round"/>
+    <g stroke="#d8e0ea" stroke-width="5" stroke-linecap="round" opacity="0.9">
+      <line x1="92.6" y1="164.9" x2="82.7" y2="174.8"/>
+      <line x1="78" y1="129.5" x2="64" y2="129.5"/>
+      <line x1="92.6" y1="94.1" x2="82.7" y2="84.2"/>
+      <line x1="128" y1="79.5" x2="128" y2="65.5"/>
+      <line x1="163.4" y1="94.1" x2="173.3" y2="84.2"/>
+      <line x1="178" y1="129.5" x2="192" y2="129.5"/>
+      <line x1="163.4" y1="164.9" x2="173.3" y2="174.8"/>
+    </g>
+    <line x1="136.5" y1="114.8" x2="157" y2="79.3"
+          stroke="#f4f7fb" stroke-width="10" stroke-linecap="round"/>
+    <circle cx="128" cy="129.5" r="13" fill="#ff6a1f" stroke="#1a1e26" stroke-width="5"/>
+    <path d="M 121 181.5 L 121 205.5 L 142 193.5 Z"
+          fill="#f4f7fb" stroke="#f4f7fb" stroke-width="6" stroke-linejoin="round"/>
+  </g>
+
+  <!-- 标识 -->
+  <text x="322" y="138" font-family="Segoe UI, Arial, sans-serif" font-size="58"
+        font-weight="700" fill="#f4f7fb">RaceVideoToLog</text>
+  <text x="324" y="190" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="27"
+        fill="#9fb0c3">赛车视频 OCR 提取 · 时间 / 速度 / 距离 CSV</text>
+
+  <!-- 特性标签 -->
+  <g font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="19" fill="#cfd9e4">
+    <rect x="324" y="218" width="196" height="40" rx="20" fill="#ffffff" fill-opacity="0.05"
+          stroke="#3a4250" stroke-width="1.5"/>
+    <text x="422" y="244" text-anchor="middle">NVDEC/hybrid 解码</text>
+    <rect x="536" y="218" width="176" height="40" rx="20" fill="#ffffff" fill-opacity="0.05"
+          stroke="#3a4250" stroke-width="1.5"/>
+    <text x="624" y="244" text-anchor="middle">TensorRT · ONNX</text>
+    <rect x="728" y="218" width="160" height="40" rx="20" fill="#ffffff" fill-opacity="0.05"
+          stroke="#3a4250" stroke-width="1.5"/>
+    <text x="808" y="244" text-anchor="middle">段级 DP 纠错</text>
+  </g>
+
+  <!-- 迷你速度曲线 -->
+  <g>
+    <rect x="880" y="64" width="272" height="192" rx="16" fill="#ffffff" fill-opacity="0.04"
+          stroke="#2e3644" stroke-width="1.5"/>
+    <line x1="904" y1="228" x2="1128" y2="228" stroke="#3a4250" stroke-width="2"/>
+    <line x1="904" y1="88"  x2="904"  y2="228" stroke="#3a4250" stroke-width="2"/>
+    <path d="M 904 210 L 952 178 L 1000 142 L 1044 122 L 1076 130 L 1112 92 L 1128 100"
+          fill="none" stroke="#ff8a2a" stroke-width="8" stroke-linecap="round"
+          stroke-linejoin="round" opacity="0.18"/>
+    <path d="M 904 210 L 952 178 L 1000 142 L 1044 122 L 1076 130 L 1112 92 L 1128 100"
+          fill="none" stroke="#ff9a3d" stroke-width="4" stroke-linecap="round"
+          stroke-linejoin="round"/>
+    <g fill="#ffc247">
+      <circle cx="1000" cy="142" r="5"/>
+      <circle cx="1112" cy="92" r="5"/>
+    </g>
+  </g>
+
+  <!-- 底部格纹条（20×20 正方形） -->
+  <rect x="0" y="280" width="1200" height="40" fill="url(#chk)" opacity="0.5"/>
+</svg>

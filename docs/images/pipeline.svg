@@ -1,0 +1,132 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1360 760" width="1360" height="760">
+  <!-- 生产流水线：输入 → 引擎（video_ocr_engine）→ 应用后处理 → 输出 -->
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 Z" fill="#8a97a8"/>
+    </marker>
+    <linearGradient id="panel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#20262f"/>
+      <stop offset="1" stop-color="#171c24"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1360" height="760" rx="20" fill="url(#panel)"/>
+  <g font-family="Segoe UI, Microsoft YaHei, sans-serif">
+
+  <!-- ── 输入层 ── -->
+  <rect x="24" y="64" width="208" height="640" rx="18" fill="#9aa7b5" fill-opacity="0.05"
+        stroke="#9aa7b5" stroke-opacity="0.35" stroke-width="1.5"/>
+  <rect x="44" y="84" width="88" height="40" rx="20" fill="#9aa7b5" fill-opacity="0.14"/>
+  <text x="88" y="111" text-anchor="middle" font-size="21" font-weight="600" fill="#b9c4d0">输入</text>
+
+  <g>
+    <rect x="48" y="172" width="160" height="110" rx="14" fill="#232a35" stroke="#3a4250" stroke-width="1.5"/>
+    <text x="128" y="212" text-anchor="middle" font-size="21" font-weight="600" fill="#e8edf4">视频文件</text>
+    <text x="128" y="244" text-anchor="middle" font-size="15" fill="#93a1b1">mp4 · mkv · avi</text>
+
+    <rect x="48" y="346" width="160" height="110" rx="14" fill="#232a35" stroke="#3a4250" stroke-width="1.5"/>
+    <text x="128" y="386" text-anchor="middle" font-size="21" font-weight="600" fill="#e8edf4">ROI 标注</text>
+    <text x="128" y="418" text-anchor="middle" font-size="15" fill="#93a1b1">GUI 框选 / --roi</text>
+
+    <rect x="48" y="520" width="160" height="110" rx="14" fill="#232a35" stroke="#3a4250" stroke-width="1.5"/>
+    <text x="128" y="556" text-anchor="middle" font-size="21" font-weight="600" fill="#e8edf4">约束参数</text>
+    <text x="128" y="586" text-anchor="middle" font-size="14" fill="#93a1b1">max_speed / max_accel</text>
+    <text x="128" y="610" text-anchor="middle" font-size="14" fill="#93a1b1">采样步长 stride</text>
+  </g>
+
+  <!-- ── 引擎层 ── -->
+  <rect x="272" y="64" width="416" height="640" rx="18" fill="#ff8a2a" fill-opacity="0.045"
+        stroke="#ff8a2a" stroke-opacity="0.4" stroke-width="1.5"/>
+  <rect x="292" y="84" width="248" height="40" rx="20" fill="#ff8a2a" fill-opacity="0.13"/>
+  <text x="316" y="111" font-size="20" font-weight="600" fill="#ffb066">引擎 video_ocr_engine</text>
+
+  <g>
+    <rect x="296" y="152" width="368" height="96" rx="14" fill="#232a35" stroke="#3a4250" stroke-width="1.5"/>
+    <text x="480" y="190" text-anchor="middle" font-size="22" font-weight="600" fill="#e8edf4">解码</text>
+    <text x="480" y="222" text-anchor="middle" font-size="16" fill="#93a1b1">NVDEC · CPU · hybrid 自适应</text>
+
+    <line x1="480" y1="248" x2="480" y2="274" stroke="#8a97a8" stroke-width="3" marker-end="url(#arr)"/>
+
+    <rect x="296" y="278" width="368" height="96" rx="14" fill="#232a35" stroke="#3a4250" stroke-width="1.5"/>
+    <text x="480" y="316" text-anchor="middle" font-size="22" font-weight="600" fill="#e8edf4">ROI 像素分段</text>
+    <text x="480" y="348" text-anchor="middle" font-size="16" fill="#93a1b1">灰度 + Otsu + 差分聚类</text>
+
+    <line x1="480" y1="374" x2="480" y2="400" stroke="#8a97a8" stroke-width="3" marker-end="url(#arr)"/>
+
+    <rect x="296" y="404" width="368" height="96" rx="14" fill="#232a35" stroke="#3a4250" stroke-width="1.5"/>
+    <text x="480" y="442" text-anchor="middle" font-size="22" font-weight="600" fill="#e8edf4">代表帧</text>
+    <text x="480" y="474" text-anchor="middle" font-size="16" fill="#93a1b1">yuv420 · pad 下限 224</text>
+
+    <line x1="480" y1="500" x2="480" y2="526" stroke="#8a97a8" stroke-width="3" marker-end="url(#arr)"/>
+
+    <rect x="296" y="530" width="368" height="96" rx="14" fill="#232a35" stroke="#3a4250" stroke-width="1.5"/>
+    <text x="480" y="568" text-anchor="middle" font-size="22" font-weight="600" fill="#e8edf4">OCR 识别</text>
+    <text x="480" y="600" text-anchor="middle" font-size="16" fill="#93a1b1">TensorRT / ONNX Runtime 双后端</text>
+
+    <!-- 面板输出说明（替代原跨层标签，避免压住面板边框） -->
+    <text x="480" y="666" text-anchor="middle" font-size="17" fill="#8a97a8">输出：文本 + 置信度</text>
+  </g>
+
+  <!-- ── 应用层 ── -->
+  <rect x="728" y="64" width="416" height="640" rx="18" fill="#4cc2ff" fill-opacity="0.04"
+        stroke="#4cc2ff" stroke-opacity="0.35" stroke-width="1.5"/>
+  <rect x="748" y="84" width="322" height="40" rx="20" fill="#4cc2ff" fill-opacity="0.1"/>
+  <text x="772" y="111" font-size="20" font-weight="600" fill="#8ed4ff">应用后处理 RaceVideoToLog</text>
+
+  <g>
+    <rect x="752" y="152" width="368" height="96" rx="14" fill="#232a35" stroke="#3a4250" stroke-width="1.5"/>
+    <text x="936" y="190" text-anchor="middle" font-size="22" font-weight="600" fill="#e8edf4">速度数值解析</text>
+    <text x="936" y="222" text-anchor="middle" font-size="16" fill="#93a1b1">引擎文本 → 速度值（应用语义）</text>
+
+    <line x1="936" y1="248" x2="936" y2="274" stroke="#8a97a8" stroke-width="3" marker-end="url(#arr)"/>
+
+    <rect x="752" y="278" width="368" height="96" rx="14" fill="#232a35" stroke="#3a4250" stroke-width="1.5"/>
+    <text x="936" y="316" text-anchor="middle" font-size="22" font-weight="600" fill="#e8edf4">段级置信度</text>
+    <text x="936" y="348" text-anchor="middle" font-size="16" fill="#93a1b1">中值偏差 + 急动度加权</text>
+
+    <line x1="936" y1="374" x2="936" y2="400" stroke="#8a97a8" stroke-width="3" marker-end="url(#arr)"/>
+
+    <rect x="752" y="404" width="368" height="96" rx="14" fill="#232a35" stroke="#3a4250" stroke-width="1.5"/>
+    <text x="936" y="442" text-anchor="middle" font-size="22" font-weight="600" fill="#e8edf4">稠密 DP 纠正</text>
+    <text x="936" y="474" text-anchor="middle" font-size="16" fill="#93a1b1">锚点观测 + 加速度转移约束</text>
+
+    <line x1="936" y1="500" x2="936" y2="526" stroke="#8a97a8" stroke-width="3" marker-end="url(#arr)"/>
+
+    <rect x="752" y="530" width="368" height="96" rx="14" fill="#232a35" stroke="#3a4250" stroke-width="1.5"/>
+    <text x="936" y="568" text-anchor="middle" font-size="22" font-weight="600" fill="#e8edf4">尖峰第二遍</text>
+    <text x="936" y="600" text-anchor="middle" font-size="16" fill="#93a1b1">孤立单帧 2-off 误读补抓</text>
+
+    <text x="936" y="666" text-anchor="middle" font-size="17" fill="#8a97a8">输出：逐段速度 → CSV</text>
+  </g>
+
+  <!-- ── 输出层 ── -->
+  <rect x="1184" y="64" width="152" height="640" rx="18" fill="#6fe0a8" fill-opacity="0.045"
+        stroke="#6fe0a8" stroke-opacity="0.35" stroke-width="1.5"/>
+  <rect x="1204" y="84" width="76" height="40" rx="20" fill="#6fe0a8" fill-opacity="0.1"/>
+  <text x="1242" y="111" text-anchor="middle" font-size="21" font-weight="600" fill="#a4ecc8">输出</text>
+
+  <g>
+    <rect x="1200" y="172" width="120" height="130" rx="14" fill="#232a35" stroke="#3a4250" stroke-width="1.5"/>
+    <text x="1260" y="212" text-anchor="middle" font-size="20" font-weight="600" fill="#e8edf4">CSV 文件</text>
+    <text x="1260" y="246" text-anchor="middle" font-size="15" fill="#93a1b1">时间 · 速度</text>
+    <text x="1260" y="272" text-anchor="middle" font-size="15" fill="#93a1b1">距离</text>
+
+    <rect x="1200" y="342" width="120" height="130" rx="14" fill="#232a35" stroke="#3a4250" stroke-width="1.5"/>
+    <text x="1260" y="382" text-anchor="middle" font-size="20" font-weight="600" fill="#e8edf4">GUI 审查</text>
+    <text x="1260" y="416" text-anchor="middle" font-size="15" fill="#93a1b1">段级复核</text>
+    <text x="1260" y="442" text-anchor="middle" font-size="15" fill="#93a1b1">标记 · 导出</text>
+
+    <rect x="1200" y="512" width="120" height="130" rx="14" fill="#232a35" stroke="#3a4250" stroke-width="1.5"/>
+    <text x="1260" y="552" text-anchor="middle" font-size="20" font-weight="600" fill="#e8edf4">图表分析</text>
+    <text x="1260" y="586" text-anchor="middle" font-size="15" fill="#93a1b1">速度曲线</text>
+    <text x="1260" y="612" text-anchor="middle" font-size="15" fill="#93a1b1">对比</text>
+  </g>
+
+  <!-- ── 跨层箭头 ── -->
+  <line x1="232" y1="384" x2="266" y2="384" stroke="#8a97a8" stroke-width="4" marker-end="url(#arr)"/>
+  <line x1="688" y1="384" x2="722" y2="384" stroke="#8a97a8" stroke-width="4" marker-end="url(#arr)"/>
+  <line x1="1144" y1="384" x2="1178" y2="384" stroke="#8a97a8" stroke-width="4" marker-end="url(#arr)"/>
+
+  </g>
+</svg>
