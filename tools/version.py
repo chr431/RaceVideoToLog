@@ -237,6 +237,15 @@ def main(argv: list[str]) -> int:
             pass
     if not argv or argv[0] in ("check", "--check", "-c"):
         return check()
+    if argv[0] in ("get", "--get"):
+        # 仅打印版本号（供 release workflow 在引擎未安装时读取——
+        # 不 import config，纯正则读源码，零依赖）
+        canonical = _get_config(_read(ROOT / "config.py"))
+        if not canonical:
+            print("ERROR: 未在 config.py 找到 __version__", file=sys.stderr)
+            return 1
+        print(canonical)
+        return 0
     if argv[0] in ("bump", "--bump"):
         if len(argv) < 2:
             print("用法: python tools/version.py bump <新版本> [标题]")

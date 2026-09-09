@@ -69,11 +69,13 @@ jobs:
         id: ver
         shell: pwsh
         run: |
-          $ver = (python -c "import config; print(config.__version__)").Trim()
+          # version.py get = 纯正则读 config.py 源码（引擎未安装也可执行）
+          $ver = (python tools/version.py get)
           if ($LASTEXITCODE -ne 0 -or -not $ver) {
-            Write-Error "读取 config.__version__ 失败"
+            Write-Error "读取版本号失败"
             exit 1
           }
+          $ver = $ver.Trim()
           Write-Host "Releasing version: $ver"
           if (git tag -l "v$ver" | Select-String -Quiet "v$ver") {
             Write-Error "tag v$ver 已存在。如需重新发布先删 tag，或先在 dev 升版本后合并到 master"
