@@ -25,6 +25,14 @@
 
 `tensorrt` 元包与 `tensorrt_cu13_libs`（~2.2GB DLL）被有意排除 —— 运行时 DLL 从系统 PATH 加载。
 
+**TRT DLL 打包评估（2026-09-09，结论：不打包，维持动态加载）**：进程模块清单实测——推理
+稳态仅加载 nvinfer_11 (375MB) + nvinfer_plugin_11 (43MB) + nvonnxparser_11 (2MB) = 421MB
+（nvinfer_11 无任何静态依赖，其余 DLL 均为引擎代码显式加载）；首次本地构建另需对应 GPU
+架构的 nvinfer_builder_resource_smXX（单架构 113-438MB，全架构 8 种共 1.86GB）。打包推理
+集即突破 400MB 体积门禁，且发行包无法预知用户 GPU 架构、覆盖不了首建路径——维持「用户
+装 TensorRT + PATH 动态加载 + 无 TRT 回退 CPU」现状。TensorRT 已 Apache-2.0，约束是体
+积与构建路径而非许可。
+
 ## 打包工具
 
 | 包 | PyPI |
