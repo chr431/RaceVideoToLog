@@ -41,7 +41,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref }}
           fetch-depth: 0  # 全历史：release notes / tag 检查需要
@@ -52,7 +52,7 @@ jobs:
           # checkout，也不再需要先导出 PYTHONPATH（引擎是普通已安装包）。
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
