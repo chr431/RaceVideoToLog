@@ -225,7 +225,9 @@ binaries = [
 
 # NOTE: Run PyInstaller from repo root: pyinstaller RaceVideoToLog.spec
 _PROJECT_ROOT = os.path.abspath('.')
-_ENGINE_ROOT = os.path.abspath(_ENGINE_ROOT)  # 已在模型资产段定义（相对 repo root）
+# 引擎根目录从已安装的 ocr_native 模块位置派生（pip 安装 → site-packages，
+# editable → 引擎源码树），供 pathex 搜索；引擎 pip 化后不再有 third_party 固定路径
+_ENGINE_ROOT = os.path.dirname(os.path.abspath(_ocr_native.__file__))
 a = Analysis(
     [os.path.join(_PROJECT_ROOT, 'RaceVideoToLog.py')],
     pathex=[_PROJECT_ROOT, _ENGINE_ROOT],
