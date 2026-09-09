@@ -1,28 +1,41 @@
 [project]
 name = "RaceVideoToLog"
-version = "2.17.2"
+version = "2.17.3"
 description = "从赛车视频中 OCR 提取速度数据，生成时间-速度-距离 CSV（TensorRT + CPU 双后端）"
 requires-python = ">=3.11"
 dependencies = [
     "onnxruntime>=1.28",  # 1.28：protobuf CVE 修复；CPU 推理与本模型无差（实测 1.27=1.28）
     "numpy>=2",
     "PySide6-Essentials>=6.11",
-    "pyqtgraph>=0.14",  # 只装核心模块，省 Addons (~300MB: QtWebEngine 等)
+    "pyqtgraph>=0.14",
+    # Fluent 组件库声明依赖 PySide6 元包 → 标准 pip 安装会连带 PySide6-Addons
+    # （~450MB：QtWebEngine 等）。运行只用 Essentials，Addons 纯属 venv 磁盘
+    # 开销；frozen exe 不受影响（spec 只收集显式 Qt 模块 + 二进制排除名单）。
+    # ⚠️ 勿单独 pip uninstall PySide6-Addons：其 RECORD 误含 Essentials 的
+    # Qt6Core.dll，卸载会损坏 QtCore（force-reinstall Essentials 可修复）。
     "PySide6-Fluent-Widgets>=1.11",
     "cuda-python",
     "tensorrt_cu13_bindings>=11,<12",
-    # decord 已从 PyPI 依赖中移除：本仓库依赖自建 fork（chr431/decord）
-    # 的 next_roi / get_codec / GPU 动态加载 / CPU 内存修复，PyPI 版无法满足。
-    # 由 setup_venv.bat 从 _decord_build/（decord 发布产物）安装，见 README。
     "psutil>=6",
     # ── 引擎（独立仓库 chr431/video_ocr_engine）──
     # 2026-08-30 起由 git submodule 改为 pip 依赖 + tag 锁定。
     # 原因：submodule 会 detached HEAD、可本地提交、易与上游脱节
     # （曾出现本地 commit 未被上游吸收 + 陈旧本地分支落后 90 个提交）。
     # 改为 pip 依赖后：版本由本行锁定，CI 与全新环境可复现。
-    # 本地开发需要改引擎时，执行 `pip install -e <引擎源码树>` 覆盖为
-    # 源码直连即可（setup_venv.bat 已自动处理）。
-    "video-ocr-engine @ git+https://github.com/chr431/video_ocr_engine.git@v0.9.1",
+    # 本地开发需要改引擎时，执行 `pip install -e <引擎源码树> --no-deps`
+    # 覆盖为源码直连即可（改引擎代码立刻生效）。
+    "video-ocr-engine @ git+https://github.com/chr431/video_ocr_engine.git@v0.11.0",
+    # ── decord（自建 fork chr431/decord，不上 PyPI）──
+    # PyPI 官方版无 next_roi / get_codec、CPU 内存修复与 NVDEC 动态加载。
+    # 按 PEP 508 直接 URL 锁定 GitHub release wheel（0.8.2 起发布 cp39-cp314
+    # 全版本 wheel，decord.dll + FFmpeg 9 DLL 随包自带，pip 一条命令安装）。
+    # 0.8.2 底线：引擎 0.11.0 的 hybrid 解码为 decord 原生实现（fork ≥0.7.15）；
+    # av1 线程策略按 FFmpeg9 dav1d 调优；0.8.2 含 cuMemcpy2D_v2 修复。
+    # 升级：全部行换成同版本 URL（cp 标签按行匹配解释器，勿混版本）。
+    "decord @ https://github.com/chr431/decord/releases/download/v0.8.2/decord-0.8.2-cp311-cp311-win_amd64.whl ; python_version == '3.11'",
+    "decord @ https://github.com/chr431/decord/releases/download/v0.8.2/decord-0.8.2-cp312-cp312-win_amd64.whl ; python_version == '3.12'",
+    "decord @ https://github.com/chr431/decord/releases/download/v0.8.2/decord-0.8.2-cp313-cp313-win_amd64.whl ; python_version == '3.13'",
+    "decord @ https://github.com/chr431/decord/releases/download/v0.8.2/decord-0.8.2-cp314-cp314-win_amd64.whl ; python_version == '3.14'",
 ]
 
 [project.optional-dependencies]

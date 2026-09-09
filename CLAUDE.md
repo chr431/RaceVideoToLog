@@ -3,8 +3,31 @@
 从赛车视频 OCR 提取速度，输出时间-速度-距离 CSV。Python 3.11+，PySide6 GUI +
 CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
 
-## 引擎同步（pip 依赖 v0.9.1，2026-08；已不再是 submodule）
+## 引擎同步（pip 依赖 v0.11.0，2026-09；已不再是 submodule）
 
+- **0.11.0 同步适配（2026-09-09，v2.17.3）**：
+  - **hybrid 解码改为 decord 原生实现**（fork ≥0.7.15 `hybrid`/`hybrid_gpu`
+    ctx；随依赖升 decord 0.8.2）：单 demux 流在解码器内部按关键帧 chunk
+    路由 CPU 软解 + NVDEC，引擎零适配透传；OCR on GPU 选 `hybrid_gpu`
+    （帧驻留显存），on CPU 选 `hybrid`（宿主帧）。`HYBRID_CPU_THREADS`
+    （0=自动：3/8 核钳 [8,16]；av1 走 dav1d 线程策略）、`HYBRID_MAX_CHUNKS`
+    沿用。
+  - **`DECORD_SKIP_LOOP_FILTER` 改显式 opt-in**（DESIGN-REVIEW D1：库
+    import 不得改环境）：引擎不再 setdefault=all，默认即"不跳滤波"——
+    应用 `config.py` 的 setdefault 'none' 保留为防御性固定。
+  - **`DEFAULT_FILL_WIDTH` 引擎默认收回 224**（上游采纳本项目 pad A/B
+    结论）：`config.py` 覆写保留作防线（现与引擎默认一致）。
+  - **引擎包模块清单变化**：顶层 `hybrid_decode.py` 移除（项目层
+    HybridDecoder 退役）；打包清单 = `video_ocr_engine/` 包 +
+    `engine_config/segmentation/ocr_native/ocr_trt/video_utils/gpu_setup`。
+    本仓库生产代码无 `hybrid_decode` 引用（仅 tools/archive/ 历史脚本）。
+  - **安装标准化**：decord 以 PEP 508 直接 URL 进 `pyproject.toml`（按 cp
+    标签 4 行，0.8.2 wheel，FFmpeg 9 DLL 随包），`pip install -e ".[dev]"`
+    一条命令装完；`setup_venv.bat` 删除，release.yml / ci.yml /
+    build_exe.bat 全部改标准命令。PySide6-Addons 随标准安装进入 venv
+    （fluent widgets 依赖 PySide6 元包；exe 不受影响，勿单独 uninstall）。
+  - pytest 基线：105 passed + 1 skipped（0.9.x 时代口径，0.11.0 复跑见
+    提交记录）。
 - **0.9.0 同步适配（2026-08-29）**：
   - 引擎构造参数 `gray_output/yuv_output` 已删除（0.7.0 标 deprecated，
     0.9.0 移除，一律 `rep_crop_format`）——`SegmentPipeline.__init__`
@@ -47,13 +70,12 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
   CLI 参数、`tools/bench_dual_pipeline.py`（已归档）、`tools/detect_eval.py --dual`
   一并移除。历史实验结论保留在 `tools/archive/` 与本文下方各节，仅作参考。
 - **hybrid 转正为一等解码后端**：`decode_backend="hybrid"`（`engine_config.
-  DECODE_BACKEND_KEYS` 含 hybrid），GUI/CLI 解码选择均已暴露。引擎
-  `hybrid_decode.HybridDecoder`（kfe 分片 + CPU∥NVDEC 双生产者竞争）由
-  FieldExtractor 自动激活：`decode_backend="hybrid"` 且 NVDEC 可用即可
-  （0.8.x 起 stride>1 解禁、编码门删除；§8.3 起 hybrid × GPU 全驻留管线
-  合并不再互斥）；NVDEC 不可用回退 CPU、初始化失败回退纯 GPU。旧 env
-  `RVTOL_HYBRID_DECODE` 已删除，无环境变量入口；新 env：
-  `HYBRID_CPU_THREADS`（0=核数//2）、`HYBRID_MAX_CHUNKS`（默认 16）。
+  DECODE_BACKEND_KEYS` 含 hybrid），GUI/CLI 解码选择均已暴露。0.11.0 起由
+  decord 原生 hybrid ctx 实现（见 0.11.0 节）；`decode_backend="hybrid"`
+  且 NVDEC 可用即可（0.8.x 起 stride>1 解禁、编码门删除；§8.3 起
+  hybrid × GPU 全驻留管线合并不再互斥）；NVDEC 不可用回退 CPU、初始化
+  失败回退纯 GPU。旧 env `RVTOL_HYBRID_DECODE` 已删除，无环境变量入口；
+  env：`HYBRID_CPU_THREADS`（0=自动）、`HYBRID_MAX_CHUNKS`（默认 16）。
 - **速度域常量回归应用侧**：引擎 engine_config 重构后不再携带速度/纠错常量
   （SEG_* / SEG_CONF_* / SEG_DP_* / SEG_SPIKE_* / MPS_TO_KMH / SOURCE_TO_KMH /
   DEFAULT_SPEED_FORMAT / DEFAULT_MAX_SPEED / DEFAULT_MAX_ACCEL 等），
@@ -95,13 +117,16 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
 
 - **解码+OCR 识别链拆为独立仓库 [chr431/video_ocr_engine](https://github.com/chr431/video_ocr_engine)**
   （本地 `D:\Repo\video_ocr_engine`），本仓库以 **pip 依赖**调用：
-  `pyproject.toml` 中 `video-ocr-engine @ git+...@vX.Y.Z`，由 `setup_venv.bat`
-  安装；本地有引擎源码树时自动改以 **editable** 方式装（改引擎立刻生效）。
+  `pyproject.toml` 中 `video-ocr-engine @ git+...@vX.Y.Z`，随
+  `pip install -e ".[dev]"` 安装；本地开发引擎时手动
+  `pip install -e ..\video_ocr_engine --no-deps` 覆盖为源码直连
+  （改引擎立刻生效）。
 - 引擎仓库内容：`video_ocr_engine/` 包（FieldExtractor / ExtractedSegment /
-  ExtractionResult）+ 顶层 `engine_config.py / segmentation.py / hybrid_decode.py /
+  ExtractionResult）+ 顶层 `engine_config.py / segmentation.py /
   ocr_native.py / ocr_trt.py / video_utils.py / gpu_setup.py` + 模型资产
   `assets/ocr_models/`（PP-OCRv6_small.onnx + ppocrv6_dict.txt）。**引擎 import
   全部用顶层名字**（`import engine_config as config` / `from segmentation import ...`）。
+  （0.11.0 移除顶层 `hybrid_decode.py`——hybrid 改 decord 原生实现。）
 - **为何不用 git submodule（2026-08-30 改造）**：此前 `third_party/video_ocr_engine`
   是 submodule，存在三类问题 —— ① detached HEAD 下可本地提交且不会被告警
   （曾有一次本地 commit 未被上游吸收，另有本地 `main` 分支落后上游 90 个提交，
@@ -109,15 +134,15 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
   `D:\...\third_party\video_ocr_engine` 绝对路径写进 site-packages 的 `.pth`，
   硬编码盘符、换机器即失效；③ 推进全靠人记得手动改指针，无版本约束。
   改为 pip 依赖后版本由 pyproject 一行锁定，CI 与全新环境可复现。
-- **版本解耦**：引擎独立版本线（`engine_config.__version__ = "0.9.x"`，也是
+- **版本解耦**：引擎独立版本线（`engine_config.__version__ = "0.11.x"`，也是
   wheel 版本号 —— pyproject 用 `dynamic` 从该属性读取，避免两处不同步）；
   应用版本 `config.__version__ = "2.17.x"` 仍是本仓库单一事实源。
 - **模型资产只随引擎仓库**：本仓库 `assets/ocr_models` 已删除。打包时
   `RaceVideoToLog.spec` 用 `ocr_native._models_dir()` 定位并收集到
   `_internal/ocr_models`（该函数覆盖 frozen / 源码树 / site-packages 三种布局）。
 - **更新引擎**：改引擎代码在 `D:\Repo\video_ocr_engine` 提交 push 后，把本仓库
-  `pyproject.toml` 里的 tag（`v0.9.1`）改到新版本 —— 这是**唯一的接入点**，
-  不再有 submodule 指针。
+  `pyproject.toml` 里的 tag（`v0.11.0`）改到新版本并重跑
+  `pip install -e ".[dev]"` —— 这是**唯一的接入点**，不再有 submodule 指针。
 - **⚠️ 仓库根目录不要留名为 `video_ocr_engine` 的空目录**：`sys.path[0]` 是当前
   工作目录，`PathFinder` 在 `meta_path` 中先于 editable install 的 finder，
   若 cwd 下存在同名目录（即使为空、只有 `__pycache__`）会抢先解析成
@@ -153,8 +178,8 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
     OCR 文本），**零速度语义**——构造参数仅引擎域（video_path/roi/frame/
     backend/buffer/fill/C/fps 等），不含 win/mult/conf_*/dp_*；顶层 import
     已审计**零应用层依赖**（不 import segment_flow/seg_correction/ocr_text/
-    ocr_engine/csv_io/GUI，只依赖 engine_config/segmentation/hybrid_decode/
-    ocr_native/video_utils/decord/numpy）。
+    ocr_engine/csv_io/GUI，只依赖 engine_config/segmentation/ocr_native/
+    video_utils/decord/numpy；0.11.0 起 hybrid_decode 已从引擎移除）。
   - `_run_pipelined` 返回**原始文本** `(frames, segs, texts, confs, rep_frames)`，
     不做速度解析（extract_speed_value 已从引擎彻底移除）；SegmentPipeline.run()
     在应用层用 `ocr_text._extract_speed_from_text` 把文本转速度数值。
@@ -175,8 +200,9 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
   `config.py`（应用侧单一事实源）。`config.py` 仍 `from engine_config import *`
   聚合导出，故 `import config; config.SEG_*` 全兼容。
 - **第三步拆仓路径（已完成）**：引擎仓库 = `video_ocr_engine/` + `engine_config.py` +
-  `segmentation.py` + `hybrid_decode.py` + `ocr_native.py` + `ocr_trt.py` +
-  `video_utils.py`（引擎依赖侧），引擎已不再 `import config`
+  `segmentation.py` + `ocr_native.py` + `ocr_trt.py` +
+  `video_utils.py` + `gpu_setup.py`（引擎依赖侧；0.11.0 起 hybrid_decode
+  并入 decord 原生实现），引擎已不再 `import config`
   （依赖反转完成）；`_run_pipelined` 只输出文本（速度解析完全移到应用）。
   本仓库保留 = GUI + 速度后处理（seg_correction/ocr_text/segment_flow）。
 
@@ -216,8 +242,9 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
   `test_hybrid_backend.py`（hybrid 选项/CSV 映射回归）、
   `test_decoder_integration.py`（缺 decord 显式跳过）。
 - CI（.github/workflows/ci.yml）：test job 跑全量 pytest；decoder-smoke job
-  从 chr431/decord release v0.7.11 下载 fork 真实跑解码集成测试（下载失败
-  显式跳过不红）；version-check 跑 tools/version.py。
+  跑解码集成测试（decord fork wheel 是 pyproject 直接 URL 依赖，随
+  `pip install -e .` 安装，装不到即红——不再有"下载失败显式跳过"的宽容
+  语义）；version-check 跑 tools/version.py。
 - 2-off 漏纠的剩余类型是信息论极限（truth 瞬时跳变/值在邻域重复/贴合
   一侧的平滑偏移，与真实曲线不可区分）——孤立 2-off 尖峰（值不重复）
   已由第二遍尖峰检测修复（v2.16），勿重复探索其余类型。
@@ -509,12 +536,14 @@ GPU 干活，与核心数无关 → auto 决策无需按核心数调整。
   **CPU+CPU 9.0s / GPU+CPU 8.6s / CPU+TRT 6.8s / GPU+TRT 8.1s /
   CPU+NVDEC+TRT 7.0s / CPU+NVDEC+CPU 8.1s**（v2.15 新增混合后端）。
   生产者各 Python/numpy 子步骤合计仅 ~4%（GPU ~1000fps / CPU ~1260fps
-  ROI-only）。DLL 在 _decord_build + site-packages 两处
+  ROI-only）。decord 0.8.2 wheel 的 DLL 装在 site-packages/decord（pyproject
+  直接 URL 依赖）
 - **CPU+NVDEC 混合解码（引擎一等后端 `decode_backend="hybrid"`，v2.15 的
-  `_open_hybrid_vrs` 实验已由引擎移除并重写）**：`hybrid_decode.HybridDecoder`
-  （kfe 分片 + CPU∥NVDEC 双生产者竞争）是唯一实现；仅显式参数选择，无 env
-  入口；AV1 自动回退纯 GPU；`HYBRID_CPU_THREADS`（0=核数//2）、
-  `HYBRID_MAX_CHUNKS`（默认 16）可调。详见文首「引擎同步」。
+  `_open_hybrid_vrs` 实验已由引擎移除并重写）**：0.11.0 起为 decord 原生
+  hybrid ctx（fork ≥0.7.15，引擎零适配透传；此前是项目层
+  `hybrid_decode.HybridDecoder`，已随引擎 0.11.0 退役）；仅显式参数选择，
+  无 env 入口；编码（含 AV1）不再回退（回退门已删）；`HYBRID_CPU_THREADS`
+  （0=自动分档）、`HYBRID_MAX_CHUNKS`（默认 16）可调。详见文首「引擎同步」。
 - **OCR 混合（实验开关，v2.15，RVTOL_HYBRID_OCR=1，config.HYBRID_OCR_ENV，
   默认关）**：TRT（GPU）+ onnxruntime（CPU）双引擎并发处理段批。与解码
   不同，OCR 无状态约束——结果按段索引聚合、批顺序无关 → 实现只需共享
@@ -615,8 +644,9 @@ GPU 干活，与核心数无关 → auto 决策无需按核心数调整。
 - 生产路径：`run()` → `_run_pipelined()`（解码∥分段∥段值 OCR 流水线，
   有界队列背压）→ `_confidence` → `_dense_correct`（稠密格点 DP）→
   `_spike_second_pass`（第二遍尖峰检测，v2.16）→ `_build_rows`
-- 职责拆分（v2.15.1）：segmentation.py（灰度/Otsu/聚类）、hybrid_decode.py
-  （混合解码 worker/队列）、seg_correction.py（检测/置信度/DP 纯函数）、
+- 职责拆分（v2.15.1）：segmentation.py（灰度/Otsu/聚类）、混合解码
+  （v2.15~0.10 为 hybrid_decode.py worker/队列，0.11.0 起随引擎改 decord
+  原生）、seg_correction.py（检测/置信度/DP 纯函数）、
   ocr_trt.py（TrtEngine）、analysis_plot.py / review_chart.py / gui_video.py /
   export_controller.py（GUI 拆分）；segment_flow.py 保留编排与兼容 re-export
 - **串行方法（_decode_all/_segment/_ocr_segments/_detect/_correct）是实验参考
@@ -809,5 +839,6 @@ memcopy 剂量）、outputs/dual_phase_probe/ 与 outputs/dual_micro/。
 - 测试脚本复用 OcrEngine 实例（每次新建 TRT 加载 ~25s）
 - 版本号以 config.__version__ 为准，tools/version.py 强制一致性；发布流程
   走 .github/workflows/release.yml
-- decord 是自建 fork 硬依赖（PyPI 版不支持），缺失 `_decord_build/` 报错退出
+- decord 是自建 fork pip 直依赖（pyproject 直接 URL 锁定 release wheel；
+  PyPI 官方版不支持，误装会静默失去 ROI 优化——CI 安装步骤有 next_roi 守卫）
 - 新增纠错阶段前先测"对已修正帧是否净正"（align/forceSG 曾毁正确帧）

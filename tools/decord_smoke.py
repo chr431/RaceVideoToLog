@@ -10,7 +10,9 @@ Verifies the modified DLL still decodes correctly:
    (needs the next_roi API; skipped automatically if absent).
 
 Usage:
-    python tools/decord_smoke.py [--frames 500] [--hash-compare _decord_build/decord.dll.bak]
+    python tools/decord_smoke.py [--frames 500] [--hash-compare <参考DLL>]
+    # v2.17.3 起 decord 是 pip wheel 直依赖（site-packages/decord），
+    # hash-compare 可指向 wheel 解包目录里的 decord.dll 作对照
 """
 from __future__ import annotations
 import argparse

@@ -31,10 +31,6 @@ Thumbs.db
 # 唯一允许入库的视频：CI 解码集成测试的迷你视频（127KB）
 !tests/fixtures/videos/*.mp4
 
-# Self-built decord binaries
-_decord_build/
-_decord_build.bak*/
-
 # Large bundles (not needed after DML removal)
 ort_dml_bundle/
 

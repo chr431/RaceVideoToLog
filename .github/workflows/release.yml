@@ -3,10 +3,9 @@
 # 手动触发（Actions → Release → Run workflow，默认 ref: master）即完成：
 #   1. 校验版本引用一致性（tools/version.py，退出码 1 = 不一致即中止）
 #   2. 读取 config.__version__（单一事实源），确认 tag v<版本> 不存在
-#   3. 下载 decord fork 发布产物 decord-<ver>-win64-gpu.zip（chr431/decord，
-#      decord-version 输入，默认 0.7.14——引擎 0.9.0 的
-#      DECORD_SKIP_LOOP_FILTER 透传需 fork ≥0.7.13）解压到 _decord_build\
-#   4. setup_venv.bat --ci + build_exe.bat --ci 构建 EXE（--ci 跳过 pause）
+#   3. 标准安装：python -m venv + pip install -e ".[dev]"（引擎 git tag 与
+#      decord fork wheel 均由 pyproject.toml 直接 URL 锁定，无自定义安装脚本）
+#   4. build_exe.bat --ci 构建 EXE（--ci 跳过 pause）
 #   5. 打包 RaceVideoToLog.<版本>.7z（7-Zip LZMA2 mx=9 最大压缩，win-latest
 #      runner 预装 7z）—— 布局与现有 release 一致（RaceVideoToLog.exe 在
 #      7z 根 + _internal/，无文件夹包裹；.7z 比 .zip 小 ~26%，Win11 原生解压）
@@ -29,11 +28,6 @@ on:
         required: false
         default: 'master'
         type: string
-      decord-version:
-        description: 'decord fork release version to consume (chr431/decord)'
-        required: false
-        default: '0.7.14'
-        type: string
 
 permissions:
   contents: write
@@ -52,10 +46,10 @@ jobs:
           ref: ${{ inputs.ref }}
           fetch-depth: 0  # 全历史：release notes / tag 检查需要
           token: ${{ github.token }}
-          # 引擎 video_ocr_engine 已 pip 化：版本由 pyproject.toml 的 git tag
-          # 锁定，经 setup_venv.bat 安装。模型资产由 spec 从已安装的引擎包
-          # 解析（ocr_native._models_dir），无需 submodule checkout，
-          # 也不再需要先导出 PYTHONPATH（引擎是普通已安装包）。
+          # 引擎 video_ocr_engine 与 decord fork wheel 均由 pyproject.toml
+          # 直接 URL 锁定，随下方 pip install -e 安装。模型资产由 spec 从
+          # 已安装的引擎包解析（ocr_native._models_dir），无需 submodule
+          # checkout，也不再需要先导出 PYTHONPATH（引擎是普通已安装包）。
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -88,32 +82,16 @@ jobs:
           Add-Content -Path $env:GITHUB_OUTPUT -Value "version=$ver"
           Add-Content -Path $env:GITHUB_OUTPUT -Value "tag=v$ver"
 
-      - name: Download decord fork release
+      - name: Create venv + install dependencies
         shell: pwsh
         run: |
-          $ver = "${{ inputs.decord-version }}"
-          $url = "https://github.com/chr431/decord/releases/download/v$ver/decord-$ver-win64-gpu.zip"
-          Write-Host "Downloading $url"
-          curl.exe -L -f -o decord.zip $url
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "decord v$ver 发布产物下载失败。请先运行 chr431/decord 的 Release workflow 发布 decord-$ver-win64-gpu.zip"
-            exit 1
-          }
-          Expand-Archive -Path decord.zip -DestinationPath .
-          if (-not (Test-Path "_decord_build/decord.dll")) {
-            Write-Error "_decord_build/decord.dll 缺失（zip 布局不符）"
-            exit 1
-          }
-          if (-not (Test-Path "_decord_build/python/decord/video_reader.py")) {
-            Write-Error "decord Python 层缺失（next_roi/get_codec 不可用）"
-            exit 1
-          }
-          Write-Host "decord $ver extracted to _decord_build/"
-
-      - name: Setup venv + install deps
-        shell: pwsh
-        run: |
-          cmd /c "setup_venv.bat --ci"
+          python -m venv .venv
+          .venv\Scripts\python -m pip install --upgrade pip -q
+          # 引擎（git tag）与 decord（fork release wheel）都由 pyproject.toml 锁定
+          .venv\Scripts\python -m pip install -e ".[dev]" -q
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # 守卫：decord 必须是 fork（PyPI 官方版无 next_roi，静默失去 ROI 优化）
+          .venv\Scripts\python -c "import decord, decord.video_reader as vr; assert hasattr(vr.VideoReader, 'next_roi'), 'not fork'; from importlib.metadata import version; import engine_config; print('decord', version('decord'), '/ engine', engine_config.__version__)"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build EXE
@@ -241,7 +219,9 @@ jobs:
             exit 1
           }
           $sha = (git rev-parse --short HEAD).Trim()
-          $body += "`n`n---`n构建源: ${{ inputs.ref }} @ $sha（GitHub Actions 自动构建，工具链 decord ${{ inputs.decord-version }}）"
+          $decordVer = (& .venv\Scripts\python -c "from importlib.metadata import version; print(version('decord'))").Trim()
+          $engineVer = (& .venv\Scripts\python -c "import engine_config; print(engine_config.__version__)").Trim()
+          $body += "`n`n---`n构建源: ${{ inputs.ref }} @ $sha（GitHub Actions 自动构建，工具链 decord $decordVer / engine $engineVer）"
           [System.IO.File]::WriteAllText("notes.md", $body, (New-Object System.Text.UTF8Encoding($false)))
 
       - name: Create GitHub Release

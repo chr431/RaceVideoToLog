@@ -108,20 +108,25 @@ def test_cpu_ocr_stride_tiers_decode_threads(monkeypatch):
 
 
 def test_av1_cpu_decode_allocates_more_to_decode(monkeypatch):
-    """AV1 + CPU 软解：解码/OCR 对半分（cores//2，任何核数）。
+    """AV1 + CPU 软解：解码线程走 dav1d 扩展档（引擎 0.11.0 / fork 0.8.1+）。
 
-    新 decord DLL（max_frame_delay≥16 恢复 dav1d 帧并行）后解码吞吐翻倍，
-    平衡点回到对半分（实测 test6：16 核 dcd=8/ocrT=8 → 45.7s vs 12/4
-    58.5s、8 核 dcd=4/ocrT=4 → 72.1s vs 6/2 91.9s）。
+    FFmpeg9 起 dav1d 帧线程扩展性大幅改善（引擎复测：顺序解码 16T 797fps →
+    24T 1164fps → 32T 1178fps 饱和；host_cpu e2e 8T 6.26s → 24T 3.42s，
+    -45%），不分 OCR 位置，逻辑核 3/4 钳 [8, 24]。OCR 线程保持对半分
+    （cores//2）——解码多拿的核由 dav1d 帧并行消化，ORT 争核远抵不过解码
+    收益。（v0.7.11/FFmpeg8 时代的"解码对半分 cores//2"口径已过时，被
+    引擎 0.11.0 推翻。）
     """
     monkeypatch.delenv("OCR_THREADS", raising=False)
+    monkeypatch.delenv("DECODE_THREADS", raising=False)
     p = _pipe()
     p._backend = "decord/CPU"
     p._codec = "av1"
     cores = cpu_physical_cores()
-    expect = max(2, cores // 2)
+    logical = os.cpu_count() or cores
+    expect = max(8, min(24, logical * 3 // 4))
     assert p._decode_num_threads(codec="av1") == expect
-    assert p._ocr_num_threads() == expect
+    assert p._ocr_num_threads() == max(2, cores // 2)
     # GPU 解码 AV1：OCR 全核（不触发 AV1 让核）
     p._backend = "decord/GPU"
     assert p._ocr_num_threads() == cores

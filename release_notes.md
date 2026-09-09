@@ -1,5 +1,57 @@
 # Release Notes
 
+## v2.17.3（2026-09-09）— 依赖全面标准化：decord 改 wheel 直依赖 + 引擎 v0.11.0
+
+> 本节面向使用者：只讲你能直接感知到的变化。技术细节见下方各节。
+
+### 🎯 对你意味着什么
+
+- **安装只剩两条标准命令**：`setup_venv.bat` 删除。decord 自建 fork 自 0.8.2
+  起发布标准 wheel（DLL 随包自带），以 pip 直接 URL 依赖写进
+  `pyproject.toml`，与引擎一样随 `pip install -e ".[dev]"` 一条命令安装：
+
+  ```bash
+  python -m venv .venv
+  .venv\Scripts\python -m pip install -e ".[dev]"
+  ```
+
+  不再需要下载 decord zip、解压到 `_decord_build\`、跑安装脚本拷 DLL——
+  这套手工流程整体废弃。
+- **识别链引擎升级 v0.9.1 → v0.11.0**：上游三个版本的收敛与重构
+  （GPU 管线/OcrSession 拆分、av1 线程策略、文档分层）。其中 hybrid 混合
+  解码改为 decord 原生实现（`hybrid`/`hybrid_gpu` 上下文），解码参数面与
+  旧实现一致，GUI/CLI 用法不变。
+- **decord 0.7.14 → 0.8.2**（FFmpeg 8 → 9）：引擎侧实测 AV1 CPU 解码在
+  多核机器显著提速（dav1d 线程策略按新 FFmpeg 调优）；0.8.2 已含 yuv
+  输出路径的 cuMemcpy2D 缺陷修复。
+- **准确率门禁不变**：本项目曾对引擎默认值做过的两处覆盖（OCR 输入 pad
+  下限 224、CPU 解码不去块滤波）在引擎 0.11.0 已被上游采纳/对齐——覆盖
+  保留为防御性固定，生产行为与 v2.17.2 一致口径。
+- **venv 磁盘占用增加 ~450MB**：标准 pip 安装会经 PySide6-Fluent-Widgets
+  的元包依赖连带装上 PySide6-Addons（运行只用 Essentials，纯粹 venv 开销；
+  frozen exe 体积不受影响，<400MB 门禁照旧）。注意**勿单独卸载
+  PySide6-Addons**——其卸载清单误含 Essentials 的 Qt6Core.dll，会损坏
+  QtCore（误操作后 force-reinstall PySide6-Essentials 可修复）。
+
+### 📦 升级 decord / 引擎（开发者）
+
+- **decord**：改 `pyproject.toml` 里 4 行直接 URL 的版本号（cp311–cp314
+  各一行，勿混版本）→ `pip install -e ".[dev]"`。
+- **引擎**：改 `pyproject.toml` 里的 tag（当前 `v0.11.0`）→ 同上。
+  本地开发引擎仍用 `pip install -e ..\video_ocr_engine --no-deps`
+  覆盖为源码直连（现改为手动，不再由安装脚本自动做）。
+- CI：release.yml / ci.yml 全部改标准命令；decord 安装步骤带 `next_roi`
+  守卫（防 PyPI 官方版静默混入）；解码集成测试不再有"下载失败显式跳过"
+  的宽容语义——decord 装不到即红。
+
+### ✅ 验证
+
+- pytest 全量通过；decord 0.8.2 fork API（`next_roi`/`get_codec`）、引擎
+  0.11.0、`pip check` 全绿。
+- 准确率漏斗（5 视频全量帧，引擎 v0.11.0 + decord 0.8.2 + numpy 2.5.3）：
+  段 14534、原始误读 124、检出率 100%、**最终错误 0**（与 v2.17.2 门禁
+  口径持平；test5/test6 原始误读清零，test/test2 读数不变）。
+
 ## v2.17.2（2026-08-30）— 引擎接入方式改为 pip 依赖（不再用 git submodule）
 
 > 本节面向使用者：只讲你能直接感知到的变化。技术细节见下方各节。

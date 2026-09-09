@@ -1,4 +1,4 @@
-# RaceVideoToLog v2.17.2
+# RaceVideoToLog v2.17.3
 
 从赛车视频中提取速度数据，生成时间-速度-距离 CSV 文件。
 
@@ -11,79 +11,78 @@
 `pyproject.toml` 中按 git tag 锁定：
 
 ```toml
-"video-ocr-engine @ git+https://github.com/chr431/video_ocr_engine.git@v0.9.1"
+"video-ocr-engine @ git+https://github.com/chr431/video_ocr_engine.git@v0.11.0"
 ```
 
-`setup_venv.bat` 会自动安装。若本地存在引擎源码树（与本仓库同级目录的
-`video_ocr_engine/`），脚本改用 **editable** 方式安装 —— 改引擎代码立刻生效，
-与旧 submodule 模式体验一致；没有源码树时按上面锁定的 tag 从 git 拉取。
+`pip install -e ".[dev]"` 会自动安装。本地开发引擎时，把引擎源码树放在与本
+仓库同级目录（`../video_ocr_engine/`），手动改回源码直连（改代码立刻生效）：
 
-**升级引擎**：改 `pyproject.toml` 里的 tag 后重跑 `setup_venv.bat`。这是唯一的
-接入点 —— 不再有 submodule 指针要手动同步。
+```bash
+pip install -e ..\video_ocr_engine --no-deps
+```
+
+**升级引擎**：改 `pyproject.toml` 里的 tag 后重跑 `pip install -e ".[dev]"`。
+这是唯一的接入点 —— 不再有 submodule 指针要手动同步。
 
 > **2026-08-30 起不再使用 git submodule。** 此前 `third_party/video_ocr_engine`
 > 是 submodule，存在三个问题：detached HEAD 下可本地提交而不被告警（曾出现
 > 本地 commit 未被上游吸收、本地分支落后上游 90 个提交，误 checkout 会把引擎
-> 静默回退）；`setup_venv.bat` 把绝对路径写进 `.pth`，硬编码盘符、换机器即失效；
+> 静默回退）；旧安装脚本把绝对路径写进 `.pth`，硬编码盘符、换机器即失效；
 > 版本推进全靠手动改指针、无约束。改为 pip 依赖后版本由一行锁定，CI 与全新
 > 环境可复现。
 
-引擎使用独立版本线（0.9.x，即 wheel 版本号 —— 引擎 `pyproject.toml` 用
+引擎使用独立版本线（0.11.x，即 wheel 版本号 —— 引擎 `pyproject.toml` 用
 `dynamic` 从 `engine_config.__version__` 读取，避免两处不同步）；应用版本
 （2.17.x）仍以 `config.__version__` 为单一事实源，两者解耦。
 
 ## 前置要求
 
-- Python 3.11+
+- Windows x64 + Python 3.11–3.14
 - NVIDIA 显卡 + 最新驱动（GPU 视频解码；无 GPU 自动使用 CPU 软件解码，
   性能差异约 5% —— OCR 全物理核线程预算下两者接近）
 - （可选）CUDA Toolkit 13.x + TensorRT 11.x（GPU OCR 推理；无则自动使用 CPU）
 
-## 一键安装
+## 安装
 
-**前提**：无需任何额外步骤（引擎是 pip 依赖，`setup_venv.bat` 自动安装）。
+标准 venv + pip 一条命令（引擎与 decord fork wheel 均由 `pyproject.toml`
+直接 URL 锁定，**无任何自定义安装脚本**）：
 
 ```bash
-setup_venv.bat
+python -m venv .venv
+.venv\Scripts\python -m pip install -e ".[dev]"
 ```
 
-脚本自动完成：
+`pip install -e .` 自动完成：
 
-1. 创建 `.venv` 虚拟环境
-2. `pip install -e .` 安装所有 Python 依赖
-3. 从 `_decord_build\` 安装自建 decord（必需，GPU 解码 + 内存修复；缺失则报错退出）
-4. 安装 TensorRT / cuda-python Python 绑定
+1. 安装所有 Python 依赖（PySide6 / onnxruntime / cuda-python / TensorRT 绑定等）
+2. 引擎 `video-ocr-engine`（git tag 锁定，见上节）
+3. decord 自建 fork wheel（GitHub release 直接 URL，DLL 随包自带，见下节）
 
-### 自建 decord（必需）
+### 自建 decord（pip 直依赖）
 
-本项目**不依赖 PyPI decord**（CPU-only、无 `next_roi` / `get_codec`、CPU 解码内存溢出）。自建 fork（chr431/decord）支持 NVDEC GPU 硬解码 + CPU 软件解码，只传输识别 ROI（解码提速 ~45%，编码信息直接来自 decord），且 GPU API 运行时动态加载 —— 无 NVIDIA 设备自动回退 CPU 解码。
+本项目**不依赖 PyPI decord**（CPU-only、无 `next_roi` / `get_codec`、CPU 解码
+内存溢出）。自建 fork（chr431/decord）支持 NVDEC GPU 硬解码 + CPU 软件解码，
+只传输识别 ROI（解码提速 ~45%，编码信息直接来自 decord），且 GPU API 运行时
+动态加载 —— 无 NVIDIA 设备自动回退 CPU 解码。
 
-**版本要求：≥ v0.7.10**（当前开发版；在 v0.7.9 的 ROI-first 解码管线
-（解码器只输出识别矩形——CPU filter 先裁剪再转换、GPU 转换 kernel 只算
-ROI 窗口）之上新增 YUV420 输出，供最终检查彩色预览）。v0.7.9 回退
-YUV→灰度预览，功能正常；旧版会报 `_CAPI_VideoReaderGetBatchRoi` 不存在）。
+**当前版本 0.8.2**（fork 自 0.8.2 起发布 cp39–cp314 全版本 wheel，decord.dll
++ FFmpeg 9 DLL 随包自带；引擎 0.11.0 的 hybrid 解码为 decord 原生实现，
+需 fork ≥0.7.15）。版本在 `pyproject.toml` 中按解释器版本以 PEP 508 直接
+URL 锁定：
 
-获取 decord 发布产物（推荐）：运行 [chr431/decord](https://github.com/chr431/decord) 的 **Release workflow**（Actions → Release → Run workflow，输入版本号如 `0.7.10`），它会构建并发布 `decord-<ver>-win64-gpu.zip`。解压到本仓库 `_decord_build\`：
-
-```text
-_decord_build\
-├── decord.dll
-├── avcodec-62.dll          （FFmpeg 8.x）
-├── avformat-62.dll
-├── avutil-60.dll
-├── avfilter-11.dll
-├── avdevice-62.dll
-├── swresample-6.dll
-├── swscale-9.dll
-├── msvcp140.dll
-├── vcruntime140.dll
-├── vcruntime140_1.dll
-└── python\decord\          （fork 的 Python 层：next_roi / get_codec）
+```toml
+"decord @ https://github.com/chr431/decord/releases/download/v0.8.2/decord-0.8.2-cp311-cp311-win_amd64.whl ; python_version == '3.11'",
+"decord @ https://github.com/chr431/decord/releases/download/v0.8.2/decord-0.8.2-cp312-cp312-win_amd64.whl ; python_version == '3.12'",
+"decord @ https://github.com/chr431/decord/releases/download/v0.8.2/decord-0.8.2-cp313-cp313-win_amd64.whl ; python_version == '3.13'",
+"decord @ https://github.com/chr431/decord/releases/download/v0.8.2/decord-0.8.2-cp314-cp314-win_amd64.whl ; python_version == '3.14'",
 ```
 
-然后重新运行 `setup_venv.bat`。
+**升级 decord**：全部行换成同版本 URL → `pip install -e ".[dev]"`。
+没有 PyPI 回退（官方版缺 fork API，误装会在解码路径静默失效）。
 
-> 没有 `_decord_build\` 时 `setup_venv.bat` 会报错退出（**无 PyPI 回退**）—— 必须先获取自建 decord 产物。
+> **2026-09-09（v2.17.3）起废弃 `_decord_build\` zip 拷贝流程**：此前 decord
+> 需手动下载发布产物 zip、解压后由安装脚本把 DLL 和 Python 层拷进
+> site-packages；0.8.2 wheel 把这套流程完全标准化了。
 
 ## 使用
 
@@ -102,7 +101,7 @@ _decord_build\
 ## 输出格式
 
 ```csv
-# RaceVideoToLog v2.17.2
+# RaceVideoToLog v2.17.3
 # video=test5.mp4, fps=59.767
 # roi=843,993,948,1025, format=km/h, frame_start=362, frame_end=7585
 # max_speed=400.0, max_accel=50.0, force_aspect=0.0, fill_width=224
@@ -202,7 +201,7 @@ build_exe.bat
 
 ## 变更记录
 
-完整发布日志（v2.7.1 → v2.17.2）见 [release_notes.md](release_notes.md)。
+完整发布日志（v2.7.1 → v2.17.3）见 [release_notes.md](release_notes.md)。
 
 ## 运行时缓存（卸载时需删除）
 

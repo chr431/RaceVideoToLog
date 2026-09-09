@@ -11,12 +11,19 @@ echo   RaceVideoToLog - Build EXE
 echo ========================================
 echo.
 
-REM [1/4] Check / create venv
+REM [1/4] Check / create venv（标准 venv + pip install，无自定义脚本）
 if not exist ".venv\Scripts\python.exe" (
-    echo [1/4] .venv not found, running setup_venv.bat ...
-    call "%~dp0setup_venv.bat" %1
+    echo [1/4] .venv not found, creating with standard commands ...
+    python -m venv .venv
     if errorlevel 1 (
-        echo [ERROR] venv setup failed.
+        echo [ERROR] Failed to create .venv
+        if not "%_NOPAUSE%"=="1" pause
+        exit /b 1
+    )
+    .venv\Scripts\python -m pip install --upgrade pip -q
+    .venv\Scripts\python -m pip install -e ".[dev]"
+    if errorlevel 1 (
+        echo [ERROR] Dependency installation failed.
         if not "%_NOPAUSE%"=="1" pause
         exit /b 1
     )

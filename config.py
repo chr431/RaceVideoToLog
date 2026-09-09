@@ -14,27 +14,26 @@ from __future__ import annotations
 import os as _os
 
 # ── 解码预处理策略（应用侧决策，必须先于引擎包 import 生效）──
-# 引擎 0.9.0 起 import 时 setdefault DECORD_SKIP_LOOP_FILTER=all（CPU 软解
-# 关去块滤波，HEVC 解码 -13%~-18%）。引擎级真值裁定为中性，但本应用
-# CPU 解码路径实测（5 视频全量漏斗，2026-08-29，decord 0.7.14）：段界
-# 漂移 +60 段、检出率 100%→97.9%、最终错误 0→7（test 3 / test2 4）——
-# 最终错误数是本应用硬门禁，故在此 setdefault 回完整去块滤波（none）。
-# 本 setdefault 先于引擎包 __init__ 的同名 setdefault 执行即生效；生产
-# 默认 auto 走 NVDEC 本就不受该开关影响。如需引擎默认速度（hybrid/cpu
-# 后端），可预先显式设置 DECORD_SKIP_LOOP_FILTER=all 覆盖。
+# 引擎 0.9.0 曾在 import 时 setdefault DECORD_SKIP_LOOP_FILTER=all（CPU 软解
+# 关去块滤波）；本应用 CPU 解码路径实测（5 视频全量漏斗，2026-08-29）：段界
+# 漂移 +60 段、检出率 100%→97.9%、最终错误 0→7 —— 最终错误数是本应用硬
+# 门禁，故在此 setdefault 回完整去块滤波（none）。引擎 0.11.0 起该开关改为
+# 显式 opt-in（DESIGN-REVIEW D1：库 import 不得改环境）——默认本就是"不跳
+# 滤波"，此 setdefault 降级为防御性固定（防引擎未来改回 all）。生产默认
+# auto 走 NVDEC 本就不受该开关影响；需引擎级速度（hybrid/cpu 后端）可预先
+# 显式设置 DECORD_SKIP_LOOP_FILTER=all 覆盖。
 _os.environ.setdefault("DECORD_SKIP_LOOP_FILTER", "none")
 
 # 管线引擎域 + 共享常量（单一事实源在引擎仓库 engine_config.py）
 from engine_config import *  # noqa: F401,F403 — 聚合导出兼容
 
-# ── OCR 输入 pad 宽度下限：224（回退引擎 0.9.0 的 160 默认，P0-5）──
-# 引擎按"逐帧全等准确率"将 224→160；本应用按生产漏斗口径（分段代表帧
-# OCR + tol=1 + 检测/纠正链）实测（2026-08-29，5 视频全量帧，单变量
-# OCR_PAD_SMALL）：160 使原始误读 150→190（test5 7→26、test6 17→32），
-# 224 恢复 0.7.0 时代水平（≈149）且 auto 路径墙钟零差（test5/test6
-# 3000 帧 4.1/2.8s 持平）。两处同步覆写：engine_config 模块属性供引擎
-# 内部默认读取（extractor fill_width=None 分支），应用命名空间供 GUI
-# 默认值（FILL_WIDTH_RANGE 内，用户仍可调）。
+# ── OCR 输入 pad 宽度下限：224（与引擎 0.11.0 默认一致，防御性固定）──
+# 引擎 0.9.0 曾按"逐帧全等准确率"把默认 224→160（P0-5）；本应用按生产漏斗
+# 口径（分段代表帧 OCR + tol=1 + 检测/纠正链）实测（2026-08-29，5 视频
+# 全量帧，单变量 OCR_PAD_SMALL）：160 使原始误读 150→190（test5 7→26、
+# test6 17→32）。引擎 0.11.0 已采纳本结论把默认收回 224；此处显式固定保留
+# 作防线 + 应用命名空间单一事实源（GUI 默认值，FILL_WIDTH_RANGE 内用户仍
+# 可调），并同步覆写 engine_config 模块属性（extractor fill_width=None 分支）。
 import engine_config as _engine_config  # noqa: E402
 _engine_config.DEFAULT_FILL_WIDTH = 224
 DEFAULT_FILL_WIDTH = 224
@@ -98,7 +97,7 @@ SEG_SPIKE_MIN_FPS: float = 40.0
 
 # 版本：应用侧单一事实源（引擎独立版本线 0.3.x 不随应用 bump）；
 # 运行时 CSV 头/控制台读 config.__version__（历史入口保持不变）
-__version__ = "2.17.2"
+__version__ = "2.17.3"
 
 # ═══════════════════ 应用/日志与监控 ═══════════════════
 DEFAULT_LOG_LEVEL: str = "normal"      # 日志级别 (normal / detailed / debug)

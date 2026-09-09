@@ -145,7 +145,8 @@ try:
 except Exception:
     pass  # tensorrt not installed
 
-# decord（NVDEC 硬件加速视频解码）
+# decord（NVDEC 硬件加速视频解码）— pyproject 直接 URL 依赖（chr431 fork
+# release wheel，decord.dll + FFmpeg 9 DLL 随包自带）
 # GPU API（CUDA 驱动 / NVCUVID / NVML）已改为运行时动态加载（nv_gpu_dyn），
 # decord.dll 导入表无 NVIDIA 依赖 → 无驱动设备自动回退 CPU 解码。
 tmp_ret = collect_all('decord')
@@ -331,7 +332,7 @@ _EXCLUDE_BINARIES = {
     'Qt6PrintSupport.dll', 'Qt6WebChannel.dll',
     'Qt6WebEngine.dll', 'Qt6WebEngineCore.dll', 'Qt6WebEngineQuick.dll',
     'Qt6Designer.dll', 'Qt6Help.dll', 'Qt6UiTools.dll',
-    # PySide6-bundled FFmpeg 6.x/7.x (decord provides FFmpeg 8.x)
+    # PySide6-bundled FFmpeg 6.x/7.x (decord provides FFmpeg 9.x)
     'swresample-5.dll', 'swscale-8.dll', 'avformat-61.dll',
     'avutil-59.dll', 'avcodec-61.dll', 'avdevice-61.dll', 'avfilter-10.dll',
     'postproc-58.dll',
@@ -344,10 +345,10 @@ _EXCLUDE_BINARIES = {
     'avcodec-59.dll', 'avformat-59.dll', 'avutil-57.dll',
     'avfilter-8.dll', 'avdevice-59.dll', 'swresample-4.dll',
     'swscale-6.dll', 'postproc-56.dll',
-    # decord 发布产物中运行时不需要的二进制：decord.dll 不导入 avdevice，
-    # 项目也不调用 ffprobe；qdirect2d 平台插件不用；libcrypto/libssl 的
+    # decord fork wheel 自 0.8.2 起已不含 avdevice / ffprobe（旧 zip 产物遗留），
+    # 以下排除仅作防御；qdirect2d 平台插件不用；libcrypto/libssl 的
     # -x64 重复对无任何导入者（_hashlib/_ssl 用无后缀版本）
-    'avdevice-62.dll', 'ffprobe.exe', 'qdirect2d.dll',
+    'avdevice-62.dll', 'avdevice-63.dll', 'ffprobe.exe', 'qdirect2d.dll',
     'libcrypto-3-x64.dll', 'libssl-3-x64.dll',
 }
 _PIL_BINARY_PREFIXES = ('_avif', '_imaging', '_webp', '_imagingft',
@@ -382,9 +383,9 @@ coll = COLLECT(
     upx_exclude=[
         'onnxruntime.dll',
         'onnxruntime_providers_shared.dll',
-        # decord FFmpeg 8.x DLLs (UPX may corrupt)
-        'avcodec-62.dll', 'avformat-62.dll', 'avutil-60.dll',
-        'swresample-6.dll', 'swscale-9.dll',
+        # decord FFmpeg 9.x DLLs (UPX may corrupt)
+        'avcodec-63.dll', 'avformat-63.dll', 'avutil-61.dll',
+        'swresample-7.dll', 'swscale-10.dll',
     ],
     name='RaceVideoToLog',
 )

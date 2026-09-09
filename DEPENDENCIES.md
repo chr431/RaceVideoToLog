@@ -1,19 +1,19 @@
-# 上游依赖跟踪（v2.17.2）
+# 上游依赖跟踪（v2.17.3）
 
 ## 核心依赖（2026-08-18 已全部更新到 PyPI 最新 + 清理孤儿包）
 
 | 包 | 当前版本 | 来源 | 备注 |
 | --- | --- | --- | --- |
 | onnxruntime | 1.29.0 | PyPI | CPU 推理后端（OcrEngine 直连）；1.28 含 protobuf CVE 修复；**1.29.0（2026-08-12 PyPI 发布）实测升级安全、性能持平**：3000 帧端到端 test5 h264 -2%（4.20→4.10s）、test6 AV1 +1%（波动内）；逐帧读数与 1.28 完全一致（0 差异）；新增参数（ORT_INTRA/INTER_OP_NUM_THREADS env、parallel 执行、spin off）全部无收益，保持现状不落地 |
-| numpy | 2.5.2 | PyPI | 预处理/信号计算（纯 numpy，无 scipy）；2.5.1→2.5.2 升级后基线读数指纹逐位一致 |
-| PySide6-Essentials | 6.11.2 | PyPI | Qt 6 GUI（只装核心，省 Addons ~300MB） |
+| numpy | 2.5.3 | PyPI | 预处理/信号计算（纯 numpy，无 scipy）；2.5.1→2.5.2→2.5.3 均为补丁版，基线读数指纹逐位一致 |
+| PySide6-Essentials | 6.11.2 | PyPI | Qt 6 GUI 核心。运行只需 Essentials，但标准 pip 安装会经 PySide6-Fluent-Widgets 的 `PySide6` 元包依赖连带装上 PySide6-Addons（~450MB，venv 磁盘开销；exe 不受影响）。**勿单独 uninstall Addons**：其 RECORD 误含 Essentials 的 Qt6Core.dll，卸载会损坏 QtCore |
 | PySide6-Fluent-Widgets | 1.11.3 | PyPI | Fluent Design 组件库（活跃维护，最后 push 2026-08-01） |
 | pyqtgraph | 0.14.0 | PyPI | 分析/检查图表（替代 matplotlib） |
 | cuda-python | 13.3.1 | PyPI | CUDA Python 绑定（TRT 执行 + decord GPU DLL 注册） |
 | tensorrt_cu13_bindings | 11.2.1.2 | PyPI | TensorRT Python 绑定（~1MB） |
 | psutil | 7.2.2 | PyPI | 资源监测 RSS / CPU%（可选：缺失时降级为 None，GPU 采样不受影响） |
-| decord | **0.7.14** | 自建仓库 chr431/decord | NVDEC 硬解 + CPU 软件解码；FFmpeg 8.x DLL。**发布产物（frozen exe）自 v2.17.0 起统一为 fork v0.7.14**：引擎 0.9.0 的 `DECORD_SKIP_LOOP_FILTER` 透传需 ≥v0.7.13、`sample_stride>1` 等差步长快速路径需 ≥v0.7.12——用旧版这些优化静默失效。**PyPI 版不支持 next_roi / CPU ROI 优化 / YUV420 输出**，见 setup_venv.bat |
-| video_ocr_engine | **0.9.1** | pip（git tag 锁定）chr431/video_ocr_engine | 解码+OCR 识别链引擎（FieldExtractor，零速度语义）。提供 `video_ocr_engine/` 包与 `engine_config/segmentation/ocr_native/ocr_trt/video_utils/hybrid_decode/gpu_setup` 顶层模块；OCR 模型资产随引擎仓库（PP-OCRv6_small + 字符表）。**2026-08-30 起由 git submodule 改为 pip 依赖**：`pyproject.toml` 中 `video-ocr-engine @ git+...@v0.9.1` 锁定；本地有源码树时 setup_venv.bat 自动改 editable 安装（改引擎立刻生效） |
+| decord | **0.8.2** | pip（GitHub release wheel，chr431/decord） | NVDEC 硬解 + CPU 软件解码；**FFmpeg 9 DLL 随包自带**。**v2.17.3 起为 pyproject 直接 URL 依赖（PEP 508，按 cp 标签 4 行）**：`pip install -e ".[dev]"` 一条命令安装，废弃 `_decord_build\` zip 拷贝流程。0.8.2 底线：引擎 0.11.0 的 hybrid 解码为 decord 原生实现（fork ≥0.7.15）、av1 线程策略按 FFmpeg9 dav1d 调优、含 cuMemcpy2D_v2 修复。**PyPI 版不支持 next_roi / CPU ROI 优化 / YUV420 输出，勿回退** |
+| video_ocr_engine | **0.11.0** | pip（git tag 锁定）chr431/video_ocr_engine | 解码+OCR 识别链引擎（FieldExtractor，零速度语义）。提供 `video_ocr_engine/` 包与 `engine_config/segmentation/ocr_native/ocr_trt/video_utils/gpu_setup` 顶层模块（0.11.0 移除 hybrid_decode——hybrid 改 decord 原生）；OCR 模型资产随引擎仓库（PP-OCRv6_small + 字符表）。**2026-08-30 起由 git submodule 改为 pip 依赖**：`pyproject.toml` 中 `video-ocr-engine @ git+...@v0.11.0` 锁定；本地开发引擎时手动 `pip install -e ..\video_ocr_engine --no-deps` 改源码直连（改引擎立刻生效） |
 | pyinstaller | 6.22.2 | PyPI | 打包工具（6.21→6.22.2） |
 
 ## GPU 加速（运行时，不打包）
@@ -33,8 +33,9 @@
 
 ## 已知问题
 
-### decord（自建）
-- 需与 FFmpeg 8.x DLL（avcodec-62 等）同目录；`setup_venv.bat` 自动从 `_decord_build/` 拷贝
+### decord（自建 fork，pip wheel 直依赖）
+- wheel（0.8.2+）把 decord.dll 与 FFmpeg 9 DLL（avcodec-63 等）打包在
+  `decord/` 包目录内，pip 安装即用；frozen exe 由 spec `collect_all('decord')` 收集
 - 无 NVIDIA GPU 时自动回退 CPU 软件解码（`DECORD_FORCE_CPU=1` 可强制）
 
 ### onnxruntime
@@ -69,15 +70,17 @@ pip list --outdated
 | tensorrt_cu13_bindings | 11.2.1.2 | 11.2.1.2 | ✅ NVIDIA 官方 | |
 | pyinstaller | 6.22.2 | 6.22.2 | ✅ 活跃 | 已随本轮更新（6.21→6.22.2） |
 | pytest | 9.1.1 | 9.1.1 | ✅ 活跃 | dev 依赖 |
-| decord（fork） | **0.7.11** | fork v0.7.11 | ⚠️ 上游 dmlc 停更（最后 push 2024-07） | **自建 fork chr431/decord 承担维护**；**2026-08-18 已统一为 v0.7.11 release 构建**（_decord_build + site-packages 同 sha `89D82E5B`，python 层 libinfo 0.7.11，AV1 探针 dcd=12 655fps） |
+| decord（fork） | **0.8.2** | fork v0.8.2 | ⚠️ 上游 dmlc 停更（最后 push 2024-07） | **自建 fork chr431/decord 承担维护**；**v2.17.3 起为 pyproject 直接 URL wheel 依赖**（FFmpeg 9 DLL 随包，av1 线程策略按 FFmpeg9 dav1d 调优，含 cuMemcpy2D_v2 修复） |
 
 **停止支持风险点（已化解/已知）**：
 - **decord 上游 dmlc/decord 已停更 1 年+**（PyPI 0.6.0 仍 2021 行为）——本项目依赖自建 fork
-  chr431/decord（v0.7.11，含 AV1 帧并行修复 / ROI-first / GPU gray / YUV420），
-  fork 由本仓库维护，CI decoder-smoke 从 fork release 下载。**勿回退 PyPI 版**。
-- **Python 3.13.2** 运行（requires-python >=3.11 满足；3.13 安全支持至 2029-10）。
-- `pip check` 唯一红项 = PySide6-Fluent-Widgets 传递依赖 PySide6-Addons 未装——
-  **有意省略**（省 ~300MB，项目只用 Essentials），非停止支持问题。
+  chr431/decord（v0.8.2 wheel，含 ROI-first / AV1 帧并行 / GPU gray / YUV420 /
+  原生 hybrid 解码），
+  fork 由本仓库维护，版本经 pyproject 直接 URL 锁定。**勿回退 PyPI 版**。
+- **Python 3.13.2** 运行（requires-python >=3.11 满足；3.13 安全支持至 2029-10；
+  decord wheel 矩阵覆盖 3.11–3.14）。
+- `pip check` 全绿（v2.17.3 起标准安装连带装上 PySide6-Addons，此前"Addons
+  有意省略"的唯一红项消失；Addons 是 venv 磁盘开销，exe 不受影响）。
 
 **孤儿包清理（2026-08-18 已完成，省 ~710MB）**：torch(490MB) / wandb(74MB) /
 polars / sentry-sdk / lightning-utilities / onnx / shapely / pyclipper /
@@ -143,9 +146,11 @@ git checkout master && git merge dev && git push
 
 1. 校验版本引用一致性（`tools/version.py`，不一致即中止）
 2. 读取 `config.__version__`，确认 tag `v<版本>` 不存在
-3. 下载 decord fork 发布产物 `decord-<ver>-win64-gpu.zip`（`decord-version` 输入，默认 `0.7.10`）到 `_decord_build\`
-4. `setup_venv.bat --ci` + `build_exe.bat --ci` 构建 EXE（跳过 pause）
-5. 打包 `RaceVideoToLog.<版本>.zip`（dist 布局与现有 release 一致）
+3. 标准安装：`python -m venv` + `pip install -e ".[dev]"`（引擎 git tag 与
+   decord fork wheel 均由 pyproject 直接 URL 锁定；安装步骤含 decord fork
+   `next_roi` 守卫）
+4. `build_exe.bat --ci` 构建 EXE（跳过 pause）
+5. 打包 `RaceVideoToLog.<版本>.7z`（dist 布局与现有 release 一致）
 6. 打 tag `v<版本>` + push，创建 GitHub Release（notes 取自 `release_notes.md` 对应节）
 
 发布后如需小修：继续 `bump` 到下一个 PATCH，不回改已发布的版本号。
