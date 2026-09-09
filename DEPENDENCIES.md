@@ -131,9 +131,10 @@ python tools/version.py
 # 5. 回归：pytest + 基准（tools/bench_decoder.py 至少跑一次）
 python -m pytest tests/ -v
 
-# 6. 构建 EXE（build_exe.bat 内置版本一致性检查，失败即中止；
-#    版本号写入 EXE 文件属性 → 右键属性/详细信息可见）
-build_exe.bat
+# 6. 构建 EXE（版本号写入 EXE 文件属性 → 右键属性/详细信息可见）
+.venv\Scripts\python tools\version.py
+.venv\Scripts\python -m pip install -e ".[dev,build]"
+.venv\Scripts\python -m PyInstaller RaceVideoToLog.spec --noconfirm
 
 # 7. 提交 + 合并到 master（master 是发布分支，不跑 tests/）
 git add -A && git commit -m "release: v2.11.0 ..."
@@ -149,7 +150,8 @@ git checkout master && git merge dev && git push
 3. 标准安装：`python -m venv` + `pip install -e ".[dev]"`（引擎 git tag 与
    decord fork wheel 均由 pyproject 直接 URL 锁定；安装步骤含 decord fork
    `next_roi` 守卫）
-4. `build_exe.bat --ci` 构建 EXE（跳过 pause）
+4. 安装 build extra（pyinstaller）+ `PyInstaller RaceVideoToLog.spec` 构建 EXE；
+   发布前跑 frozen exe 冒烟（合成视频 + CPU 解码/OCR + CSV 头校验）与体积门禁（<400MB）
 5. 打包 `RaceVideoToLog.<版本>.7z`（dist 布局与现有 release 一致）
 6. 打 tag `v<版本>` + push，创建 GitHub Release（notes 取自 `release_notes.md` 对应节）
 

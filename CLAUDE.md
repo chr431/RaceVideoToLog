@@ -23,8 +23,10 @@ CLI 双入口。段级流水线（segment_flow.py）是唯一生产管线。
     本仓库生产代码无 `hybrid_decode` 引用（仅 tools/archive/ 历史脚本）。
   - **安装标准化**：decord 以 PEP 508 直接 URL 进 `pyproject.toml`（按 cp
     标签 4 行，0.8.2 wheel，FFmpeg 9 DLL 随包），`pip install -e ".[dev]"`
-    一条命令装完；`setup_venv.bat` 删除，release.yml / ci.yml /
-    build_exe.bat 全部改标准命令。PySide6-Addons 随标准安装进入 venv
+    一条命令装完；`setup_venv.bat` 与 `build_exe.bat` 均删除，release.yml /
+    ci.yml 全部改标准命令（打包工具经 pyproject 的 `build` extra 声明，
+    打包 = `pip install -e ".[dev,build]"` + `python -m PyInstaller
+    RaceVideoToLog.spec --noconfirm`）。PySide6-Addons 随标准安装进入 venv
     （fluent widgets 依赖 PySide6 元包；exe 不受影响，勿单独 uninstall）。
   - pytest 基线：105 passed + 1 skipped（0.9.x 时代口径，0.11.0 复跑见
     提交记录）。

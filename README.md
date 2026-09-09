@@ -191,10 +191,11 @@ OCR 推理线程数默认 = **全部物理核**：NVDEC 解码时 CPU 全部让�
 （旧 8 线程预算分别为 11.3s / 12.8s）。超过物理核（超线程）不再提升，
 故自动封顶。`RVTOL_OCR_THREADS` 环境变量可覆盖（实验用）。
 
-## 打包
+## 打包（frozen exe）
 
 ```bash
-build_exe.bat
+.venv\Scripts\python -m pip install -e ".[dev,build]"
+.venv\Scripts\python -m PyInstaller RaceVideoToLog.spec --noconfirm
 ```
 
 生成 `dist/RaceVideoToLog/`。GPU 用户仅需 NVIDIA 驱动（NVDEC 解码）；TensorRT OCR 推理需额外安装 CUDA Toolkit + TensorRT 并加入 PATH。

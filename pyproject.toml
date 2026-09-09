@@ -40,6 +40,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+# build：frozen exe 打包（PyInstaller + RaceVideoToLog.spec）。
+# 打包 = pip install -e ".[dev,build]" 后 python -m PyInstaller RaceVideoToLog.spec --noconfirm
+build = ["pyinstaller>=6.22"]
 # cuda-python / tensorrt_cu13_bindings 为主依赖：OcrEngine TRT 引擎
 # import tensorrt (shim -> tensorrt_bindings) 与 decord GPU DLL 注册必需。
 # tensorrt (meta-package) is intentionally omitted: it pulls in

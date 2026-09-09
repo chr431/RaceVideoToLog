@@ -5,7 +5,7 @@
 #   2. 读取 config.__version__（单一事实源），确认 tag v<版本> 不存在
 #   3. 标准安装：python -m venv + pip install -e ".[dev]"（引擎 git tag 与
 #      decord fork wheel 均由 pyproject.toml 直接 URL 锁定，无自定义安装脚本）
-#   4. build_exe.bat --ci 构建 EXE（--ci 跳过 pause）
+#   4. pip install -e ".[dev,build]"（pyinstaller）+ PyInstaller 构建 EXE
 #   5. 打包 RaceVideoToLog.<版本>.7z（7-Zip LZMA2 mx=9 最大压缩，win-latest
 #      runner 预装 7z）—— 布局与现有 release 一致（RaceVideoToLog.exe 在
 #      7z 根 + _internal/，无文件夹包裹；.7z 比 .zip 小 ~26%，Win11 原生解压）
@@ -97,7 +97,11 @@ jobs:
       - name: Build EXE
         shell: pwsh
         run: |
-          cmd /c "build_exe.bat --ci"
+          # 标准构建：PyInstaller 由 pyproject 的 build extra 声明；
+          # 版本一致性已由前面的 Validate version references 步骤校验
+          .venv\Scripts\python -m pip install -q -e ".[dev,build]"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .venv\Scripts\python -m PyInstaller RaceVideoToLog.spec --noconfirm
           if ($LASTEXITCODE -ne 0) {
             Write-Error "EXE 构建失败"
             exit 1

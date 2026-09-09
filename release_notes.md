@@ -6,13 +6,15 @@
 
 ### 🎯 对你意味着什么
 
-- **安装只剩两条标准命令**：`setup_venv.bat` 删除。decord 自建 fork 自 0.8.2
-  起发布标准 wheel（DLL 随包自带），以 pip 直接 URL 依赖写进
-  `pyproject.toml`，与引擎一样随 `pip install -e ".[dev]"` 一条命令安装：
+- **安装与打包只剩标准命令**：`setup_venv.bat` 与 `build_exe.bat` 均删除。
+  decord 自建 fork 自 0.8.2 起发布标准 wheel（DLL 随包自带），以 pip 直接
+  URL 依赖写进 `pyproject.toml`，与引擎一样随 `pip install -e ".[dev]"`
+  一条命令安装；打包工具经 `build` extra 声明：
 
   ```bash
   python -m venv .venv
-  .venv\Scripts\python -m pip install -e ".[dev]"
+  .venv\Scripts\python -m pip install -e ".[dev,build]"
+  .venv\Scripts\python -m PyInstaller RaceVideoToLog.spec --noconfirm
   ```
 
   不再需要下载 decord zip、解压到 `_decord_build\`、跑安装脚本拷 DLL——
@@ -40,7 +42,8 @@
 - **引擎**：改 `pyproject.toml` 里的 tag（当前 `v0.11.0`）→ 同上。
   本地开发引擎仍用 `pip install -e ..\video_ocr_engine --no-deps`
   覆盖为源码直连（现改为手动，不再由安装脚本自动做）。
-- CI：release.yml / ci.yml 全部改标准命令；decord 安装步骤带 `next_roi`
+- CI：release.yml / ci.yml 全部改标准命令（构建 = build extra + PyInstaller
+  直调）；decord 安装步骤带 `next_roi`
   守卫（防 PyPI 官方版静默混入）；解码集成测试不再有"下载失败显式跳过"
   的宽容语义——decord 装不到即红。
 
