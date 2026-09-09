@@ -91,7 +91,7 @@ def main() -> None:
     parser.add_argument("--decode-backend", choices=config.DECODE_BACKEND_KEYS,
         default=config.DEFAULT_DECODE_BACKEND,
         help="解码后端（auto/cpu/nvdec/hybrid；默认 auto 自动选 GPU；"
-             "hybrid=CPU+NVDEC 混合解码，AV1 自动回退纯 GPU）")
+             "hybrid=CPU+NVDEC 混合解码，按关键帧分片路由）")
     parser.add_argument("--ocr-backend", choices=config.OCR_BACKEND_KEYS,
         default=config.DEFAULT_OCR_BACKEND,
         help="OCR 推理后端（auto/cpu/tensorrt，默认 auto 自动选 GPU）")

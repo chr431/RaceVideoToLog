@@ -68,21 +68,21 @@
     <text x="808" y="244" text-anchor="middle">段级 DP 纠错</text>
   </g>
 
-  <!-- 迷你速度曲线 -->
+  <!-- 迷你速度曲线（左边界 930：与第三枚特性标签 888 留 42px 间距） -->
   <g>
-    <rect x="880" y="64" width="272" height="192" rx="16" fill="#ffffff" fill-opacity="0.04"
+    <rect x="930" y="64" width="222" height="192" rx="16" fill="#ffffff" fill-opacity="0.04"
           stroke="#2e3644" stroke-width="1.5"/>
-    <line x1="904" y1="228" x2="1128" y2="228" stroke="#3a4250" stroke-width="2"/>
-    <line x1="904" y1="88"  x2="904"  y2="228" stroke="#3a4250" stroke-width="2"/>
-    <path d="M 904 210 L 952 178 L 1000 142 L 1044 122 L 1076 130 L 1112 92 L 1128 100"
+    <line x1="954" y1="228" x2="1128" y2="228" stroke="#3a4250" stroke-width="2"/>
+    <line x1="954" y1="88"  x2="954"  y2="228" stroke="#3a4250" stroke-width="2"/>
+    <path d="M 954 210 L 991 178 L 1029 142 L 1063 122 L 1088 130 L 1116 92 L 1128 100"
           fill="none" stroke="#ff8a2a" stroke-width="8" stroke-linecap="round"
           stroke-linejoin="round" opacity="0.18"/>
-    <path d="M 904 210 L 952 178 L 1000 142 L 1044 122 L 1076 130 L 1112 92 L 1128 100"
+    <path d="M 954 210 L 991 178 L 1029 142 L 1063 122 L 1088 130 L 1116 92 L 1128 100"
           fill="none" stroke="#ff9a3d" stroke-width="4" stroke-linecap="round"
           stroke-linejoin="round"/>
     <g fill="#ffc247">
-      <circle cx="1000" cy="142" r="5"/>
-      <circle cx="1112" cy="92" r="5"/>
+      <circle cx="1029" cy="142" r="5"/>
+      <circle cx="1116" cy="92" r="5"/>
     </g>
   </g>
 

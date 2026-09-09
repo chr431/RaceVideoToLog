@@ -9,7 +9,6 @@
   pyproject.toml version           (打包元数据)
   RaceVideoToLog.py 首行 docstring (CLI 显示)
   README.md 标题 + CSV 输出示例    (文档)
-  README.md 变更记录区间右端点      (文档)
   DEPENDENCIES.md 标题             (文档)
   release_notes.md 新版本节        (变更日志，追加不改写历史)
 
@@ -99,17 +98,6 @@ def _set_readme(text: str, v: str) -> str:
     return new if n else text
 
 
-def _get_readme_range(text: str) -> str | None:
-    m = re.search(r"（v[\d.]+ → v(\d+\.\d+\.\d+)）", text)
-    return m.group(1) if m else None
-
-
-def _set_readme_range(text: str, v: str) -> str:
-    new, n = re.subn(r"（(v[\d.]+ → v)\d+\.\d+\.\d+）",
-                     rf"（\g<1>{v}）", text, count=1)
-    return new if n else text
-
-
 def _get_deps(text: str) -> str | None:
     m = re.search(r"# 上游依赖跟踪（v(\d+\.\d+\.\d+)）", text)
     return m.group(1) if m else None
@@ -131,7 +119,6 @@ def _refs() -> list[tuple[str, Path, object, object]]:
         ("RaceVideoToLog.py docstring", ROOT / "RaceVideoToLog.py", _get_docstring, _set_docstring),
         ("README.md 标题", ROOT / "README.md", _get_readme_title, _set_readme),
         ("README.md CSV 示例", ROOT / "README.md", _get_readme_csv, None),
-        ("README.md 变更记录区间", ROOT / "README.md", _get_readme_range, _set_readme_range),
         ("DEPENDENCIES.md 标题", ROOT / "DEPENDENCIES.md", _get_deps, _set_deps),
     ]
 
