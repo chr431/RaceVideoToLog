@@ -47,7 +47,8 @@ build = ["pyinstaller>=6.22"]
 # import tensorrt (shim -> tensorrt_bindings) 与 decord GPU DLL 注册必需。
 # tensorrt (meta-package) is intentionally omitted: it pulls in
 # tensorrt_libs (~2.2 GB of DLLs).  Runtime DLLs are loaded from the
-# system (CUDA Toolkit + TensorRT on PATH).
+# system: TensorRT 11.x on PATH; the CUDA runtime is provided by the
+# NVIDIA driver (nvcudart_hybrid64.dll) — no CUDA Toolkit install needed.
 
 [project.scripts]
 racevideotolog = "RaceVideoToLog:main"

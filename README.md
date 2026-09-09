@@ -10,7 +10,8 @@
 
 - Windows x64，Python 3.11–3.14
 - NVIDIA 显卡 + 最新驱动（可选；无显卡时自动回退 CPU 软件解码）
-- 可选：CUDA Toolkit 13.x + TensorRT 11.x（GPU OCR 推理；缺失时自动回退 CPU OCR）
+- 可选：TensorRT 11.x（GPU OCR 推理，`bin` 目录加入 PATH；缺失时自动回退
+  CPU OCR）。CUDA 运行时由最新驱动自带，**无需安装 CUDA Toolkit**
 
 ## 安装
 

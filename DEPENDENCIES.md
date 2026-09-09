@@ -20,7 +20,7 @@
 
 | 组件 | 来源 | 备注 |
 | --- | --- | --- |
-| CUDA Toolkit 13.x | NVIDIA 官网 | cudart/cublas 等 DLL，需在 PATH；与 tensorrt_cu13_bindings / decord（全栈统一 CUDA 13）一致 |
+| 驱动自带 CUDA 运行时 | NVIDIA 驱动 | TRT 推理 / NVDEC 解码 / GPU 监控的 CUDA 调用由驱动解析（DriverStore 的 `nvcuda64.dll` + `nvcudart_hybrid64.dll`），**无需安装 CUDA Toolkit**（实测：屏蔽全部 Toolkit 目录后 TRT 推理与 NVDEC 解码正常，进程加载清单无任何 Toolkit DLL）；需较新驱动 |
 | TensorRT | NVIDIA 官网 | nvinfer DLL，需在 PATH；首次运行自动构建引擎缓存到 `<程序目录>/ocr_engines/`（旧 `%LOCALAPPDATA%/RaceVideoToLog/ocr_engines/` 只读回退） |
 
 `tensorrt` 元包与 `tensorrt_cu13_libs`（~2.2GB DLL）被有意排除 —— 运行时 DLL 从系统 PATH 加载。
