@@ -6,6 +6,9 @@
 
 ### 🎯 对你意味着什么
 
+- **新增应用图标**：exe 文件图标、任务栏与窗口标题栏图标（此前 exe 使用
+  PyInstaller 默认图标）。图标为速度表 + 播放键造型，README 首页也加了
+  横幅与生产流水线图。
 - **安装与打包只剩标准命令**：`setup_venv.bat` 与 `build_exe.bat` 均删除。
   decord 自建 fork 自 0.8.2 起发布标准 wheel（DLL 随包自带），以 pip 直接
   URL 依赖写进 `pyproject.toml`，与引擎一样随 `pip install -e ".[dev]"`
