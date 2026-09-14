@@ -164,3 +164,19 @@ git checkout master && git merge dev && git push
 6. 打 tag `v<版本>` + push，创建 GitHub Release（notes 取自 `release_notes.md` 对应节）
 
 发布后如需小修：继续 `bump` 到下一个 PATCH，不回改已发布的版本号。
+
+
+## FFmpeg 运行库体积账（frozen exe，2026-09-14 实测挖掘）
+
+decord（157MB，含 FFmpeg9 DLL）经三路挖掘：
+1. **DLL 级裁剪：无可删**——decord.dll 静态导入闭包含全部 6 个 FFmpeg
+   DLL（PE 导入表实证）；avfilter（35.8MB）是承重墙（BT.601 强制
+   色彩转换 setparams + ROI-first crop，动它=重写已验证的色彩正确性）。
+2. **LGPL 变体替换：仅 −14MB，不值**——同版本 lgpl-shared avcodec
+   98.8→90.4MB（假设的 GPL 静态链入大头被证伪，90MB 全是原生解码器
+   集）；且 rolling "latest" 构建与 fork 验证过的构建不逐位同源。
+3. **真杠杆 = 极简 FFmpeg 源码重建**（--disable-everything + h264/
+   hevc/av1 解码 + mp4/mkv demux + setparams/crop/scale/transpose/
+   format/buffers 滤镜）：估算 157→~40MB（安装 −120MB，7z −20~25MB）；
+   需 MSYS2/MinGW 工具链（本机无），属独立立项（含 fork 全量重验证）。
+- **分发口径**：380MB 安装 → 7z(mx9) 90.6MB（DLL 压缩率 ~4×）。
