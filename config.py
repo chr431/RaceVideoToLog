@@ -25,7 +25,7 @@ import os as _os
 _os.environ.setdefault("DECORD_SKIP_LOOP_FILTER", "none")
 
 # 管线引擎域 + 共享常量（单一事实源在引擎仓库 engine_config.py）
-from engine_config import *  # noqa: F401,F403 — 聚合导出兼容
+from video_ocr_engine.config.constants import *  # noqa: F401,F403 — 聚合导出兼容
 
 # ── OCR 输入 pad 宽度下限：224（与引擎 0.11.0 默认一致，防御性固定）──
 # 引擎 0.9.0 曾按"逐帧全等准确率"把默认 224→160（P0-5）；本应用按生产漏斗
@@ -34,9 +34,18 @@ from engine_config import *  # noqa: F401,F403 — 聚合导出兼容
 # test6 17→32）。引擎 0.11.0 已采纳本结论把默认收回 224；此处显式固定保留
 # 作防线 + 应用命名空间单一事实源（GUI 默认值，FILL_WIDTH_RANGE 内用户仍
 # 可调），并同步覆写 engine_config 模块属性（extractor fill_width=None 分支）。
-import engine_config as _engine_config  # noqa: E402
-_engine_config.DEFAULT_FILL_WIDTH = 224
+# 引擎 0.13 起配置在构造期一次冻结（MIGRATION §2.1），模块属性覆写已
+# 无效——本应用显式传 fill_width（segment_flow/CLI 均有传参），此处只
+# 保留应用默认值；0.14 起 engine_config 根 shim 已删除（MIGRATION §1）。
 DEFAULT_FILL_WIDTH = 224
+# S2 起引擎删除的四个 UI 常量回归应用所有（值取 v0.11 原值）
+DECODE_BACKEND_KEYS: list[str] = ["auto", "cpu", "nvdec", "hybrid"]
+DECODE_BACKEND_LABELS: dict[str, str] = {"auto": "自动", "cpu": "CPU",
+                                         "nvdec": "NVDEC",
+                                         "hybrid": "混合(CPU+NVDEC)"}
+OCR_BACKEND_KEYS: list[str] = ["auto", "cpu", "tensorrt"]
+OCR_BACKEND_LABELS: dict[str, str] = {"auto": "自动", "cpu": "CPU",
+                                      "tensorrt": "TensorRT"}
 
 # ═══════════════════ 应用域常量（引擎 v0.3 重构后回归应用侧）═══════════════════
 # 引擎重构清空了领域后处理/速度语义常量（引擎是零领域语义通用库），

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from ocr_native import OcrEngine
+    from video_ocr_engine.ocr.native import OcrEngine
 
 # ── 公共符号 re-export（只保留实际有消费者的 API）──
 from csv_io import (  # noqa: F401

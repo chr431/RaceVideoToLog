@@ -28,11 +28,12 @@ import config
 from constants import Flag
 from ocr_engine import extract_speed_value
 from video_ocr_engine import FieldExtractor  # 识别链（解码/分段/OCR 文本）由引擎提供
-from segmentation import (  # noqa: F401 — 兼容 tools/tests 的历史导入路径
+from video_ocr_engine.domain.segmentation import (  # noqa: F401
     _cluster_win3, _gray, _gray_batch, _gray_seg,
     _gray_seg_batch, _gray_seg_yuv, _gray_seg_yuv_batch, _otsu,
 )
-from video_utils import _nv12_luma_full, _preprocess_standard, nv12_to_rgb
+from video_ocr_engine.domain.video_utils import _nv12_luma_full, nv12_to_rgb
+from video_ocr_engine.domain.segmentation import preprocess_standard as _preprocess_standard
 from seg_correction import (
     confidence_scores, correct_segments, dense_correct, detect_segments,
     dp_run, fill_values, local_bandwidth, spike_second_pass,
@@ -354,7 +355,7 @@ class SegmentPipeline(FieldExtractor):
         参考路径——为保持 `(seg_vals, rep_frames)` 返回结构不变，这里对
         识别文本做速度解析（extract_speed_value）。生产走 _run_pipelined。
         """
-        from ocr_native import OcrEngine
+        from video_ocr_engine.ocr.native import OcrEngine
         eng = OcrEngine(self._ocr_model, self._ocr_engine_type(),
                         fill_width=self._fill_width,
                         num_threads=self._ocr_num_threads(),
@@ -405,8 +406,10 @@ class SegmentPipeline(FieldExtractor):
         self._progress = _ProgressGate(_orig_progress)
         try:
             self._progress("解码+分段+段值OCR...", 2.0)
+            # 引擎 0.13 S9-6：extract() 返回 RunOutcome（裸 5 元组退场，
+            # as_tuple 为迁移期兼容形状）
             frames, segs, ocr_texts, ocr_confs, rep_frames = \
-                self._run_pipelined()
+                self._run_pipelined().as_tuple()
             # 应用层解析：引擎输出原始文本 → 速度数值（extract_speed_value
             # 的文本直转版；识别层不感知速度语义）
             from ocr_text import _extract_speed_from_text
