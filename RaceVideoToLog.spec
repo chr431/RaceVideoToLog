@@ -32,14 +32,23 @@ hiddenimports = [
     'export_controller', 'review_chart',
     'widget_utils', 'theme_manager', 'csv_io', 'ocr_text', 'signals',
     'monitor', 'logging_setup',
-    # 引擎模块（video_ocr_engine pip 包 + 顶层模块）：已随 venv 安装，
-    # 显式列出以免 PyInstaller 漏收动态 import 的部分
-    'engine_config', 'gpu_setup', 'hybrid_decode', 'ocr_native', 'ocr_trt',
-    'segmentation', 'video_utils', 'tensorrt', 'video_ocr_engine',
+    # 引擎模块：0.14 起根 shim（engine_config/gpu_setup/ocr_native/
+    # ocr_trt/segmentation/video_utils）已删除，包内显式列出动态 import 面
+    'tensorrt', 'video_ocr_engine',
+    'video_ocr_engine.ocr.native', 'video_ocr_engine.ocr.trt',
+    'video_ocr_engine.ocr.port',
+    'video_ocr_engine.domain.segmentation',
+    'video_ocr_engine.domain.video_utils', 'video_ocr_engine.domain.metrics',
+    'video_ocr_engine.pipeline.ocr_stage',
+    'video_ocr_engine.pipeline.host_backend',
+    'video_ocr_engine.pipeline.gpu_backend',
+    'video_ocr_engine.pipeline.engine',
+    'video_ocr_engine._gpu_kernels',
 ]
 
-# onnxruntime（CPU provider；TensorRT 由 tensorrt_bindings 直接调用）
-tmp_ret = collect_all('onnxruntime')
+# openvino（0.14 起 CPU 推理唯一引擎；构建后按冻结瘦身配方剪枝——
+# 见引擎仓 docs/log/2026-09-14-OpenVINO冻结瘦身.md）
+tmp_ret = collect_all('openvino')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 # qfluentwidgets (Fluent Design 组件库)
@@ -194,8 +203,8 @@ datas = [(s, d) for s, d in datas
 # 源码树 / site-packages / frozen 三种布局），不再拼 third_party 路径。
 # 注意：spec 由 PyInstaller 在构建环境执行，此时尚未 frozen，拿到的是
 # 已安装引擎的资产目录。
-import ocr_native as _ocr_native
-_OCR_MODELS_ROOT = str(_ocr_native._models_dir())
+from video_ocr_engine.config import constants as _voe_cfg
+_OCR_MODELS_ROOT = str(_voe_cfg.models_dir())
 for _root, _dirs, _files in os.walk(_OCR_MODELS_ROOT):
     for _f in _files:
         if _f.endswith('.engine') or 'tiny' in _f:
@@ -227,7 +236,8 @@ binaries = [
 _PROJECT_ROOT = os.path.abspath('.')
 # 引擎根目录从已安装的 ocr_native 模块位置派生（pip 安装 → site-packages，
 # editable → 引擎源码树），供 pathex 搜索；引擎 pip 化后不再有 third_party 固定路径
-_ENGINE_ROOT = os.path.dirname(os.path.abspath(_ocr_native.__file__))
+_ENGINE_ROOT = os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(_voe_cfg.__file__))))  # site-packages 根
 # 窗口/任务栏图标 PNG（EXE 文件图标另经 EXE(icon=assets/app.ico) 嵌入）
 datas.append((os.path.join(_PROJECT_ROOT, 'assets', 'app_icon_256.png'), 'assets'))
 a = Analysis(
@@ -242,11 +252,9 @@ a = Analysis(
     # 排除 onnxruntime 中的非推理模块 + scipy 测试和未用子模块
     # 这些模块的 hidden imports 会产生大量 ERROR 日志（不影响功能）
     excludes=[
-        'onnxruntime.transformers', 'onnxruntime.transformers.*',
-        'onnxruntime.tools', 'onnxruntime.tools.*',
-        'onnxruntime.quantization', 'onnxruntime.quantization.*',
-        'onnxruntime.datasets', 'onnxruntime.datasets.*',
-        'onnxruntime.backend',
+        # 0.14：onnxruntime 已移除（CPU 推理 = OpenVINO）；openvino 的
+        # tools/telemetry 冗余由构建后剪枝处理（冻结瘦身配方）
+        'openvino.tools', 'openvino.tools.*',
         # scipy: 已用纯 numpy 替代 savgol_filter，完全排除
         'scipy', 'tkinter', '_tkinter',
         # PaddlePaddle (rapidocr 时代遗留；~1.1GB)
