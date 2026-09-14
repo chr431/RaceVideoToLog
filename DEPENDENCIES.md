@@ -175,8 +175,22 @@ decord（157MB，含 FFmpeg9 DLL）经三路挖掘：
 2. **LGPL 变体替换：仅 −14MB，不值**——同版本 lgpl-shared avcodec
    98.8→90.4MB（假设的 GPL 静态链入大头被证伪，90MB 全是原生解码器
    集）；且 rolling "latest" 构建与 fork 验证过的构建不逐位同源。
-3. **真杠杆 = 极简 FFmpeg 源码重建**（--disable-everything + h264/
-   hevc/av1 解码 + mp4/mkv demux + setparams/crop/scale/transpose/
-   format/buffers 滤镜）：估算 157→~40MB（安装 −120MB，7z −20~25MB）；
-   需 MSYS2/MinGW 工具链（本机无），属独立立项（含 fork 全量重验证）。
-- **分发口径**：380MB 安装 → 7z(mx9) 90.6MB（DLL 压缩率 ~4×）。
+3. **极简 FFmpeg 源码重建：✅ 已落地（2026-09-14/15）**——decord 部分
+   157→13MB（−92%），总体积 380→238MB、7z 90.6→58.1MB。
+
+### 极简 FFmpeg 构建配方（MSYS2 ucrt64，ffmpeg-9.0 官方源码）
+
+```
+pacman -S mingw-w64-ucrt-x86_64-nasm mingw-w64-ucrt-x86_64-dav1d
+PATH=/ucrt64/bin:/usr/bin ./configure   --enable-shared --disable-static --disable-programs --disable-doc   --disable-debug --disable-network --disable-autodetect --disable-avdevice   --disable-everything --enable-swscale --enable-swresample --enable-libdav1d   --enable-decoder=h264,hevc,vp9,libdav1d   --enable-parser=h264,hevc,av1,vp9   --enable-demuxer=mov,matroska,avi --enable-protocol=file   --enable-filter=setparams,crop,scale,transpose,format,null   --extra-ldflags="-static-libgcc"
+make -j32   # 产物在 lib*/ 下
+```
+
+随包分发：`avcodec-63 / avformat-63 / avfilter-12 / avutil-61 /
+swscale-10 / swresample-7` 六 DLL + 外部依赖 `libdav1d-7.dll`、
+`libwinpthread-1.dll`（ucrt64/bin）。**AV1 必须用 libdav1d**：
+native av1 解码器在极简构建下 send_packet -40 且病态慢；不含 native
+av1 时 decord 按 codec id 唯一命中 libdav1d。GPU 路径不经 FFmpeg
+（fork 自带 nvcodec 原生 cuvid）→ 无需任何 hwaccel。License=LGPL。
+E2E 门禁：h264 真值 7223/7223=1.0000、hevc/av1 全片 hybrid 通过。
+- **分发口径**：238MB 安装 → 7z(mx9) 58.1MB。
