@@ -194,4 +194,5 @@ av1 时 decord 按 codec id 唯一命中 libdav1d。GPU 路径不经 FFmpeg
 （fork 自带 nvcodec 原生 cuvid）→ 无需任何 hwaccel。License=LGPL。
 E2E 门禁：h264 真值 7223/7223=1.0000、hevc/av1 全片 hybrid 通过。
 **性能对照**（2026-09-15，双 decord 副本交错 min-of-3）：CPU 软解 h264 99.6% / hevc 98.7% / av1 98.4%（av1 叠加 dav1d vs native 换代）；NVDEC 三码 99.9~100.1% 零差异。CPU 臂非混跑主导 ⇒ e2e 无实质回退；构建需含 decord 所需 bsf：null/h264_mp4toannexb/hevc_mp4toannexb/mpeg4_unpack_bframes/vp9_superframe_split（缺则 NVDEC 路径加载失败）。
+**hybrid 混跑对照**（2026-09-15，两轮 6+6 交错）：h264 97.4%/107.7%、hevc 95.6%/101.4%、av1 99.0%/102.2%——两轮全面交叉=平价（调度按实测 rc/rg 供水，臂速率 ≤1.5% 差异被自适应吸收；首轮 hevc 95.6% 系会话内漂移假象，min 臂逐轮递减 2062→1914 被第二轮反转证伪）。
 - **分发口径**：238MB 安装 → 7z(mx9) 58.1MB。
