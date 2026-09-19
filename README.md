@@ -1,4 +1,4 @@
-# RaceVideoToLog v2.17.3
+# RaceVideoToLog v2.17.4
 
 ![RaceVideoToLog](docs/images/banner.png)
 
@@ -91,7 +91,7 @@ python RaceVideoToLog.py [video] [options]
 ### 输出格式
 
 ```csv
-# RaceVideoToLog v2.17.3
+# RaceVideoToLog v2.17.4
 # video=test5.mp4, fps=59.767
 # roi=843,993,948,1025, format=km/h, frame_start=362, frame_end=7585
 # max_speed=400.0, max_accel=50.0, force_aspect=0.0, fill_width=224
