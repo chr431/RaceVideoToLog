@@ -47,7 +47,7 @@ def engine():
     "case", _cases(),
     ids=lambda c: f"{c['video']}_f{c['rep_frame']}_raw{c['expected_raw']}")
 def test_ocr_frame_matches_baseline(engine, case):
-    from video_ocr_engine.domain.video_utils import _preprocess_standard
+    from video_ocr_engine.domain.segmentation import preprocess_standard as _preprocess_standard
     from ocr_text import extract_speed_value
     crop = np.load(FRAMES / case["file"])
     proc = _preprocess_standard(crop, force_aspect=0.0)

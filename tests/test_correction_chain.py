@@ -7,7 +7,12 @@ from __future__ import annotations
 import numpy as np
 
 from segment_flow import SegmentPipeline
-from video_ocr_engine.domain.video_utils import _preprocess_standard
+# 2026-09-19：符号名修正——引擎侧该函数名为 preprocess_standard，
+# 且在 domain.segmentation（不在 domain.video_utils）。此处原写
+# `_preprocess_standard`，是引擎 C-32 改名后残留的陈旧引用（旧
+# video_utils shim 掩盖了 ImportError，本仓 CI 因 PySide6 缺席未暴露）。
+from video_ocr_engine.domain.segmentation import (
+    preprocess_standard as _preprocess_standard)
 
 
 def _pipe(**kw):

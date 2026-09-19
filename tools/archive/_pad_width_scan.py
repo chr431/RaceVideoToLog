@@ -25,7 +25,7 @@ PROJECT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT))
 
 from segment_flow import SegmentPipeline  # noqa: E402
-from video_ocr_engine.domain.video_utils import _preprocess_standard  # noqa: E402
+from video_ocr_engine.domain.segmentation import preprocess_standard as _preprocess_standard  # noqa: E402
 from video_ocr_engine.ocr.native import OcrEngine  # noqa: E402
 from ocr_engine import extract_speed_value  # noqa: E402
 from tools.detect_eval import load_meta  # noqa: E402

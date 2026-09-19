@@ -26,7 +26,7 @@ from seg_correction import (  # noqa: E402
     confidence_scores, dense_correct, spike_second_pass,
 )
 from tools.detect_eval import load_meta  # noqa: E402
-from video_ocr_engine.domain.video_utils import _preprocess_standard  # noqa: E402
+from video_ocr_engine.domain.segmentation import preprocess_standard as _preprocess_standard  # noqa: E402
 
 VIDEOS = ["test", "test2", "test3", "test5", "test6"]
 VIDEO_DIR = "D:/Videos/racelog_test"

@@ -17,7 +17,7 @@ import numpy as np  # noqa: E402
 import config  # noqa: E402
 from video_ocr_engine.ocr.native import OcrEngine  # noqa: E402
 from tools.detect_eval import load_meta  # noqa: E402
-from video_ocr_engine.domain.video_utils import _preprocess_standard  # noqa: E402
+from video_ocr_engine.domain.segmentation import preprocess_standard as _preprocess_standard  # noqa: E402
 
 
 def make_batch(v="test5", n=100):

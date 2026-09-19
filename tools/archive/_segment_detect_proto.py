@@ -175,7 +175,7 @@ def main() -> None:
 
     from video_ocr_engine.ocr.native import OcrEngine
     from ocr_engine import extract_speed_value
-    from video_ocr_engine.domain.video_utils import _preprocess_standard
+    from video_ocr_engine.domain.segmentation import preprocess_standard as _preprocess_standard
 
     eng = OcrEngine(args.model, "onnxruntime")
     for v in args.videos:
