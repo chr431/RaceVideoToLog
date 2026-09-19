@@ -1,7 +1,7 @@
 """RaceVideoToLog 应用配置 — 聚合引擎配置 + GUI 专属常量。
 
 v2.16 起：引擎已拆分为独立仓库（chr431/video_ocr_engine），其配置单一事实源
-在引擎的 engine_config.py，本文件 `from engine_config import *` 聚合再导出
+在引擎的 engine_config.py，本文件 `from video_ocr_engine.config.constants import *` 聚合再导出
 （兼容所有 `import config; config.SEG_*` 的既有引用），并保留 GUI/应用专属
 常量（颜色/窗口/图表/监控/日志）。
 

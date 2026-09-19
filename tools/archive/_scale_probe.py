@@ -38,8 +38,8 @@ def decode_scale(v: str, dcd: int):
 def ocr_scale(threads: int, batch=100):
     """ONNX 纯推理吞吐：用 test5 前 batch 段的代表帧反复推理。"""
     import numpy as np
-    from ocr_native import OcrEngine
-    from video_utils import _preprocess_standard
+    from video_ocr_engine.ocr.native import OcrEngine
+    from video_ocr_engine.domain.video_utils import _preprocess_standard
     from decord import VideoReader, cpu
     import config
     roi, f_start, f_end, fps, ms, ma, mw, truth = load_meta("test5")

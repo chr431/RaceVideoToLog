@@ -27,16 +27,16 @@ from pathlib import Path
 
 import numpy as np
 
-import engine_config as config  # 识别链只用引擎域常量
+import video_ocr_engine.config.constants as config  # 识别链只用引擎域常量
 from constants import Flag
-from segmentation import (
+from video_ocr_engine.domain.segmentation import (
     _apply_gamma, _cluster_win3, _gray, _gray_batch, _gray_seg,
     _gray_seg_batch, _gray_seg_yuv, _gray_seg_yuv_batch, _otsu, _seg_gamma,
 )
 from hybrid_decode import (
     HYBRID_BACKEND_ALIASES, _decode_range_worker, _drain_queue, _hybrid_ranges,
 )
-from ocr_native import OcrEngine, auto_ocr_thread_count
+from video_ocr_engine.ocr.native import OcrEngine, auto_ocr_thread_count
 from ocr_engine import extract_speed_value  # 待引擎 _run_pipelined 移除速度解析后删
 
 logger = logging.getLogger(__name__)

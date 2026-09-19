@@ -13,7 +13,7 @@ import os
 
 import config
 from segment_flow import SegmentPipeline
-from ocr_native import auto_ocr_thread_count, cpu_physical_cores
+from video_ocr_engine.ocr.native import auto_ocr_thread_count, cpu_physical_cores
 
 
 def _pipe(**kw):

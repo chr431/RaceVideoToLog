@@ -18,10 +18,10 @@ import sys  # noqa: E402
 sys.path.insert(0, str(PROJECT))  # noqa: E402
 import config  # noqa: E402
 from ocr_engine import extract_speed_value  # noqa: E402
-from ocr_native import OcrEngine, auto_ocr_thread_count  # noqa: E402
-from segmentation import _cluster_win3, _otsu  # noqa: E402
+from video_ocr_engine.ocr.native import OcrEngine, auto_ocr_thread_count  # noqa: E402
+from video_ocr_engine.domain.segmentation import _cluster_win3, _otsu  # noqa: E402
 from tools.detect_eval import load_meta  # noqa: E402
-from video_utils import _preprocess_standard  # noqa: E402
+from video_ocr_engine.domain.video_utils import _preprocess_standard  # noqa: E402
 
 VIDEO_DIR = "D:/Videos/racelog_test"
 B = config.OCR_BATCH_SIZE

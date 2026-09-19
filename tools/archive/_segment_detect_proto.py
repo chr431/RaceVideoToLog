@@ -173,9 +173,9 @@ def main() -> None:
     ap.add_argument("--mult", type=float, default=1.5, help="残差/带宽 阈值倍数")
     args = ap.parse_args()
 
-    from ocr_native import OcrEngine
+    from video_ocr_engine.ocr.native import OcrEngine
     from ocr_engine import extract_speed_value
-    from video_utils import _preprocess_standard
+    from video_ocr_engine.domain.video_utils import _preprocess_standard
 
     eng = OcrEngine(args.model, "onnxruntime")
     for v in args.videos:

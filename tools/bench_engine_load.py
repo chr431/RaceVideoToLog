@@ -18,7 +18,7 @@ sys.path.insert(0, str(PROJECT))
 
 
 def measure(kind: str, runs: int) -> list[float]:
-    from ocr_native import OcrEngine
+    from video_ocr_engine.ocr.native import OcrEngine
     out = []
     for i in range(runs):
         t0 = time.perf_counter()

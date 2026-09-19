@@ -20,13 +20,13 @@ sys.path.insert(0, str(PROJECT))
 
 import config  # noqa: E402
 from ocr_engine import extract_speed_value  # noqa: E402
-from ocr_native import OcrEngine  # noqa: E402
-from segmentation import _cluster_win3, _otsu  # noqa: E402
+from video_ocr_engine.ocr.native import OcrEngine  # noqa: E402
+from video_ocr_engine.domain.segmentation import _cluster_win3, _otsu  # noqa: E402
 from seg_correction import (  # noqa: E402
     confidence_scores, dense_correct, spike_second_pass,
 )
 from tools.detect_eval import load_meta  # noqa: E402
-from video_utils import _preprocess_standard  # noqa: E402
+from video_ocr_engine.domain.video_utils import _preprocess_standard  # noqa: E402
 
 VIDEOS = ["test", "test2", "test3", "test5", "test6"]
 VIDEO_DIR = "D:/Videos/racelog_test"
@@ -198,7 +198,7 @@ def main():
                          "island/calib）")
     args = ap.parse_args()
 
-    from ocr_native import auto_ocr_thread_count
+    from video_ocr_engine.ocr.native import auto_ocr_thread_count
     eng = OcrEngine(config.DEFAULT_OCR_MODEL, "tensorrt",
                     fill_width=config.DEFAULT_FILL_WIDTH,
                     num_threads=auto_ocr_thread_count())

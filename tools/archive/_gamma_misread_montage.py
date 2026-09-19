@@ -32,9 +32,9 @@ from PIL import Image, ImageDraw, ImageFont
 PROJECT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT))
 
-import ocr_native  # noqa: E402
+import video_ocr_engine.ocr.native  # noqa: E402
 from segment_flow import SegmentPipeline  # noqa: E402
-from video_utils import _preprocess_standard  # noqa: E402
+from video_ocr_engine.domain.video_utils import _preprocess_standard  # noqa: E402
 from ocr_engine import extract_speed_value  # noqa: E402
 from tools.detect_eval import load_meta  # noqa: E402
 
@@ -55,7 +55,7 @@ def _engine_factory(*a, **k):
     return _ENGINE_CACHE[key]
 
 
-ocr_native.OcrEngine = _engine_factory  # pipeline 内 `from ocr_native import` 命中
+ocr_native.OcrEngine = _engine_factory  # pipeline 内 `from video_ocr_engine.ocr.native import` 命中
 
 
 def run_on_reps(pipe: SegmentPipeline, gamma: float) -> list:

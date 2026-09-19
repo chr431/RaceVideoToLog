@@ -114,7 +114,7 @@ def test_yuv420_luma_matches_gray():
     """fork ≥0.7.10：output_format='yuv420' 原始 Y + range 展开 = gray 输出。"""
     _require_fork_api()
     from decord import VideoReader, cpu
-    from video_utils import _nv12_luma_full
+    from video_ocr_engine.domain.video_utils import _nv12_luma_full
     vr = VideoReader(str(VIDEO), ctx=cpu(0), output_format="yuv420")
     try:
         cr = vr.get_color_range()

@@ -25,7 +25,7 @@ if str(PROJECT) not in sys.path:
 
 # 模型资产随引擎包（video-ocr-engine pip 依赖）分发；位置由引擎自己解析，
 # 覆盖 源码树 / site-packages / frozen 三种布局。
-import ocr_native as _ocr_native
+import video_ocr_engine.ocr.native as _ocr_native
 MODELS = _ocr_native._models_dir()
 
 

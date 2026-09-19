@@ -58,8 +58,8 @@ def run_solo(video, meta, frames=0):
 
 def run_hybrid(video, meta, k_onnx, frames=0):
     import video_ocr_engine.extractor  # noqa: F401 防循环导入
-    from ocr_native import OcrEngine, auto_ocr_thread_count
-    import engine_config as eco
+    from video_ocr_engine.ocr.native import OcrEngine, auto_ocr_thread_count
+    import video_ocr_engine.config.constants as eco
     ex = make_extractor(video, meta, frames=frames)
     trt = OcrEngine(eco.DEFAULT_OCR_MODEL, "tensorrt",
                     fill_width=224,

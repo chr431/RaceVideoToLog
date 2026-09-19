@@ -40,7 +40,7 @@ if _ENG.exists():
 
 os.environ.setdefault("ENGINE_PROFILE", "1")
 
-import engine_config as eco  # noqa: E402
+import video_ocr_engine.config.constants as eco  # noqa: E402
 from video_ocr_engine.extractor import FieldExtractor  # noqa: E402
 
 

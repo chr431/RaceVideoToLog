@@ -72,8 +72,8 @@ def apply_env_limits():
 
 def make_engine(kind, threads):
     import video_ocr_engine.extractor  # noqa: F401  先完成包初始化防循环导入
-    import engine_config as eco
-    from ocr_native import OcrEngine
+    import video_ocr_engine.config.constants as eco
+    from video_ocr_engine.ocr.native import OcrEngine
     return OcrEngine(eco.DEFAULT_OCR_MODEL, kind, fill_width=224,
                      num_threads=threads,
                      progress_cb=lambda m, p: None)

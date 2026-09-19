@@ -7,7 +7,7 @@ from __future__ import annotations
 import numpy as np
 
 from segment_flow import SegmentPipeline
-from video_utils import _preprocess_standard
+from video_ocr_engine.domain.video_utils import _preprocess_standard
 
 
 def _pipe(**kw):
@@ -185,7 +185,7 @@ def test_normalize_ocr_text():
 
 
 def test_extract_speed_value():
-    from ocr_native import RecOut
+    from video_ocr_engine.ocr.native import RecOut
     from ocr_text import extract_speed_value
     v, text, conf = extract_speed_value(RecOut("12O", 0.9))
     assert v == 120 and text == "120" and conf == 0.9
@@ -227,7 +227,7 @@ def test_preprocess_standard_gamma_gray():
 # ═══════════════ 灰度一致性（两模块共用） ═══════════════
 
 def test_gray_consistency_between_modules():
-    from video_utils import _gray as vu_gray
+    from video_ocr_engine.domain.video_utils import _gray as vu_gray
     from segment_flow import _gray as sf_gray
     rng = np.random.default_rng(0)
     crop = rng.integers(0, 256, (12, 20, 3), dtype=np.uint8)

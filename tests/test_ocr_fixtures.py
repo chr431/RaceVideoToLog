@@ -39,7 +39,7 @@ def _cases():
 def engine():
     # 单线程推理：确定性（CI 与本机逐位一致）
     os.environ.setdefault("OCR_THREADS", "1")
-    from ocr_native import OcrEngine
+    from video_ocr_engine.ocr.native import OcrEngine
     return OcrEngine("v6_small", "onnxruntime", fill_width=224)
 
 
@@ -47,7 +47,7 @@ def engine():
     "case", _cases(),
     ids=lambda c: f"{c['video']}_f{c['rep_frame']}_raw{c['expected_raw']}")
 def test_ocr_frame_matches_baseline(engine, case):
-    from video_utils import _preprocess_standard
+    from video_ocr_engine.domain.video_utils import _preprocess_standard
     from ocr_text import extract_speed_value
     crop = np.load(FRAMES / case["file"])
     proc = _preprocess_standard(crop, force_aspect=0.0)

@@ -57,7 +57,7 @@ def export_error_frames(v: str, pipe: SegmentPipeline, truth: dict) -> list:
         # YUV420 生产模式：crops 是 packed NV12（2D）→ 存 Y 平面
         # （H,W,1，即 OCR 实际输入）；旧 gray/rgb 输出直接存
         if crop.ndim == 2:
-            from video_utils import _nv12_luma_full, nv12_to_rgb
+            from video_ocr_engine.domain.video_utils import _nv12_luma_full, nv12_to_rgb
             crop_y = _nv12_luma_full(crop, pipe._color_range)[..., None]
             crop_rgb = nv12_to_rgb(crop)
         else:

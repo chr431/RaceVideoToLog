@@ -17,7 +17,7 @@ import numpy as np  # noqa: E402
 import config  # noqa: E402
 from segment_flow import SegmentPipeline  # noqa: E402
 from tools.detect_eval import load_meta  # noqa: E402
-from video_utils import nv12_to_rgb  # noqa: E402
+from video_ocr_engine.domain.video_utils import nv12_to_rgb  # noqa: E402
 from tools.archive._tess_probe import parse_speed, TESS  # noqa: E402
 
 VIDEOS = [("test", 1536), ("test2", 3000), ("test3", 3000),

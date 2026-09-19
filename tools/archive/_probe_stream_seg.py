@@ -30,7 +30,7 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT))
 
 from decord import VideoReader, cpu  # noqa: E402
-from segmentation import _cluster_win3, _otsu  # noqa: E402
+from video_ocr_engine.domain.segmentation import _cluster_win3, _otsu  # noqa: E402
 
 FFPROBE_FALLBACKS = [
     ROOT / "_decord_build" / "ffprobe.exe",

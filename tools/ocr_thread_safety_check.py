@@ -10,7 +10,7 @@ import numpy as np
 
 sys.path.insert(0, ".")
 
-from ocr_native import OcrEngine  # noqa: E402
+from video_ocr_engine.ocr.native import OcrEngine  # noqa: E402
 
 
 def run_loop(engine, seed, n_iter, results, idx):

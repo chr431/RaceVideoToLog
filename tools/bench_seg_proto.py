@@ -56,7 +56,7 @@ def main() -> None:
         if c.shape[0] != y2 - y1 + 1 or c.shape[1] != x2 - x1 + 1:
             c = c[y1:y2 + 1, x1:x2 + 1]
         if c.shape[-1] != 1:
-            from video_utils import _gray
+            from video_ocr_engine.domain.video_utils import _gray
             c = _gray(c)
         else:
             c = c[..., 0]

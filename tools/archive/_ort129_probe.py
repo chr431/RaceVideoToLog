@@ -26,9 +26,9 @@ PROJECT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT))
 import numpy as np  # noqa: E402
 import config  # noqa: E402
-from ocr_native import _models_dir  # noqa: E402
+from video_ocr_engine.ocr.native import _models_dir  # noqa: E402
 from tools.detect_eval import load_meta  # noqa: E402
-from video_utils import _preprocess_standard  # noqa: E402
+from video_ocr_engine.domain.video_utils import _preprocess_standard  # noqa: E402
 
 MODEL = _models_dir() / f"PP-OCRv6_rec_{config.DEFAULT_OCR_MODEL.replace('v6_', '')}.onnx"
 

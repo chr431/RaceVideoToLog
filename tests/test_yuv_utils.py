@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from video_utils import (_nv12_luma, _nv12_luma_full, nv12_to_rgb)
+from video_ocr_engine.domain.video_utils import (_nv12_luma, _nv12_luma_full, nv12_to_rgb)
 
 
 def _gray_expected(raw_y: np.ndarray, color_range: int) -> np.ndarray:
