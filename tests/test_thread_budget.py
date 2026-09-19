@@ -34,8 +34,11 @@ def test_auto_budget_is_all_physical_cores():
 
 
 def test_env_hook_priority(monkeypatch):
-    p = _pipe()
+    # 2026-09-19：env 必须在**构造前**设置——引擎 0.14 起 RunConfig 在
+    # 构造期冻结 env（D6"一次 run 一个不可变配置"），构造后改 env 不再
+    # 影响本实例（这正是修复"构造后改 env 仍生效"歧义的设计）。
     monkeypatch.setenv("OCR_THREADS", "6")
+    p = _pipe()
     assert p._ocr_num_threads() == 6, "显式 env 钩子优先于 auto 预算"
 
 
