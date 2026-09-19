@@ -29,13 +29,15 @@ dependencies = [
     # PyPI 官方版无 next_roi / get_codec、CPU 内存修复与 NVDEC 动态加载。
     # 按 PEP 508 直接 URL 锁定 GitHub release wheel（0.8.2 起发布 cp39-cp314
     # 全版本 wheel，decord.dll + FFmpeg 9 DLL 随包自带，pip 一条命令安装）。
-    # 0.8.2 底线：引擎 0.11.0 的 hybrid 解码为 decord 原生实现（fork ≥0.7.15）；
+    # 0.8.4 底线（2026-09-19 升）：修 cuMemcpyPeerAsync 符号名（多卡跨
+    # 设备拷贝静默损坏）+ hybrid 工作线程异常零逃逸（崩溃类）；
+    # 0.8.3 起 hybrid 为包缓存 + 供料期 GOP 派工；
     # av1 线程策略按 FFmpeg9 dav1d 调优；0.8.2 含 cuMemcpy2D_v2 修复。
     # 升级：全部行换成同版本 URL（cp 标签按行匹配解释器，勿混版本）。
-    "decord @ https://github.com/chr431/decord/releases/download/v0.8.2/decord-0.8.2-cp311-cp311-win_amd64.whl ; python_version == '3.11'",
-    "decord @ https://github.com/chr431/decord/releases/download/v0.8.2/decord-0.8.2-cp312-cp312-win_amd64.whl ; python_version == '3.12'",
-    "decord @ https://github.com/chr431/decord/releases/download/v0.8.2/decord-0.8.2-cp313-cp313-win_amd64.whl ; python_version == '3.13'",
-    "decord @ https://github.com/chr431/decord/releases/download/v0.8.2/decord-0.8.2-cp314-cp314-win_amd64.whl ; python_version == '3.14'",
+    "decord @ https://github.com/chr431/decord/releases/download/v0.8.4/decord-0.8.4-cp311-cp311-win_amd64.whl ; python_version == '3.11'",
+    "decord @ https://github.com/chr431/decord/releases/download/v0.8.4/decord-0.8.4-cp312-cp312-win_amd64.whl ; python_version == '3.12'",
+    "decord @ https://github.com/chr431/decord/releases/download/v0.8.4/decord-0.8.4-cp313-cp313-win_amd64.whl ; python_version == '3.13'",
+    "decord @ https://github.com/chr431/decord/releases/download/v0.8.4/decord-0.8.4-cp314-cp314-win_amd64.whl ; python_version == '3.14'",
 ]
 
 [project.optional-dependencies]
