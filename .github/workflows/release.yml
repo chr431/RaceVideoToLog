@@ -114,6 +114,77 @@ jobs:
             exit 1
           }
 
+      - name: Prune OpenVINO for CPU-only deployment
+        # 引擎 0.14 起 CPU 推理唯一引擎 = OpenVINO，发行 wheel 是全家桶
+        # （NPU 编译器 82MB / Intel GPU 插件 34MB / 各家前端 / C 头文件）。
+        # 本项目只用 CPU 设备 → 按引擎仓冻结瘦身配方剪枝（227MB → 73MB，
+        # 等价性已实证：模型级逐位 + 引擎路径段数恒等）。详见引擎仓
+        # docs/log/2026-09-14-OpenVINO冻结瘦身.md §1 删表与 §3 配方。
+        shell: pwsh
+        run: |
+          $ov = "dist\RaceVideoToLog\_internal\openvino"
+          if (-not (Test-Path $ov)) {
+            Write-Error "未找到 $ov（打包布局变化？剪枝配方需复核）"
+            exit 1
+          }
+          $before = (Get-ChildItem $ov -Recurse -File | Measure-Object Length -Sum).Sum
+          # 按配方删表：NPU/Intel-GPU 插件、NPU 编译缓存、C 链接库与头文件、
+          # 非 ONNX 前端、Python 前端 pyd、tools/telemetry
+          # 删表（2026-09-19 按本机 2026.3.1 实际文件名校准；配方 §1 为
+          # 初版，其后发行版新增了 *_compiler_loader / tensorflow_lite /
+          # jax / ir 前端与 auto·hetero 插件）。原则：只留 CPU 推理闭包
+          # （openvino.dll 核心 + intel_cpu_plugin + onnx_frontend + tbb）。
+          $pats = @(
+            "libs\openvino_intel_npu_compiler.dll",
+            "libs\openvino_intel_npu_compiler_loader.dll",
+            "libs\openvino_intel_npu_plugin.dll",
+            "libs\openvino_intel_npu_vm_runtime.dll",
+            "libs\openvino_intel_gpu_plugin.dll",
+            "libs\openvino_auto_plugin.dll",
+            "libs\openvino_auto_batch_plugin.dll",
+            "libs\openvino_hetero_plugin.dll",
+            "libs\openvino_tensorflow_frontend.dll",
+            "libs\openvino_tensorflow_lite_frontend.dll",
+            "libs\openvino_pytorch_frontend.dll",
+            "libs\openvino_paddle_frontend.dll",
+            "libs\openvino_jax_frontend.dll",
+            "libs\openvino_ir_frontend.dll",
+            "libs\*.lib",
+            "libs\cache.json",
+            "libs\*_debug*",
+            "include", "tools", "frontend"
+          )
+          foreach ($pat in $pats) {
+            $full = Join-Path $ov $pat
+            if (Test-Path $full) { Remove-Item $full -Recurse -Force -ErrorAction SilentlyContinue }
+          }
+          $after = (Get-ChildItem $ov -Recurse -File | Measure-Object Length -Sum).Sum
+          Write-Host ("openvino 剪枝: {0:N0}MB → {1:N0}MB" -f ($before/1MB), ($after/1MB))
+          # 等价性/完整性门禁（配方 §3）：
+          # ① 文件级：CPU 闭包必须在（openvino.dll / intel_cpu_plugin /
+          #    onnx_frontend / tbb），且 NPU·GPU 插件必须已删；
+          # ② 运行时：venv 解释器在**干净子进程**里跑一次真实推理（引擎
+          #    smoke 步骤随后还会跑 frozen exe，那是最终门禁）。
+          # 注：不在本步用 available_devices 做判据——同一进程内 openvino
+          # 可能已被 site-packages 副本缓存（实测 sys.path 注入无效），
+          # 文件级判据才是剪枝的直接证据。
+          $mustHave = @("openvino.dll", "openvino_intel_cpu_plugin.dll",
+                        "openvino_onnx_frontend.dll", "tbb12.dll")
+          $mustGone = @("openvino_intel_gpu_plugin.dll",
+                        "openvino_intel_npu_plugin.dll",
+                        "openvino_intel_npu_compiler.dll")
+          foreach ($f in $mustHave) {
+            if (-not (Test-Path (Join-Path $ov "libs\$f"))) {
+              Write-Error "剪枝误删 CPU 闭包文件: $f"; exit 1
+            }
+          }
+          foreach ($f in $mustGone) {
+            if (Test-Path (Join-Path $ov "libs\$f")) {
+              Write-Error "剪枝遗漏（仍含非 CPU 插件）: $f"; exit 1
+            }
+          }
+          Write-Host "CPU 闭包完整、非 CPU 插件已清"
+
       - name: Smoke check EXE (headless, CPU backend, no GPU needed)
         # 构建成功 ≠ 产物可用：本步骤在打 tag/发布**之前**真实运行
         # frozen exe（合成视频 + CPU 解码 + ONNX OCR），把 import 面/
