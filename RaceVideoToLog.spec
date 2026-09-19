@@ -411,12 +411,12 @@ if os.path.isdir(_FFMPEG_MIN_DIR):
         if _f not in _have and _f.lower().startswith(_FFMPEG_DLL_PREFIXES):
             a.binaries.append((_f, _fp, 'BINARY'))
             _kept.append(_f)
-    print('[ffmpeg-min] 替换 %d 个 FFmpeg DLL（来自 %s）；补齐 %d 个；'
-          '未在极简集内的保留全量: %s'
+    print('[ffmpeg-min] replaced %d FFmpeg DLLs (from %s); added %d; '
+          'kept-full: %s'
           % (_replaced, _FFMPEG_MIN_DIR, len(_kept),
-             ', '.join(sorted(set(_missing))) or '无'))
+             ', '.join(sorted(set(_missing))) or 'none'))
 else:
-    print('[ffmpeg-min] 未找到 %s → 使用 decord 自带全量 FFmpeg（约 +170MB）'
+    print('[ffmpeg-min] NOT FOUND %s -> using decord full FFmpeg (+170MB)'
           % _FFMPEG_MIN_DIR)
 
 
