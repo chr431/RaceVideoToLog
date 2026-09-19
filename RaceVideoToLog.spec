@@ -370,6 +370,55 @@ a.binaries = [(n, p, t) for n, p, t in a.binaries
               if os.path.basename(p) not in _EXCLUDE_BINARIES
               and not os.path.basename(p).startswith(_PIL_BINARY_PREFIXES)]
 
+# ── FFmpeg 极简集替换（2026-09-19）────────────────────────────────────
+# decord 目录自带 FFmpeg 全家桶（184MB：avcodec 118 + avfilter 37 + …），
+# 而本项目只需"解码 h264/hevc/av1 + ROI crop/scale/format"的极小子集。
+# DEPENDENCIES.md 记录的极简重建（157MB → 13MB，−92%）已实测等价
+# （三码 hybrid 混跑对照全面平价：97~108%），但此前**从未接入打包** →
+# 发布产物白带 170MB（这是 400MB 体积门禁卡线的直接原因）。
+# 做法：若极简集目录存在，用它替换收集到的 FFmpeg DLL（按文件名一一对应，
+# 缺失的用全量补齐）；目录不存在时保持原行为并在日志提示。
+# 默认用**仓库内**资产（assets/ffmpeg_min，14MB，CI 与本地都得）——
+# 换机无需外部目录；RACELOG_FFMPEG_MIN 可覆盖（如指向本机重建副本）。
+_FFMPEG_MIN_DIR = os.environ.get(
+    'RACELOG_FFMPEG_MIN',
+    os.path.join(os.path.abspath('.'), 'assets', 'ffmpeg_min'))
+_FFMPEG_DLL_PREFIXES = ('avcodec', 'avformat', 'avutil', 'avfilter',
+                        'swscale', 'swresample', 'libdav1d',
+                        'libwinpthread')
+if os.path.isdir(_FFMPEG_MIN_DIR):
+    _min_files = {f: os.path.join(_FFMPEG_MIN_DIR, f)
+                  for f in os.listdir(_FFMPEG_MIN_DIR)
+                  if f.lower().endswith('.dll')}
+    _before = len(a.binaries)
+    _replaced, _missing, _kept = 0, [], []
+    _new_bins = []
+    for _n, _p, _t in a.binaries:
+        _base = os.path.basename(_p)
+        if _base.lower().startswith(_FFMPEG_DLL_PREFIXES):
+            if _base in _min_files:
+                _new_bins.append((_n, _min_files[_base], _t))
+                _replaced += 1
+            else:
+                _missing.append(_base)
+                _new_bins.append((_n, _p, _t))
+        else:
+            _new_bins.append((_n, _p, _t))
+    a.binaries = _new_bins
+    # 极简集独有、a.binaries 里没有的 DLL（如 libdav1d/libwinpthread）补进来
+    _have = {os.path.basename(p) for _, p, _ in a.binaries}
+    for _f, _fp in _min_files.items():
+        if _f not in _have and _f.lower().startswith(_FFMPEG_DLL_PREFIXES):
+            a.binaries.append((_f, _fp, 'BINARY'))
+            _kept.append(_f)
+    print('[ffmpeg-min] 替换 %d 个 FFmpeg DLL（来自 %s）；补齐 %d 个；'
+          '未在极简集内的保留全量: %s'
+          % (_replaced, _FFMPEG_MIN_DIR, len(_kept),
+             ', '.join(sorted(set(_missing))) or '无'))
+else:
+    print('[ffmpeg-min] 未找到 %s → 使用 decord 自带全量 FFmpeg（约 +170MB）'
+          % _FFMPEG_MIN_DIR)
+
 
 def _keep_translation(p: str) -> bool:
     """只保留 Qt 的英文与中文翻译，其余 ~6MB 与目标用户无关。"""
