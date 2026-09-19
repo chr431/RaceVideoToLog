@@ -24,7 +24,7 @@ dependencies = [
     # 改为 pip 依赖后：版本由本行锁定，CI 与全新环境可复现。
     # 本地开发需要改引擎时，执行 `pip install -e <引擎源码树> --no-deps`
     # 覆盖为源码直连即可（改引擎代码立刻生效）。
-    "video-ocr-engine @ git+https://github.com/chr431/video_ocr_engine.git@v0.14.0",
+    "video-ocr-engine @ git+https://github.com/chr431/video_ocr_engine.git@v0.14.1",
     # ── decord（自建 fork chr431/decord，不上 PyPI）──
     # PyPI 官方版无 next_roi / get_codec、CPU 内存修复与 NVDEC 动态加载。
     # 按 PEP 508 直接 URL 锁定 GitHub release wheel（0.8.2 起发布 cp39-cp314
