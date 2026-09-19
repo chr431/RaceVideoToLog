@@ -48,7 +48,7 @@ jobs:
           token: ${{ github.token }}
           # 引擎 video_ocr_engine 与 decord fork wheel 均由 pyproject.toml
           # 直接 URL 锁定，随下方 pip install -e 安装。模型资产由 spec 从
-          # 已安装的引擎包解析（ocr_native._models_dir），无需 submodule
+          # 已安装的引擎包解析（包内路径），无需 submodule
           # checkout，也不再需要先导出 PYTHONPATH（引擎是普通已安装包）。
 
       - name: Setup Python
@@ -93,7 +93,8 @@ jobs:
           .venv\Scripts\python -m pip install -e ".[dev]" -q
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # 守卫：decord 必须是 fork（PyPI 官方版无 next_roi，静默失去 ROI 优化）
-          .venv\Scripts\python -c "import decord, decord.video_reader as vr; assert hasattr(vr.VideoReader, 'next_roi'), 'not fork'; from importlib.metadata import version; import engine_config; print('decord', version('decord'), '/ engine', engine_config.__version__)"
+          # 2026-09-19：引擎 0.14.1 起六个根模块 shim 已删除 → 版本从包内读
+          .venv\Scripts\python -c "import decord, decord.video_reader as vr; assert hasattr(vr.VideoReader, 'next_roi'), 'not fork'; from importlib.metadata import version; import video_ocr_engine.config.constants as _c; print('decord', version('decord'), '/ engine', _c.__version__)"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build EXE
@@ -226,7 +227,7 @@ jobs:
           }
           $sha = (git rev-parse --short HEAD).Trim()
           $decordVer = (& .venv\Scripts\python -c "from importlib.metadata import version; print(version('decord'))").Trim()
-          $engineVer = (& .venv\Scripts\python -c "import engine_config; print(engine_config.__version__)").Trim()
+          $engineVer = (& .venv\Scripts\python -c "import video_ocr_engine.config.constants as c; print(c.__version__)").Trim()
           $body += "`n`n---`n构建源: ${{ inputs.ref }} @ $sha（GitHub Actions 自动构建，工具链 decord $decordVer / engine $engineVer）"
           [System.IO.File]::WriteAllText("notes.md", $body, (New-Object System.Text.UTF8Encoding($false)))
 
